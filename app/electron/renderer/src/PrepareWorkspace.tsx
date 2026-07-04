@@ -16,8 +16,10 @@ import type {
   RunView,
 } from '@shared/contracts';
 import { ReportTabs } from './ReportTabs';
+import { ModelViewport } from './viewport/ModelViewport';
 import type { Banner } from './App';
-import { useT, statusLabel } from './i18n';
+import { useT, statusLabel, type TFunc } from './i18n';
+import { previewUrl } from './previewUrl';
 
 const TERMINAL = new Set(['accepted', 'rejected', 'failed', 'cancelled']);
 
@@ -112,7 +114,22 @@ export function PrepareWorkspace(props: {
       const res = await window.api.lowpolyApprove({ projectId: project.id, runId });
       const p = await window.api.projectGet(project.id);
       setProject(p);
-      setBanner({ kind: 'info', text: t('prepare.approved', { model: res.working_model }) });
+      let text = t('prepare.approved', { model: res.working_model });
+      // Bridge auto-refresh outcome (bridge plan §4.3): silent when no session.
+      const refresh = res.blender_refresh;
+      if (refresh?.attempted) {
+        text += refresh.ok
+          ? ` — ${t('prepare.blenderRefreshed')}`
+          : ` — ${refresh.reason === 'dirty' ? t('prepare.blenderDirty') : t('prepare.blenderRefreshFailed', { reason: refresh.reason ?? '' })}`;
+      }
+      setBanner({ kind: 'info', text });
+    });
+
+  const onOpenInBlender = () =>
+    guard(t('busy.openingBlender'), async () => {
+      if (!project) return;
+      const res = await window.api.blenderOpen({ projectId: project.id });
+      setBanner({ kind: 'info', text: t('prepare.openedInBlender', { target: res.target }) });
     });
 
   const status = runView?.status?.status ?? null;
@@ -152,6 +169,9 @@ export function PrepareWorkspace(props: {
           runView={runView}
           isApproved={isApproved}
           approvedRunId={project?.approved_lowpoly_run_id ?? null}
+          onOpenInBlender={onOpenInBlender}
+          projectId={project?.id ?? null}
+          setBanner={setBanner}
         />
       </div>
       <BottomPanel runView={runView} status={status} />
@@ -232,18 +252,54 @@ function LeftPanel(props: {
   );
 }
 
+/** Absolute path of the run's `lowpoly.glb` (3D viewer plan §2.1), or null. */
+function glbPathOf(runView: RunView | null): string | null {
+  const rel = runView?.summary?.artifacts?.['lowpoly_glb'];
+  if (!rel || !runView?.dir) return null;
+  const sep = runView.dir.includes('\\') ? '\\' : '/';
+  return `${runView.dir}${sep}${rel}`;
+}
+
 function PreviewPane(props: { runView: RunView | null }): JSX.Element {
   const t = useT();
   const preview = props.runView?.preview_path;
-  return (
-    <div className="preview">
-      {preview ? (
-        <img alt={t('prepare.previewAlt')} src={`uvpreview://${preview}`} />
-      ) : (
+  const glbPath = glbPathOf(props.runView);
+  // 3D view is the default when the run shipped a GLB; older runs fall back to
+  // the rendered PNG (3D viewer plan §2.3).
+  const [tab, setTab] = useState<'3d' | 'image'>('3d');
+  const effectiveTab = glbPath ? tab : 'image';
+
+  if (!preview && !glbPath) {
+    return (
+      <div className="preview">
         <div className="placeholder">
           {t('prepare.previewHint')}
           <div className="muted small">{t('prepare.previewSub')}</div>
         </div>
+      </div>
+    );
+  }
+  return (
+    <div className="preview preview-tabs">
+      <div className="tabbar">
+        <button
+          className={effectiveTab === '3d' ? 'active' : ''}
+          disabled={!glbPath}
+          title={glbPath ? '' : t('prepare.no3dArtifact')}
+          onClick={() => setTab('3d')}
+        >
+          {t('prepare.tab3d')}
+        </button>
+        <button className={effectiveTab === 'image' ? 'active' : ''} onClick={() => setTab('image')}>
+          {t('prepare.tabImage')}
+        </button>
+      </div>
+      {effectiveTab === '3d' ? (
+        <ModelViewport glbPath={glbPath} />
+      ) : preview ? (
+        <img alt={t('prepare.previewAlt')} src={previewUrl(preview)} />
+      ) : (
+        <div className="placeholder">{t('prepare.previewHint')}</div>
       )}
     </div>
   );
@@ -263,6 +319,9 @@ function RightPanel(props: {
   runView: RunView | null;
   isApproved: boolean;
   approvedRunId: string | null;
+  onOpenInBlender: () => void;
+  projectId: string | null;
+  setBanner: (b: Banner) => void;
 }): JSX.Element {
   const t = useT();
   const obj = props.objects.find((o) => o.name === props.selectedObject) ?? null;
@@ -366,9 +425,80 @@ function RightPanel(props: {
         <section>
           <div className="ok">{t('prepare.approvedWorking')}</div>
           <div className="muted small">{props.approvedRunId}</div>
+          <BlenderSection
+            projectId={props.projectId}
+            onOpenInBlender={props.onOpenInBlender}
+            setBanner={props.setBanner}
+            t={t}
+          />
         </section>
       )}
     </aside>
+  );
+}
+
+/**
+ * Approved-model Blender actions (bridge plan §3.2, §4.3): one-click open in
+ * Blender, live bridge connection indicator, and a manual scene refresh.
+ */
+function BlenderSection(props: {
+  projectId: string | null;
+  onOpenInBlender: () => void;
+  setBanner: (b: Banner) => void;
+  t: TFunc;
+}): JSX.Element {
+  const { t, projectId, setBanner } = props;
+  const [bridge, setBridge] = useState<{ connected: boolean; file?: string | null } | null>(null);
+
+  useEffect(() => {
+    let alive = true;
+    const poll = () => {
+      window.api.bridgeStatus().then((s) => {
+        if (alive) setBridge(s);
+      }).catch(() => {
+        if (alive) setBridge({ connected: false });
+      });
+    };
+    poll();
+    const timer = setInterval(poll, 5000);
+    return () => {
+      alive = false;
+      clearInterval(timer);
+    };
+  }, [projectId]);
+
+  const onRefresh = async () => {
+    if (!projectId) return;
+    try {
+      const res = await window.api.bridgeRefresh({ projectId });
+      if (res.ok) {
+        setBanner({ kind: 'info', text: t('prepare.blenderRefreshed') });
+      } else if (res.reason === 'dirty') {
+        setBanner({ kind: 'error', text: t('prepare.blenderDirty') });
+      } else if (res.reason === 'not_loaded') {
+        setBanner({ kind: 'error', text: t('prepare.blenderNotLoaded') });
+      } else {
+        setBanner({ kind: 'error', text: t('prepare.blenderRefreshFailed', { reason: res.reason ?? '' }) });
+      }
+    } catch (err) {
+      setBanner({ kind: 'error', text: String((err as Error)?.message ?? err) });
+    }
+  };
+
+  return (
+    <div className="blender-actions">
+      <button onClick={props.onOpenInBlender}>{t('prepare.openInBlender')}</button>
+      <div className="small">
+        <span className={bridge?.connected ? 'ok' : 'muted'}>
+          {bridge?.connected ? t('prepare.bridgeConnected') : t('prepare.bridgeOffline')}
+        </span>
+        {bridge?.connected && (
+          <button className="small" onClick={onRefresh} style={{ marginLeft: 8 }}>
+            {t('prepare.refreshBlender')}
+          </button>
+        )}
+      </div>
+    </div>
   );
 }
 

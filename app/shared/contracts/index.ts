@@ -91,6 +91,11 @@ export const Ipc = {
   PickFile: 'dialog:pickFile',
   PickProjectDir: 'dialog:pickProjectDir',
   PickBlender: 'dialog:pickBlender',
+  // Blender integration (3D viewer + bridge plan §3, §4)
+  BlenderOpen: 'blender:open',
+  BridgeStatus: 'blender:bridgeStatus',
+  BridgeRefresh: 'blender:bridgeRefresh',
+  BridgeInstall: 'blender:bridgeInstall',
   // main -> renderer push event
   RunUpdate: 'run:update',
 } as const;
@@ -249,6 +254,45 @@ export interface RunView {
 export interface AppSettings {
   blenderPath: string | null;
   projectsRoot: string | null;
+  /** Auto-refresh a connected Blender session after a low-poly approval
+   *  (bridge plan §4.3). Optional so pre-bridge stored settings still load. */
+  autoRefreshBlender?: boolean;
+}
+
+// --- Blender launcher + bridge (3D viewer + bridge plan §3, §4) ------------
+
+export interface BlenderOpenResult {
+  status: 'launched';
+  /** Absolute path of the model handed to Blender. */
+  target: string;
+}
+
+/** Result of reading the bridge handshake file + pinging the addon server. */
+export interface BridgeStatus {
+  connected: boolean;
+  /** `bpy.data.filepath` of the connected session (empty if unsaved). */
+  file?: string | null;
+  /** `bpy.data.is_dirty` of the connected session. */
+  dirty?: boolean;
+  /** Why not connected: 'no_handshake' | 'unreachable' | error text. */
+  reason?: string;
+}
+
+/** A single bridge command response (JSON-line protocol, plan §4.1). */
+export interface BridgeRefreshResult {
+  ok: boolean;
+  /** 'revert' | 'reimport' when ok; set on success only. */
+  mode?: string;
+  /** 'dirty' | 'not_loaded' | 'not_found' | transport error text when !ok. */
+  reason?: string;
+}
+
+/** Outcome of the auto-refresh attempted right after a lowpoly approval. */
+export interface ApproveBlenderRefresh {
+  attempted: boolean;
+  ok?: boolean;
+  mode?: string;
+  reason?: string;
 }
 
 /** The API surface exposed on `window.api` by the preload bridge. */
@@ -268,6 +312,8 @@ export interface RendererApi {
     working_model: string;
     working_model_fbx: string | null;
     approved_lowpoly_run_id: string;
+    /** Auto-refresh outcome when a bridge session was reachable (plan §4.3). */
+    blender_refresh?: ApproveBlenderRefresh | null;
   }>;
   runGet(input: { projectId: string; runId: string }): Promise<RunView>;
   runList(projectId: string): Promise<string[]>;
@@ -351,5 +397,14 @@ export interface RendererApi {
   /** Native file dialog to pick the Blender executable (OS-aware; resolves a
    *  macOS Blender.app to its inner binary). Returns null if cancelled. */
   pickBlender(): Promise<string | null>;
+  // --- Blender launcher + bridge (3D viewer + bridge plan §3, §4) ---
+  /** Open the approved working model (.blend preferred, else .fbx) in Blender. */
+  blenderOpen(input: { projectId: string }): Promise<BlenderOpenResult>;
+  /** Handshake-file + ping status of a running bridge addon session. */
+  bridgeStatus(): Promise<BridgeStatus>;
+  /** Ask the connected Blender session to refresh the project's working model. */
+  bridgeRefresh(input: { projectId: string }): Promise<BridgeRefreshResult>;
+  /** Headless-install the bridge addon into the configured Blender. */
+  bridgeInstall(): Promise<{ status: string; log: string }>;
   onRunUpdate(cb: (payload: { projectId: string; runId: string }) => void): () => void;
 }

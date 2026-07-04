@@ -17,6 +17,14 @@
 import React, { useCallback, useEffect, useRef } from 'react';
 import * as THREE from 'three';
 import type { EdgeGeometry } from '@shared/contracts';
+import {
+  applyOrbitToCamera,
+  makeOrbitState,
+  orbitDrag,
+  panDrag,
+  resetOrbitState,
+  zoomWheel,
+} from '../viewport/orbitCamera';
 import { useT } from '../i18n';
 
 export interface OverlayToggles {
@@ -72,8 +80,8 @@ export function SeamViewport(props: SeamViewportProps): JSX.Element {
   const bakedRef = useRef<Baked | null>(null);
   const hoveredRef = useRef<number | null>(null);
 
-  // Orbit state (spherical around target).
-  const orbit = useRef({ radius: 3, theta: 0.9, phi: 1.1, target: new THREE.Vector3() });
+  // Orbit state (spherical around target) — shared module (viewer plan §2.2).
+  const orbit = useRef(makeOrbitState());
   const drag = useRef<{ x: number; y: number; button: number; moved: boolean } | null>(null);
 
   const renderFrame = useCallback(() => {
@@ -86,15 +94,7 @@ export function SeamViewport(props: SeamViewportProps): JSX.Element {
   const applyCamera = useCallback(() => {
     const c = cameraRef.current;
     if (!c) return;
-    const { radius, theta, phi, target } = orbit.current;
-    const sinPhi = Math.sin(phi);
-    c.position.set(
-      target.x + radius * sinPhi * Math.cos(theta),
-      target.y + radius * Math.cos(phi),
-      target.z + radius * sinPhi * Math.sin(theta),
-    );
-    c.lookAt(target);
-    c.updateMatrixWorld();
+    applyOrbitToCamera(c, orbit.current);
   }, []);
 
   // --- recolor every edge in place (no geometry rebuild) -----------------
@@ -310,10 +310,10 @@ export function SeamViewport(props: SeamViewportProps): JSX.Element {
       drag.current.y = e.clientY;
       const pan = drag.current.button === 2 || e.shiftKey;
       if (pan) {
-        panCamera(dx, dy);
+        const camera = cameraRef.current;
+        if (camera) panDrag(orbit.current, camera, dx, dy);
       } else {
-        orbit.current.theta -= dx * 0.01;
-        orbit.current.phi = clamp(orbit.current.phi - dy * 0.01, 0.05, Math.PI - 0.05);
+        orbitDrag(orbit.current, dx, dy);
       }
       applyCamera();
       renderFrame();
@@ -321,17 +321,6 @@ export function SeamViewport(props: SeamViewportProps): JSX.Element {
     }
     // Hover only when not dragging.
     setHovered(pickEdgeAt(px, py));
-  };
-
-  const panCamera = (dx: number, dy: number) => {
-    const camera = cameraRef.current;
-    if (!camera) return;
-    const right = new THREE.Vector3();
-    const up = new THREE.Vector3();
-    camera.matrixWorld.extractBasis(right, up, new THREE.Vector3());
-    const k = orbit.current.radius * 0.0015;
-    orbit.current.target.addScaledVector(right, -dx * k);
-    orbit.current.target.addScaledVector(up, dy * k);
   };
 
   const onPointerUp = (e: React.PointerEvent) => {
@@ -349,13 +338,13 @@ export function SeamViewport(props: SeamViewportProps): JSX.Element {
   };
 
   const onWheel = (e: React.WheelEvent) => {
-    orbit.current.radius = clamp(orbit.current.radius * (1 + e.deltaY * 0.001), 0.4, 40);
+    zoomWheel(orbit.current, e.deltaY);
     applyCamera();
     renderFrame();
   };
 
   const resetView = () => {
-    orbit.current = { radius: 3, theta: 0.9, phi: 1.1, target: new THREE.Vector3() };
+    resetOrbitState(orbit.current);
     applyCamera();
     renderFrame();
   };
@@ -384,10 +373,6 @@ export function SeamViewport(props: SeamViewportProps): JSX.Element {
 }
 
 // --- geometry helpers ------------------------------------------------------
-function clamp(v: number, lo: number, hi: number): number {
-  return Math.max(lo, Math.min(hi, v));
-}
-
 /** Pixel distance from point (px,py) to segment (ax,ay)-(bx,by). */
 function distToSegment(px: number, py: number, ax: number, ay: number, bx: number, by: number): number {
   const vx = bx - ax;

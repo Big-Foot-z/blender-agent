@@ -348,6 +348,16 @@ def _run_adaptive_generation(bpy, gen_obj, target: int, out_dir: str, options: d
             use_selection=True)
     except Exception as exc:  # noqa: BLE001 - export is best-effort
         print(f"run_app_retopo_job: FBX export skipped ({exc})")
+    try:
+        for o in bpy.context.view_layer.objects:
+            o.select_set(o is low)
+        bpy.context.view_layer.objects.active = low
+        bpy.ops.export_scene.gltf(
+            filepath=os.path.abspath(os.path.join(out_dir, "lowpoly.glb")),
+            use_selection=True,
+            export_format="GLB")
+    except Exception as exc:  # noqa: BLE001 - export is best-effort
+        print(f"run_app_retopo_job: GLB export skipped ({exc})")
     return 0
 
 
@@ -422,6 +432,20 @@ def _ensure_app_artifacts(bpy, out_dir: str, options: dict) -> list[str]:
             notes.append("backfilled preview.png")
         except Exception as exc:  # noqa: BLE001 - preview is best-effort
             notes.append(f"preview backfill skipped: {exc}")
+
+    glb_path = os.path.join(out_dir, "lowpoly.glb")
+    if not os.path.exists(glb_path):
+        try:
+            for o in bpy.context.view_layer.objects:
+                o.select_set(o is obj)
+            bpy.context.view_layer.objects.active = obj
+            bpy.ops.export_scene.gltf(
+                filepath=os.path.abspath(glb_path),
+                use_selection=True,
+                export_format="GLB")
+            notes.append("backfilled lowpoly.glb")
+        except Exception as exc:  # noqa: BLE001 - export is best-effort
+            notes.append(f"glb backfill skipped: {exc}")
     return notes
 
 

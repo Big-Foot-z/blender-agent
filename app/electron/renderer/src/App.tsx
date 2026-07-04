@@ -110,7 +110,9 @@ export function App(): JSX.Element {
         <LanguageSwitcher lang={lang} setLang={setLang} t={t} />
       </header>
 
-      {settings && <SettingsBar settings={settings} onChange={setSettings} t={t} />}
+      {settings && (
+        <SettingsBar settings={settings} onChange={setSettings} t={t} setBanner={setBanner} />
+      )}
       {banner && <div className={`banner ${banner.kind}`}>{banner.text}</div>}
 
       {mode === 'prepare' && (
@@ -192,14 +194,32 @@ function SettingsBar(props: {
   settings: AppSettings;
   onChange: (s: AppSettings) => void;
   t: TFunc;
+  setBanner: (b: Banner) => void;
 }): JSX.Element {
-  const { settings, t } = props;
+  const { settings, t, setBanner } = props;
+  const [installing, setInstalling] = useState(false);
   const setBlender = async () => {
     // Native file picker (OS-aware) instead of typing a long path — especially on
     // Windows. Cancelling leaves the current path unchanged.
     const picked = await window.api.pickBlender();
     if (!picked) return;
     const next = await window.api.settingsSet({ blenderPath: picked });
+    props.onChange(next);
+  };
+  // Headless bridge-addon install into the configured Blender (bridge plan §4.2).
+  const installBridge = async () => {
+    setInstalling(true);
+    try {
+      await window.api.bridgeInstall();
+      setBanner({ kind: 'info', text: t('app.bridgeInstalled') });
+    } catch (err) {
+      setBanner({ kind: 'error', text: String((err as Error)?.message ?? err) });
+    } finally {
+      setInstalling(false);
+    }
+  };
+  const toggleAutoRefresh = async (on: boolean) => {
+    const next = await window.api.settingsSet({ autoRefreshBlender: on });
     props.onChange(next);
   };
   return (
@@ -213,6 +233,17 @@ function SettingsBar(props: {
         )}
       </span>
       <button onClick={setBlender}>{t('app.settingsSetPath')}</button>
+      <button disabled={!settings.blenderPath || installing} onClick={installBridge}>
+        {installing ? t('app.bridgeInstalling') : t('app.installBridge')}
+      </button>
+      <label className="check" title={t('app.autoRefreshHint')}>
+        <input
+          type="checkbox"
+          checked={settings.autoRefreshBlender !== false}
+          onChange={(e) => toggleAutoRefresh(e.target.checked)}
+        />
+        {t('app.autoRefreshBlender')}
+      </label>
     </div>
   );
 }

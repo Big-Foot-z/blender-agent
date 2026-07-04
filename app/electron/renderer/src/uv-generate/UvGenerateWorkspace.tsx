@@ -25,6 +25,7 @@ import type {
 import { STRICT_GENERATE_OPTIONS, UV_GENERATE_TERMINAL_STATUSES } from '@shared/contracts';
 import type { Banner } from '../App';
 import { useT, statusLabel, type TKey } from '../i18n';
+import { previewUrl } from '../previewUrl';
 
 type CenterTab = 'checker' | 'layout' | 'candidates';
 type CheckerView = 'front' | 'side';
@@ -427,7 +428,7 @@ function BeforeAfter(props: { beforeSrc?: string; afterSrc?: string; label: stri
       <figure>
         <figcaption>{t('generate.baseline')}</figcaption>
         {props.beforeSrc ? (
-          <img alt={`${t('generate.baseline')} ${props.label}`} src={`uvpreview://${props.beforeSrc}`} />
+          <img alt={`${t('generate.baseline')} ${props.label}`} src={previewUrl(props.beforeSrc)} />
         ) : (
           <div className="placeholder small">{t('generate.noBaseline')}</div>
         )}
@@ -435,7 +436,7 @@ function BeforeAfter(props: { beforeSrc?: string; afterSrc?: string; label: stri
       <figure>
         <figcaption>{t('generate.selected')}</figcaption>
         {props.afterSrc ? (
-          <img alt={`${t('generate.selected')} ${props.label}`} src={`uvpreview://${props.afterSrc}`} />
+          <img alt={`${t('generate.selected')} ${props.label}`} src={previewUrl(props.afterSrc)} />
         ) : (
           <div className="placeholder small">{t('generate.noSelected')}</div>
         )}

@@ -15,6 +15,17 @@ import { registerIpc } from './ipc';
 // instead of the dev-mode "Electron" binary name (must run before app `ready`).
 app.setName('Reforge');
 
+// `<img src="uvpreview://…">` works unprivileged, but the 3D viewer `fetch()`es
+// GLBs over the same scheme, and the fetch API + cross-origin use from the dev
+// server need explicit privileges. Must run before app `ready`. `standard` stays
+// false so the URL keeps its raw absolute-path form (no host parsing/lowercasing).
+protocol.registerSchemesAsPrivileged([
+  {
+    scheme: 'uvpreview',
+    privileges: { secure: true, supportFetchAPI: true, corsEnabled: true, bypassCSP: true, stream: true },
+  },
+]);
+
 const isDev = !!process.env['ELECTRON_RENDERER_URL'];
 
 /** Resolve the Reforge app icon (app/resources/icon.png in dev, bundled resources
@@ -57,10 +68,19 @@ function createWindow(): void {
 }
 
 app.whenReady().then(() => {
-  // Serve arbitrary local preview PNGs the renderer references by absolute path.
-  protocol.handle('uvpreview', (request) => {
-    const filePath = decodeURIComponent(request.url.replace('uvpreview://', ''));
-    return net.fetch(pathToFileURL(filePath).toString());
+  // Serve local preview PNGs / GLBs the renderer references by absolute path.
+  protocol.handle('uvpreview', async (request) => {
+    let filePath = decodeURIComponent(request.url.replace('uvpreview://', ''));
+    // The renderer prefixes Windows paths with '/' so the URL authority stays
+    // empty ('uvpreview:///C:/…'); strip it back off before hitting the fs.
+    if (/^\/[A-Za-z]:[\\/]/.test(filePath)) filePath = filePath.slice(1);
+    const res = await net.fetch(pathToFileURL(filePath).toString());
+    // Re-wrap so we can attach CORS (dev server origin fetches this scheme) and
+    // a correct MIME for GLB (net.fetch guesses none for .glb).
+    const headers = new Headers(res.headers);
+    headers.set('Access-Control-Allow-Origin', '*');
+    if (filePath.toLowerCase().endsWith('.glb')) headers.set('Content-Type', 'model/gltf-binary');
+    return new Response(res.body, { status: res.status, headers });
   });
 
   // macOS shows the dock icon (BrowserWindow `icon` is ignored there).

@@ -31,6 +31,7 @@ import {
 } from '@shared/contracts';
 import type { Banner } from '../App';
 import { useT, statusLabel, type TKey, type TFunc } from '../i18n';
+import { previewUrl } from '../previewUrl';
 
 type CenterTab = 'files' | 'validation' | 'preview';
 type PreviewView = 'uv_layout' | 'checker_front' | 'checker_side';
@@ -451,7 +452,7 @@ function ExportCenter(props: {
               ))}
             </div>
             {paths[props.previewView] ? (
-              <img alt={t(PREVIEW_VIEW_KEY[props.previewView])} src={`uvpreview://${paths[props.previewView]}`} />
+              <img alt={t(PREVIEW_VIEW_KEY[props.previewView])} src={previewUrl(paths[props.previewView])} />
             ) : (
               <div className="placeholder small">{t('export.noPreview', { view: t(PREVIEW_VIEW_KEY[props.previewView]) })}</div>
             )}

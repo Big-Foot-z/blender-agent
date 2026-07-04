@@ -48,6 +48,9 @@ import { SeamEditorRunner } from './seamEditor';
 import { UvGenerateRunner } from './uvGenerate';
 import { ExportRunner } from './exportRunner';
 import { getSettings, setSettings } from './settings';
+import { blenderOpen, installBridge } from './blenderLauncher';
+import { bridgeRefresh, bridgeStatus } from './blenderBridge';
+import type { ApproveBlenderRefresh } from '@shared/contracts';
 
 /** Resolve the `worker/` directory holding the Python/Blender worker scripts.
  *
@@ -231,8 +234,43 @@ export function registerIpc(): void {
     },
   );
 
-  ipcMain.handle(Ipc.LowpolyApprove, (_e, input: { projectId: string; runId: string }) =>
-    approveLowpoly(dirForProject(input.projectId), input.runId),
+  ipcMain.handle(Ipc.LowpolyApprove, async (_e, input: { projectId: string; runId: string }) => {
+    const dir = dirForProject(input.projectId);
+    const result = approveLowpoly(dir, input.runId);
+    // Bridge auto-refresh hook (bridge plan §4.3): best-effort, never fails the
+    // approval. No bridge session -> silently skip (blender_refresh = null).
+    let blenderRefresh: ApproveBlenderRefresh | null = null;
+    if (getSettings().autoRefreshBlender !== false) {
+      try {
+        const status = await bridgeStatus();
+        if (status.connected) {
+          const res = await bridgeRefresh(dir);
+          blenderRefresh = { attempted: true, ok: res.ok, mode: res.mode, reason: res.reason };
+        }
+      } catch (err) {
+        blenderRefresh = { attempted: true, ok: false, reason: String((err as Error).message) };
+      }
+    }
+    return { ...result, blender_refresh: blenderRefresh };
+  });
+
+  // --- Blender launcher + bridge (3D viewer + bridge plan §3, §4) --------
+  ipcMain.handle(Ipc.BlenderOpen, (_e, input: { projectId: string }) =>
+    blenderOpen({
+      projectDir: dirForProject(input.projectId),
+      blenderPath: getSettings().blenderPath,
+      workerRoot: resolveWorkerRoot(),
+    }),
+  );
+
+  ipcMain.handle(Ipc.BridgeStatus, () => bridgeStatus());
+
+  ipcMain.handle(Ipc.BridgeRefresh, (_e, input: { projectId: string }) =>
+    bridgeRefresh(dirForProject(input.projectId)),
+  );
+
+  ipcMain.handle(Ipc.BridgeInstall, () =>
+    installBridge({ blenderPath: getSettings().blenderPath, workerRoot: resolveWorkerRoot() }),
   );
 
   ipcMain.handle(Ipc.RunGet, (_e, input: { projectId: string; runId: string }) =>

@@ -202,6 +202,7 @@ _ARTIFACT_FILES = {
     "shape_report": ("shape_report.json", True),
     "lowpoly_blend": ("lowpoly.blend", True),
     "lowpoly_fbx": ("lowpoly.fbx", False),
+    "lowpoly_glb": ("lowpoly.glb", False),
     "preview": ("preview.png", False),
 }
 

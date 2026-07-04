@@ -20,6 +20,7 @@ import type {
 import { ReviewStatus, UV_TERMINAL_STATUSES } from '@shared/contracts';
 import type { Banner } from '../App';
 import { useT, statusLabel, type TKey } from '../i18n';
+import { previewUrl } from '../previewUrl';
 
 type CenterTab = 'checker' | 'layout';
 type CheckerView = 'front' | 'side' | '3q';
@@ -341,7 +342,7 @@ function UvCenter(props: {
       <div className="uv-tabbody">
         {props.centerTab === 'layout' &&
           (paths.uv_layout ? (
-            <ZoomPanImage src={`uvpreview://${paths.uv_layout}`} alt={t('common.uvLayout')} />
+            <ZoomPanImage src={previewUrl(paths.uv_layout)} alt={t('common.uvLayout')} />
           ) : (
             <div className="placeholder">{t('review.noLayoutImg')}</div>
           ))}
@@ -378,7 +379,7 @@ function CheckerImage(props: { paths: Record<string, string>; view: CheckerView 
   return (
     <div className="preview">
       {path ? (
-        <img alt={`${t('review.checker')} ${viewLabel}`} src={`uvpreview://${path}`} />
+        <img alt={`${t('review.checker')} ${viewLabel}`} src={previewUrl(path)} />
       ) : (
         <div className="placeholder">{t('review.noViewChecker', { view: viewLabel })}</div>
       )}

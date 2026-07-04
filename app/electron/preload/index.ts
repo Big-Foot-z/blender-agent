@@ -45,6 +45,10 @@ const api: RendererApi = {
   pickFile: () => ipcRenderer.invoke(Ipc.PickFile),
   pickProjectDir: () => ipcRenderer.invoke(Ipc.PickProjectDir),
   pickBlender: () => ipcRenderer.invoke(Ipc.PickBlender),
+  blenderOpen: (input) => ipcRenderer.invoke(Ipc.BlenderOpen, input),
+  bridgeStatus: () => ipcRenderer.invoke(Ipc.BridgeStatus),
+  bridgeRefresh: (input) => ipcRenderer.invoke(Ipc.BridgeRefresh, input),
+  bridgeInstall: () => ipcRenderer.invoke(Ipc.BridgeInstall),
   onRunUpdate: (cb) => {
     const listener = (_e: unknown, payload: { projectId: string; runId: string }) => cb(payload);
     ipcRenderer.on(Ipc.RunUpdate, listener);

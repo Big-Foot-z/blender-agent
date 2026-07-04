@@ -365,3 +365,31 @@ table.metrics tr.bad td { color: var(--err); }
 .list.rollback li button, .list.history li button { margin-top: 4px; font-size: 11px; }
 .issuelist.inline { margin-top: 4px; }
 .artifactlist { flex: 1; min-height: 0; overflow: auto; padding: 8px; }
+
+/* --- 3D model viewport + Blender bridge (viewer plan §2, §3, §4) --------- */
+.preview-tabs { flex-direction: column; align-items: stretch; padding: 0; }
+.preview-tabs .tabbar {
+  display: flex; gap: 4px; padding: 6px 8px; border-bottom: 1px solid var(--line);
+  background: #1a1b20;
+}
+.preview-tabs .tabbar button { padding: 3px 12px; font-size: 12px; }
+.preview-tabs .tabbar button.active { background: #2b2e3a; border-color: #5b8cff; }
+.preview-tabs img { margin: auto; }
+
+.model-viewport { position: relative; flex: 1; min-height: 0; background: #15161a; }
+.model-viewport-canvas { position: absolute; inset: 0; cursor: grab; touch-action: none; }
+.model-viewport-canvas:active { cursor: grabbing; }
+.model-viewport-empty {
+  position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
+  color: var(--muted); font-size: 13px; text-align: center; padding: 24px; pointer-events: none;
+}
+.model-viewport-empty.err { color: #ff8a80; }
+.model-viewport-ctl {
+  position: absolute; left: 10px; bottom: 10px; display: flex; align-items: center; gap: 10px;
+  flex-wrap: wrap;
+  background: rgba(20,21,26,0.8); padding: 4px 8px; border-radius: 6px; border: 1px solid var(--line);
+}
+.model-viewport-ctl .check { display: inline-flex; align-items: center; gap: 4px; font-size: 12px; cursor: pointer; }
+.model-viewport-ctl .check input { margin: 0; }
+
+.blender-actions { margin-top: 8px; display: flex; flex-direction: column; gap: 6px; align-items: flex-start; }
