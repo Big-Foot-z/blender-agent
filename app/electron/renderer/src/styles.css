@@ -393,3 +393,41 @@ table.metrics tr.bad td { color: var(--err); }
 .model-viewport-ctl .check input { margin: 0; }
 
 .blender-actions { margin-top: 8px; display: flex; flex-direction: column; gap: 6px; align-items: flex-start; }
+
+/* --- UV automation review (work plan §7; gates G2/G6/G7) ---------------- */
+.modeselect { display: inline-flex; align-items: center; gap: 6px; }
+.modeselect select {
+  background: var(--panel2); border: 1px solid var(--line); color: var(--text);
+  border-radius: 6px; padding: 3px 6px; font-size: 12px;
+}
+.subtoolbar .sep { width: 1px; height: 18px; background: var(--line); margin: 0 4px; }
+
+/* Solver-accepted vs artist-approved are separate tags (gate G6). */
+.gen-verdict {
+  display: flex; align-items: center; flex-wrap: wrap; gap: 8px;
+  padding: 6px 12px; font-size: 12px; border-bottom: 1px solid var(--line); background: var(--panel);
+}
+.gen-verdict.needs_user_review { background: #3a3520; }
+.gen-verdict.failed { background: #3a1f1f; }
+
+/* 3D seam overlay tab: viewport + legend/list/detail side rail (gate G7). */
+.seamoverlay-wrap { flex: 1; min-height: 0; display: flex; min-width: 0; }
+.seam-overlay-view { position: relative; flex: 1; min-width: 0; min-height: 0; background: #15161a; }
+.seam-overlay-canvas { position: absolute; inset: 0; cursor: crosshair; touch-action: none; }
+.seam-overlay-empty {
+  position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
+  color: var(--muted); font-size: 13px; pointer-events: none;
+}
+.seam-overlay-ctl {
+  position: absolute; left: 10px; bottom: 10px; display: flex; align-items: center; gap: 8px;
+  background: rgba(20,21,26,0.8); padding: 4px 8px; border-radius: 6px; border: 1px solid var(--line);
+}
+.seamoverlay-side {
+  width: 250px; flex: 0 0 250px; overflow-y: auto; padding: 8px;
+  background: var(--panel); border-left: 1px solid var(--line);
+}
+.seamoverlay-side h4 { margin: 10px 0 4px; font-size: 11px; color: var(--muted); text-transform: uppercase; }
+.seamlegend { list-style: none; margin: 0; padding: 0; }
+.seamlegend li { display: flex; align-items: center; gap: 6px; padding: 2px 0; }
+.seamlegend li .muted { margin-left: auto; }
+.seamedgelist { max-height: 180px; overflow-y: auto; }

@@ -667,6 +667,56 @@ export interface UvGenerateStatusDoc {
   error: UvGenerateWorkerError | null;
 }
 
+// --- Review artifacts the renderer draws (gate G7) -------------------------
+
+/**
+ * One seam edge as exported for the 3D overlay, with the world-space endpoints
+ * so the renderer never needs the full mesh. `type` distinguishes the origin
+ * (mandatory_90 / user_seam / locked / welded_fold_auxiliary / overlap_repair /
+ * distortion_split / correctness_repair / segmentation) so the reviewer can tell
+ * WHY an edge was cut (gate G7 "mandatory/user/topology/overlap/distortion 이유 구분").
+ */
+export interface SeamOverlayEdge {
+  edge_id: number;
+  type: string;
+  reason?: string | null;
+  stage?: string | null;
+  round?: number | null;
+  target_island?: number | null;
+  improvement_ratio?: number | null;
+  a: [number, number, number];
+  b: [number, number, number];
+}
+
+/** `seam_overlay.json` — the 3D seam overlay source (gate G7). */
+export interface SeamOverlay {
+  schema_version: number;
+  object_name: string | null;
+  edges: SeamOverlayEdge[];
+  conflicts: { edge_id: number; user_rule?: string; engine_rule?: string; resolution?: string }[];
+  type_counts: Record<string, number>;
+}
+
+/**
+ * One `candidate_history.json` row: what a refinement round changed, what it
+ * measured before/after, and whether it was kept (work plan §7, gate G5/G7).
+ */
+export interface CandidateHistoryEntry {
+  round: number;
+  kind: string;
+  target_island?: number | null;
+  target_metric?: string | null;
+  added_edges?: number[];
+  before?: number | null;
+  after?: number | null;
+  accepted: boolean;
+  reason: string;
+  improvement_ratio?: number | null;
+  island_count_after?: number | null;
+  elapsed_s?: number | null;
+  [k: string]: unknown;
+}
+
 /** Combined generate-run view the renderer reads via `uvGenerate:getRun`. */
 export interface UvGenerateRunView {
   run_id: string;
@@ -678,6 +728,10 @@ export interface UvGenerateRunView {
   p5_gate: Record<string, unknown> | null;
   /** Parsed `seam_report.json` for the raw-report tab. */
   seam_report: Record<string, unknown> | null;
+  /** Parsed `seam_overlay.json` for the 3D seam overlay tab (gate G7). */
+  seam_overlay: SeamOverlay | null;
+  /** Parsed `candidate_history.json` for the candidates tab (gate G5/G7). */
+  candidate_history: CandidateHistoryEntry[] | null;
   stdout: string;
   stderr: string;
   /** Stable artifact key -> absolute path on disk, for `uvpreview://` rendering. */

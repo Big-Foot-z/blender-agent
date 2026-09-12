@@ -12,23 +12,71 @@
 
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import type {
+  ArtistApproval,
+  CandidateHistoryEntry,
   CandidateRow,
   CandidateSummary,
+  DistortionIslandRow,
   GenerateMetrics,
   GenerateUvOptions,
   Project,
   SeamIntegrity,
+  SeamOverlayEdge,
   SeamSource,
+  UvFeedback,
+  UvGenerateMode,
   UvGenerateRunView,
   ValidateGenerateInput,
 } from '@shared/contracts';
-import { STRICT_GENERATE_OPTIONS, UV_GENERATE_TERMINAL_STATUSES } from '@shared/contracts';
+import {
+  DEFAULT_UV_GENERATE_MODE,
+  MODE_GENERATE_OPTIONS,
+  STRICT_FLAGS,
+  UV_GENERATE_TERMINAL_STATUSES,
+  UvGenerateMode as UvGenerateModeValues,
+  validateModeRequest,
+} from '@shared/contracts';
 import type { Banner } from '../App';
 import { useT, statusLabel, type TKey } from '../i18n';
 import { previewUrl } from '../previewUrl';
+import { SEAM_TYPE_ORDER, SeamOverlayView, seamTypeColor } from './SeamOverlayView';
 
-type CenterTab = 'checker' | 'layout' | 'candidates';
+type CenterTab = 'checker' | 'layout' | 'candidates' | 'heatmap' | 'seams';
 type CheckerView = 'front' | 'side';
+
+/** Reviewer-feedback form state — raw text, parsed to edge ids only on save. */
+interface FeedbackForm {
+  locked: string;
+  protectedEdges: string;
+  preferred: string;
+  front_axis: string;
+  notes: string;
+}
+
+const EMPTY_FEEDBACK: FeedbackForm = {
+  locked: '',
+  protectedEdges: '',
+  preferred: '',
+  front_axis: '',
+  notes: '',
+};
+
+const FRONT_AXES = ['+X', '-X', '+Y', '-Y', '+Z', '-Z'] as const;
+
+/** Parse a comma/space separated edge-id list into unique sorted integers. */
+function parseEdgeIds(raw: string): number[] {
+  const out = new Set<number>();
+  for (const tok of raw.split(/[\s,]+/)) {
+    if (!tok) continue;
+    const n = Number(tok);
+    if (Number.isInteger(n) && n >= 0) out.add(n);
+  }
+  return Array.from(out).sort((a, b) => a - b);
+}
+
+function joinEdgeIds(ids: number[] | undefined | null): string {
+  return (ids ?? []).join(', ');
+}
 
 export function UvGenerateWorkspace(props: {
   project: Project | null;
@@ -43,16 +91,64 @@ export function UvGenerateWorkspace(props: {
   const [runView, setRunView] = useState<UvGenerateRunView | null>(null);
   const [centerTab, setCenterTab] = useState<CenterTab>('checker');
   const [checkerView, setCheckerView] = useState<CheckerView>('front');
-  const [options, setOptions] = useState<GenerateUvOptions>({ ...STRICT_GENERATE_OPTIONS });
+  const [mode, setMode] = useState<UvGenerateMode>(DEFAULT_UV_GENERATE_MODE);
+  const [options, setOptions] = useState<GenerateUvOptions>({
+    ...MODE_GENERATE_OPTIONS[DEFAULT_UV_GENERATE_MODE],
+  });
+  const [selectedEdgeId, setSelectedEdgeId] = useState<number | null>(null);
+  const [feedbackForm, setFeedbackForm] = useState<FeedbackForm>(EMPTY_FEEDBACK);
+  const [savedFeedback, setSavedFeedback] = useState<UvFeedback | null>(null);
+  const [reviewer, setReviewer] = useState('');
+  const [rejectReason, setRejectReason] = useState('');
 
   const pollTimer = useRef<ReturnType<typeof setInterval> | null>(null);
 
-  // Reset per-project; seed the latest run from the manifest (plan §9).
+  // Reset per-project; seed the latest run + the persisted mode (plan §9; gate G2).
   useEffect(() => {
+    const m = project?.uv_generate_mode ?? DEFAULT_UV_GENERATE_MODE;
     setValidation(null);
     setRunView(null);
     setRunId(project?.latest_uv_generate_run_id ?? null);
-    setOptions({ ...STRICT_GENERATE_OPTIONS });
+    setMode(m);
+    setOptions({ ...MODE_GENERATE_OPTIONS[m] });
+    setSelectedEdgeId(null);
+    setRejectReason('');
+  }, [project?.id]);
+
+  // Load the saved reviewer feedback so the form opens pre-filled (gate G7).
+  useEffect(() => {
+    let cancelled = false;
+    if (!project) {
+      setSavedFeedback(null);
+      setFeedbackForm(EMPTY_FEEDBACK);
+      return;
+    }
+    window.api
+      .uvGenerateGetFeedback({ projectId: project.id })
+      .then((fb) => {
+        if (cancelled) return;
+        setSavedFeedback(fb);
+        setFeedbackForm(
+          fb
+            ? {
+                locked: joinEdgeIds(fb.locked_seam_edges),
+                protectedEdges: joinEdgeIds(fb.protected_edges),
+                preferred: joinEdgeIds(fb.preferred_edges),
+                front_axis: fb.front_axis ?? '',
+                notes: fb.notes ?? '',
+              }
+            : EMPTY_FEEDBACK,
+        );
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setSavedFeedback(null);
+          setFeedbackForm(EMPTY_FEEDBACK);
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
   }, [project?.id]);
 
   const refreshRun = useCallback(async () => {
@@ -79,13 +175,41 @@ export function UvGenerateWorkspace(props: {
     };
   }, [project, runId, refreshRun]);
 
+  /**
+   * Run the SHARED mode/flag contradiction check in the renderer too (work plan
+   * §3; gate G2) so a contradictory request never reaches IPC. Returns false and
+   * banners the first error when the combination is rejected.
+   */
+  const checkModeRequest = useCallback((): boolean => {
+    const res = validateModeRequest(mode, options);
+    if (!res.ok) {
+      setBanner({ kind: 'error', text: res.errors.map((e) => e.message).join(' · ') });
+      return false;
+    }
+    return true;
+  }, [mode, options, setBanner]);
+
+  const onChangeMode = (next: UvGenerateMode) =>
+    guard(t('busy.settingMode'), async () => {
+      if (!project) {
+        setBanner({ kind: 'error', text: t('common.openImportFirst') });
+        return;
+      }
+      const p = await window.api.uvGenerateSetMode({ projectId: project.id, mode: next });
+      setMode(next);
+      setOptions({ ...MODE_GENERATE_OPTIONS[next] });
+      setValidation(null);
+      props.setProject(p);
+    });
+
   const onValidate = () =>
     guard(t('busy.validatingSpec'), async () => {
       if (!project) {
         setBanner({ kind: 'error', text: t('common.openImportFirst') });
         return;
       }
-      const v = await window.api.uvGenerateValidateInput({ projectId: project.id });
+      if (!checkModeRequest()) return;
+      const v = await window.api.uvGenerateValidateInput({ projectId: project.id, mode });
       setValidation(v);
       if (!v.ready) {
         setBanner({
@@ -103,26 +227,103 @@ export function UvGenerateWorkspace(props: {
         setBanner({ kind: 'error', text: t('common.openImportFirst') });
         return;
       }
-      const v = validation ?? (await window.api.uvGenerateValidateInput({ projectId: project.id }));
+      if (!checkModeRequest()) return;
+      const v =
+        validation ?? (await window.api.uvGenerateValidateInput({ projectId: project.id, mode }));
       setValidation(v);
-      if (!v.ready) {
+      // In auto mode a missing seam source is not a blocker — the solver cuts
+      // from scratch (work plan §3) — so only preserve mode gates on readiness.
+      if (!v.ready && mode === UvGenerateModeValues.PreserveExisting) {
         setBanner({
           kind: 'error',
           text: v.issues[0]?.message ?? t('generate.cannotGenerate'),
         });
         return;
       }
-      const { run_id } = await window.api.uvGenerateStart({
-        projectId: project.id,
-        objectName: v.object_name ?? undefined,
-        options,
-      });
+      let run_id: string;
+      try {
+        // A contradictory flag set or an unsupported Blender build is rejected by
+        // main; surface the reason verbatim instead of a generic failure.
+        ({ run_id } = await window.api.uvGenerateStart({
+          projectId: project.id,
+          objectName: v.object_name ?? project.selected_object ?? undefined,
+          options,
+          mode,
+        }));
+      } catch (e) {
+        setBanner({ kind: 'error', text: (e as Error).message });
+        return;
+      }
       setRunId(run_id);
       setRunView(null);
+      setSelectedEdgeId(null);
       setCenterTab('checker');
       const p = await window.api.projectGet(project.id);
       props.setProject(p);
     });
+
+  const onSetApproval = (approved: boolean) =>
+    guard(t('busy.savingApproval'), async () => {
+      if (!project || !runId) {
+        setBanner({ kind: 'error', text: t('generate.noRunSelected') });
+        return;
+      }
+      if (!approved && !rejectReason.trim()) {
+        setBanner({ kind: 'error', text: t('generate.rejectNeedsReason') });
+        return;
+      }
+      const approval: ArtistApproval = {
+        approved,
+        run_id: runId,
+        reviewer: reviewer.trim() || null,
+        reason: rejectReason.trim() || null,
+        approved_at: new Date().toISOString(),
+      };
+      const p = await window.api.uvGenerateSetArtistApproval({ projectId: project.id, approval });
+      props.setProject(p);
+      setBanner({
+        kind: 'info',
+        text: approved ? t('generate.approvalSaved') : t('generate.rejectionSaved'),
+      });
+    });
+
+  const onSaveFeedback = () =>
+    guard(t('busy.savingFeedback'), async () => {
+      if (!project) {
+        setBanner({ kind: 'error', text: t('common.openImportFirst') });
+        return;
+      }
+      const ident = runView?.summary?.mesh_identity ?? null;
+      const fingerprint = ident?.after_sha256 ?? ident?.before_sha256 ?? null;
+      const saved = await window.api.uvGenerateSaveFeedback({
+        projectId: project.id,
+        feedback: {
+          mesh_fingerprint: fingerprint,
+          object_name: runView?.summary?.object_name ?? project.selected_object ?? null,
+          locked_seam_edges: parseEdgeIds(feedbackForm.locked),
+          protected_edges: parseEdgeIds(feedbackForm.protectedEdges),
+          preferred_edges: parseEdgeIds(feedbackForm.preferred),
+          front_axis: feedbackForm.front_axis,
+          notes: feedbackForm.notes,
+          source_run_id: runId,
+        },
+      });
+      setSavedFeedback(saved);
+      setBanner({
+        kind: fingerprint ? 'info' : 'error',
+        text: fingerprint ? t('generate.feedbackSaved') : t('generate.feedbackNoFingerprint'),
+      });
+    });
+
+  /** Append the picked seam edge id to one of the three constraint fields. */
+  const addSelectedEdgeTo = (field: keyof Omit<FeedbackForm, 'front_axis' | 'notes'>) => {
+    if (selectedEdgeId === null) return;
+    setFeedbackForm((f) => {
+      const ids = parseEdgeIds(f[field]);
+      if (!ids.includes(selectedEdgeId)) ids.push(selectedEdgeId);
+      return { ...f, [field]: joinEdgeIds(ids.sort((a, b) => a - b)) };
+    });
+  };
 
   const onCancel = () =>
     guard(t('busy.cancelling'), async () => {
@@ -142,11 +343,19 @@ export function UvGenerateWorkspace(props: {
   const hasModel = !!(
     project && (project.working_model || project.working_model_fbx || project.source_model)
   );
-  const canGenerate = !!project && hasModel && !!project.selected_object && hasSeamSource;
+  // Auto mode cuts from scratch, so it only needs a model + an object; preserve
+  // mode still needs a seam SOURCE to preserve (work plan §3; gate G2).
+  const canGenerate =
+    !!project &&
+    hasModel &&
+    !!project.selected_object &&
+    (mode === UvGenerateModeValues.AutoGenerate || hasSeamSource);
 
   return (
     <>
       <div className="subtoolbar">
+        <ModeSelect mode={mode} disabled={!project || running} onChange={onChangeMode} />
+        <span className="sep" />
         <button disabled={!project} onClick={onValidate}>{t('generate.validate')}</button>
         <button disabled={!canGenerate} className="primary" onClick={onGenerate}>
           {t('generate.generate')}
@@ -155,6 +364,8 @@ export function UvGenerateWorkspace(props: {
         <button disabled title={t('generate.nextAiTitle')}>{t('generate.nextAi')}</button>
         {project && <span className="muted small subtoolbar-hint">{project.name}</span>}
       </div>
+
+      <VerdictBanner summary={summary} status={status} project={project} runId={runId} />
 
       <div className="body">
         <GenerateLeftPanel project={project} validation={validation} activeRunId={runId} onSelectRun={setRunId} />
@@ -168,6 +379,8 @@ export function UvGenerateWorkspace(props: {
             setCenterTab={setCenterTab}
             checkerView={checkerView}
             setCheckerView={setCheckerView}
+            selectedEdgeId={selectedEdgeId}
+            setSelectedEdgeId={setSelectedEdgeId}
           />
         </main>
 
@@ -177,11 +390,107 @@ export function UvGenerateWorkspace(props: {
           options={options}
           setOptions={setOptions}
           accepted={accepted}
+          mode={mode}
+          project={project}
+          runId={runId}
+          reviewer={reviewer}
+          setReviewer={setReviewer}
+          rejectReason={rejectReason}
+          setRejectReason={setRejectReason}
+          onSetApproval={onSetApproval}
+          feedbackForm={feedbackForm}
+          setFeedbackForm={setFeedbackForm}
+          savedFeedback={savedFeedback}
+          onSaveFeedback={onSaveFeedback}
+          selectedEdgeId={selectedEdgeId}
+          addSelectedEdgeTo={addSelectedEdgeTo}
         />
       </div>
 
       <GenerateBottomPanel runView={runView} status={status} />
     </>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Mode selection (work plan §3; gate G2) — persisted on the project.
+// ---------------------------------------------------------------------------
+function ModeSelect(props: {
+  mode: UvGenerateMode;
+  disabled: boolean;
+  onChange: (m: UvGenerateMode) => void;
+}): JSX.Element {
+  const t = useT();
+  return (
+    <label className="modeselect">
+      <span className="small muted">{t('generate.mode')}</span>
+      <select
+        value={props.mode}
+        disabled={props.disabled}
+        onChange={(e) => props.onChange(e.target.value as UvGenerateMode)}
+      >
+        <option value={UvGenerateModeValues.PreserveExisting}>
+          {t('generate.mode.preserve_existing')}
+        </option>
+        <option value={UvGenerateModeValues.AutoGenerate}>
+          {t('generate.mode.auto_generate')}
+        </option>
+      </select>
+    </label>
+  );
+}
+
+/**
+ * The honest verdict banner (gates G6/G7): `solver accepted` and `artist
+ * approved` are SEPARATE tags, a preserve-mode pass says "seams preserved (not
+ * an automatic-rule pass)", and an auto-mode pass on an uncalibrated profile is
+ * tagged as engineering-only.
+ */
+function VerdictBanner(props: {
+  summary: UvGenerateRunView['summary'];
+  status: string | null;
+  project: Project | null;
+  runId: string | null;
+}): JSX.Element | null {
+  const t = useT();
+  const { summary, status, project, runId } = props;
+  if (!status || !UV_GENERATE_TERMINAL_STATUSES.has(status)) return null;
+
+  const mode = summary?.mode ?? UvGenerateModeValues.PreserveExisting;
+  const solverAccepted = summary?.solver_accepted ?? status === 'accepted';
+  const approval = project?.uv_artist_approval ?? null;
+  const approvedThisRun = !!approval?.approved && (!approval.run_id || approval.run_id === runId);
+  const gate = summary?.auto_gate ?? null;
+  const calibrated = summary?.quality_profile?.calibrated ?? null;
+
+  const reasons: string[] = [];
+  if (status === 'needs_user_review') {
+    for (const f of gate?.failures ?? []) reasons.push(f);
+    for (const r of gate?.invalid_reasons ?? []) reasons.push(r);
+    if (summary?.acceptance_reason) reasons.push(summary.acceptance_reason);
+  }
+
+  return (
+    <div className={`gen-verdict ${status}`}>
+      <span className={`tag ${solverAccepted ? 'ok' : 'bad'}`}>
+        {solverAccepted ? t('generate.solverAccepted') : t('generate.solverNotAccepted')}
+      </span>
+      <span className={`tag ${approvedThisRun ? 'ok' : 'unknown'}`}>
+        {approvedThisRun ? t('generate.artistApproved') : t('generate.artistNotApproved')}
+      </span>
+      {solverAccepted && mode === UvGenerateModeValues.PreserveExisting && (
+        <span className="small">{t('generate.preserveAcceptedNote')}</span>
+      )}
+      {solverAccepted && mode === UvGenerateModeValues.AutoGenerate && (
+        <span className="small">{t('generate.autoGatePassed')}</span>
+      )}
+      {solverAccepted && mode === UvGenerateModeValues.AutoGenerate && calibrated === false && (
+        <span className="tag bad">{t('generate.profileUncalibrated')}</span>
+      )}
+      {reasons.length > 0 && (
+        <span className="small warn">{t('generate.reviewReasons', { list: reasons.join(' · ') })}</span>
+      )}
+    </div>
   );
 }
 
@@ -331,6 +640,8 @@ function GenerateCenter(props: {
   setCenterTab: (t: CenterTab) => void;
   checkerView: CheckerView;
   setCheckerView: (v: CheckerView) => void;
+  selectedEdgeId: number | null;
+  setSelectedEdgeId: (id: number | null) => void;
 }): JSX.Element {
   const t = useT();
   const { runView, summary, status } = props;
@@ -384,6 +695,12 @@ function GenerateCenter(props: {
         <button className={props.centerTab === 'candidates' ? 'active' : ''} onClick={() => props.setCenterTab('candidates')}>
           {t('generate.candidateTable')}
         </button>
+        <button className={props.centerTab === 'heatmap' ? 'active' : ''} onClick={() => props.setCenterTab('heatmap')}>
+          {t('generate.tab.heatmap')}
+        </button>
+        <button className={props.centerTab === 'seams' ? 'active' : ''} onClick={() => props.setCenterTab('seams')}>
+          {t('generate.tab.seams')}
+        </button>
       </nav>
 
       <div className="uv-tabbody">
@@ -415,8 +732,130 @@ function GenerateCenter(props: {
         {props.centerTab === 'candidates' && (
           <CandidateTable candidateSummary={runView.candidate_summary} summary={summary} />
         )}
+
+        {props.centerTab === 'heatmap' &&
+          (paths.selected_heatmap_anisotropy ? (
+            <div className="preview">
+              <img
+                alt={t('generate.tab.heatmap')}
+                src={previewUrl(paths.selected_heatmap_anisotropy)}
+              />
+            </div>
+          ) : (
+            <div className="placeholder">{t('generate.noHeatmap')}</div>
+          ))}
+
+        {props.centerTab === 'seams' && (
+          <SeamOverlayPanel
+            overlay={runView.seam_overlay}
+            selectedEdgeId={props.selectedEdgeId}
+            setSelectedEdgeId={props.setSelectedEdgeId}
+          />
+        )}
       </div>
     </div>
+  );
+}
+
+/**
+ * 3D seam overlay + per-type legend + picked-edge detail (gate G7): every seam
+ * carries the reason/round/target island/improvement that produced it.
+ */
+function SeamOverlayPanel(props: {
+  overlay: UvGenerateRunView['seam_overlay'];
+  selectedEdgeId: number | null;
+  setSelectedEdgeId: (id: number | null) => void;
+}): JSX.Element {
+  const t = useT();
+  const ov = props.overlay;
+  if (!ov || ov.edges.length === 0) {
+    return <div className="placeholder">{t('generate.noSeamOverlay')}</div>;
+  }
+  const selected = ov.edges.find((e) => e.edge_id === props.selectedEdgeId) ?? null;
+  const counts = ov.type_counts ?? {};
+  const types = Array.from(
+    new Set<string>([...SEAM_TYPE_ORDER, ...Object.keys(counts), ...ov.edges.map((e) => e.type)]),
+  ).filter((ty) => (counts[ty] ?? ov.edges.filter((e) => e.type === ty).length) > 0);
+
+  return (
+    <div className="seamoverlay-wrap">
+      <SeamOverlayView
+        edges={ov.edges}
+        selectedEdgeId={props.selectedEdgeId}
+        onPick={props.setSelectedEdgeId}
+      />
+      <div className="seamoverlay-side">
+        <h4>{t('generate.seamLegend')}</h4>
+        <ul className="seamlegend">
+          {types.map((ty) => (
+            <li key={ty}>
+              <span className="dot" style={{ background: seamTypeColor(ty) }} />
+              <span className="small">{ty}</span>
+              <span className="muted small">
+                {counts[ty] ?? ov.edges.filter((e) => e.type === ty).length}
+              </span>
+            </li>
+          ))}
+        </ul>
+
+        <h4>{t('generate.seamEdges')}</h4>
+        <ul className="list seamedgelist">
+          {ov.edges.slice(0, 400).map((e) => (
+            <li
+              key={e.edge_id}
+              className={e.edge_id === props.selectedEdgeId ? 'sel' : ''}
+              onClick={() => props.setSelectedEdgeId(e.edge_id)}
+            >
+              <span className="dot" style={{ background: seamTypeColor(e.type) }} />
+              <code className="small">#{e.edge_id}</code>{' '}
+              <span className="muted small">{e.type}</span>
+            </li>
+          ))}
+        </ul>
+
+        <h4>{t('generate.seamEdgeDetail')}</h4>
+        {selected ? (
+          <SeamEdgeDetail edge={selected} />
+        ) : (
+          <div className="muted small">{t('generate.seamPickHint')}</div>
+        )}
+
+        {ov.conflicts.length > 0 && (
+          <>
+            <h4>{t('generate.seamConflicts')}</h4>
+            <ul className="issuelist">
+              {ov.conflicts.map((c, i) => (
+                <li key={i} className="warning">
+                  <span className="sevdot warning" /> #{c.edge_id} {c.user_rule ?? '—'} /{' '}
+                  {c.engine_rule ?? '—'} → {c.resolution ?? '—'}
+                </li>
+              ))}
+            </ul>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function SeamEdgeDetail(props: { edge: SeamOverlayEdge }): JSX.Element {
+  const t = useT();
+  const e = props.edge;
+  return (
+    <table className="metrics">
+      <tbody>
+        <tr><td>{t('generate.edge.id')}</td><td>#{e.edge_id}</td></tr>
+        <tr><td>{t('generate.edge.type')}</td><td>{e.type}</td></tr>
+        <tr><td>{t('generate.edge.reason')}</td><td>{e.reason ?? '—'}</td></tr>
+        <tr><td>{t('generate.edge.stage')}</td><td>{e.stage ?? '—'}</td></tr>
+        <tr><td>{t('generate.edge.round')}</td><td>{e.round ?? '—'}</td></tr>
+        <tr><td>{t('generate.edge.targetIsland')}</td><td>{e.target_island ?? '—'}</td></tr>
+        <tr>
+          <td>{t('generate.edge.improvement')}</td>
+          <td>{fmtNum(e.improvement_ratio)}</td>
+        </tr>
+      </tbody>
+    </table>
   );
 }
 
@@ -538,6 +977,20 @@ function GenerateRightPanel(props: {
   options: GenerateUvOptions;
   setOptions: (o: GenerateUvOptions) => void;
   accepted: boolean;
+  mode: UvGenerateMode;
+  project: Project | null;
+  runId: string | null;
+  reviewer: string;
+  setReviewer: (v: string) => void;
+  rejectReason: string;
+  setRejectReason: (v: string) => void;
+  onSetApproval: (approved: boolean) => void;
+  feedbackForm: FeedbackForm;
+  setFeedbackForm: React.Dispatch<React.SetStateAction<FeedbackForm>>;
+  savedFeedback: UvFeedback | null;
+  onSaveFeedback: () => void;
+  selectedEdgeId: number | null;
+  addSelectedEdgeTo: (field: keyof Omit<FeedbackForm, 'front_axis' | 'notes'>) => void;
 }): JSX.Element {
   const t = useT();
   const { summary } = props;
@@ -624,10 +1077,344 @@ function GenerateRightPanel(props: {
       </section>
 
       <section>
+        <h3>{t('generate.qualityV2')}</h3>
+        <QualityV2Block summary={summary} />
+      </section>
+
+      <section>
+        <h3>{t('generate.correctness')}</h3>
+        <CorrectnessSection summary={summary} />
+      </section>
+
+      <section>
+        <h3>{t('generate.termination')}</h3>
+        <TerminationSection summary={summary} />
+      </section>
+
+      <section>
+        <h3>{t('generate.seamLength')}</h3>
+        <SeamLengthSection summary={summary} />
+      </section>
+
+      <section>
+        <h3>{t('generate.constraints')}</h3>
+        <ConstraintsSection summary={summary} />
+      </section>
+
+      <section>
+        <h3>{t('generate.artistReview')}</h3>
+        <ArtistReviewSection
+          project={props.project}
+          runId={props.runId}
+          reviewer={props.reviewer}
+          setReviewer={props.setReviewer}
+          rejectReason={props.rejectReason}
+          setRejectReason={props.setRejectReason}
+          onSetApproval={props.onSetApproval}
+        />
+      </section>
+
+      <section>
+        <h3>{t('generate.feedback')}</h3>
+        <FeedbackSection
+          form={props.feedbackForm}
+          setForm={props.setFeedbackForm}
+          saved={props.savedFeedback}
+          onSave={props.onSaveFeedback}
+          selectedEdgeId={props.selectedEdgeId}
+          addSelectedEdgeTo={props.addSelectedEdgeTo}
+        />
+      </section>
+
+      <section>
         <h3>{t('generate.runOptions')}</h3>
-        <RunOptions options={props.options} setOptions={props.setOptions} />
+        <RunOptions options={props.options} setOptions={props.setOptions} mode={props.mode} summary={summary} />
       </section>
     </aside>
+  );
+}
+
+// --- Automation report sections (work plan §4, §5; gates G1/G3/G5) ---------
+
+/** Distortion v2: global figures + the worst islands by anisotropy p95. */
+function QualityV2Block(props: { summary: UvGenerateRunView['summary'] }): JSX.Element {
+  const t = useT();
+  const d = props.summary?.distortion_v2 ?? null;
+  if (!d) return <div className="muted">{t('generate.noQualityV2')}</div>;
+  const g = d.global ?? {};
+  const worst = (d.islands ?? [])
+    .slice()
+    .sort((a: DistortionIslandRow, b: DistortionIslandRow) =>
+      (b.anisotropy_p95 ?? 0) - (a.anisotropy_p95 ?? 0),
+    )
+    .slice(0, 5);
+  return (
+    <>
+      {!d.valid && <div className="tag bad">{t('generate.metricsInvalid')}</div>}
+      <table className="metrics">
+        <tbody>
+          <tr><td>{t('generate.q.anisoP95')}</td><td>{fmtNum(g.anisotropy_p95)}</td></tr>
+          <tr><td>{t('generate.q.anisoMax')}</td><td>{fmtNum(g.anisotropy_max)}</td></tr>
+          <tr><td>{t('generate.q.areaStretchMean')}</td><td>{fmtNum(g.area_stretch_mean)}</td></tr>
+          <tr><td>{t('generate.q.exceedArea')}</td><td>{fmtNum(g.exceed_area_fraction)}</td></tr>
+          <tr><td>{t('generate.q.islandCount')}</td><td>{(d.islands ?? []).length}</td></tr>
+        </tbody>
+      </table>
+      {worst.length > 0 && (
+        <>
+          <div className="muted small">{t('generate.q.worstIslands')}</div>
+          <table className="metrics">
+            <tbody>
+              {worst.map((i) => (
+                <tr key={i.island_id}>
+                  <td>#{i.island_id}</td>
+                  <td>
+                    {fmtNum(i.anisotropy_p95)} · {t('common.faces')} {i.face_count}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </>
+      )}
+    </>
+  );
+}
+
+/** Hard UV correctness checks with the measured value vs its limit (gate G1). */
+function CorrectnessSection(props: { summary: UvGenerateRunView['summary'] }): JSX.Element {
+  const t = useT();
+  const c = props.summary?.correctness ?? null;
+  if (!c) return <div className="muted">{t('generate.noCorrectness')}</div>;
+  return (
+    <>
+      <div className={`reviewbadge ${c.passed ? 'clean' : 'has_overlap'}`}>
+        {c.passed ? t('generate.correctnessPassed') : t('generate.correctnessFailed')}
+      </div>
+      <table className="metrics">
+        <tbody>
+          {(c.checks ?? []).map((ck) => (
+            <tr key={ck.name} className={ck.passed ? '' : 'bad'}>
+              <td>{ck.name}</td>
+              <td>
+                <span className={`tag ${ck.passed ? 'ok' : 'bad'}`}>
+                  {ck.passed ? t('generate.check.pass') : t('generate.check.fail')}
+                </span>{' '}
+                {fmtNum(ck.value)} / {fmtNum(ck.limit)}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </>
+  );
+}
+
+/** Why the search stopped and what it spent (gate G5). */
+function TerminationSection(props: { summary: UvGenerateRunView['summary'] }): JSX.Element {
+  const t = useT();
+  const tm = props.summary?.termination ?? null;
+  if (!tm) return <div className="muted">{t('generate.noTermination')}</div>;
+  return (
+    <table className="metrics">
+      <tbody>
+        <tr><td>{t('generate.term.reason')}</td><td>{tm.reason}</td></tr>
+        <tr><td>{t('generate.term.iterations')}</td><td>{tm.iterations}</td></tr>
+        <tr><td>{t('generate.term.candidates')}</td><td>{tm.candidates_evaluated}</td></tr>
+        <tr><td>{t('generate.term.elapsed')}</td><td>{fmtNum(tm.elapsed_s, 2)}</td></tr>
+      </tbody>
+    </table>
+  );
+}
+
+/** Seam length by origin — the auxiliary-cut budget (work plan §5). */
+function SeamLengthSection(props: { summary: UvGenerateRunView['summary'] }): JSX.Element {
+  const t = useT();
+  const s = props.summary?.seam_length ?? null;
+  if (!s) return <div className="muted">{t('generate.noSeamLength')}</div>;
+  return (
+    <table className="metrics">
+      <tbody>
+        <tr><td>{t('generate.sl.mandatory')}</td><td>{fmtNum(s.mandatory, 3)}</td></tr>
+        <tr><td>{t('generate.sl.user')}</td><td>{fmtNum(s.user, 3)}</td></tr>
+        <tr><td>{t('generate.sl.auxiliary')}</td><td>{fmtNum(s.auxiliary, 3)}</td></tr>
+        <tr><td>{t('generate.sl.total')}</td><td>{fmtNum(s.total, 3)}</td></tr>
+        <tr><td>{t('generate.sl.auxNormalized')}</td><td>{fmtNum(s.auxiliary_normalized, 4)}</td></tr>
+      </tbody>
+    </table>
+  );
+}
+
+/** Locked/protected constraint accounting + whether saved feedback applied. */
+function ConstraintsSection(props: { summary: UvGenerateRunView['summary'] }): JSX.Element {
+  const t = useT();
+  const ac = props.summary?.auto_constraints ?? null;
+  const fa = props.summary?.feedback_applied ?? null;
+  if (!ac && !fa) return <div className="muted">{t('generate.noConstraints')}</div>;
+  return (
+    <>
+      {ac && (
+        <table className="metrics">
+          <tbody>
+            <tr><td>{t('generate.cn.locked')}</td><td>{ac.locked_seam_count ?? 0}</td></tr>
+            <tr><td>{t('generate.cn.protected')}</td><td>{ac.protected_count ?? 0}</td></tr>
+            <tr className={(ac.conflict_count ?? 0) > 0 ? 'bad' : ''}>
+              <td>{t('generate.cn.conflicts')}</td><td>{ac.conflict_count ?? 0}</td>
+            </tr>
+          </tbody>
+        </table>
+      )}
+      {fa && (
+        <div className="small">
+          <span className={`tag ${fa.applied ? 'ok' : 'unknown'}`}>
+            {fa.applied ? t('generate.fb.applied') : t('generate.fb.notApplied')}
+          </span>{' '}
+          <span className="muted">{fa.reason}</span>
+        </div>
+      )}
+    </>
+  );
+}
+
+/**
+ * Artist sign-off (gates G6/G7): kept apart from the solver verdict, a rejection
+ * REQUIRES a reason, and the stored verdict always names the run it applies to.
+ */
+function ArtistReviewSection(props: {
+  project: Project | null;
+  runId: string | null;
+  reviewer: string;
+  setReviewer: (v: string) => void;
+  rejectReason: string;
+  setRejectReason: (v: string) => void;
+  onSetApproval: (approved: boolean) => void;
+}): JSX.Element {
+  const t = useT();
+  const ap = props.project?.uv_artist_approval ?? null;
+  const isLatest =
+    !!props.runId && props.runId === (props.project?.latest_uv_generate_run_id ?? null);
+  return (
+    <div className="runopts">
+      {!isLatest && props.runId && (
+        <div className="muted small">{t('generate.reviewingRun', { id: props.runId })}</div>
+      )}
+      <label className="optrow">
+        <span>{t('generate.reviewer')}</span>
+        <input
+          type="text"
+          value={props.reviewer}
+          onChange={(e) => props.setReviewer(e.target.value)}
+        />
+      </label>
+      <label className="optrow">
+        <span>{t('generate.rejectReason')}</span>
+        <input
+          type="text"
+          value={props.rejectReason}
+          onChange={(e) => props.setRejectReason(e.target.value)}
+        />
+      </label>
+      <div className="markrow">
+        <button disabled={!props.runId} onClick={() => props.onSetApproval(true)}>
+          {t('generate.approve')}
+        </button>
+        <button disabled={!props.runId} onClick={() => props.onSetApproval(false)}>
+          {t('generate.reject')}
+        </button>
+      </div>
+      {ap ? (
+        <table className="metrics">
+          <tbody>
+            <tr>
+              <td>{t('generate.ap.verdict')}</td>
+              <td>
+                <span className={`tag ${ap.approved ? 'ok' : 'bad'}`}>
+                  {ap.approved ? t('generate.ap.approved') : t('generate.ap.rejected')}
+                </span>
+              </td>
+            </tr>
+            <tr><td>{t('generate.ap.runId')}</td><td><code className="small">{ap.run_id ?? '—'}</code></td></tr>
+            <tr><td>{t('generate.ap.reviewer')}</td><td>{ap.reviewer ?? '—'}</td></tr>
+            <tr><td>{t('generate.ap.reason')}</td><td>{ap.reason ?? '—'}</td></tr>
+            <tr><td>{t('generate.ap.at')}</td><td className="small">{ap.approved_at ?? '—'}</td></tr>
+          </tbody>
+        </table>
+      ) : (
+        <div className="muted small">{t('generate.noApproval')}</div>
+      )}
+    </div>
+  );
+}
+
+/**
+ * Reviewer constraints saved against the mesh fingerprint (gate G7): locked /
+ * protected / preferred edge ids, the front axis and free-form notes.
+ */
+function FeedbackSection(props: {
+  form: FeedbackForm;
+  setForm: React.Dispatch<React.SetStateAction<FeedbackForm>>;
+  saved: UvFeedback | null;
+  onSave: () => void;
+  selectedEdgeId: number | null;
+  addSelectedEdgeTo: (field: keyof Omit<FeedbackForm, 'front_axis' | 'notes'>) => void;
+}): JSX.Element {
+  const t = useT();
+  const { form, setForm } = props;
+  const fields: { key: keyof Omit<FeedbackForm, 'front_axis' | 'notes'>; label: TKey }[] = [
+    { key: 'locked', label: 'generate.fb.locked' },
+    { key: 'protectedEdges', label: 'generate.fb.protected' },
+    { key: 'preferred', label: 'generate.fb.preferred' },
+  ];
+  return (
+    <div className="runopts">
+      {fields.map((f) => (
+        <div key={f.key} className="field">
+          <span className="small">{t(f.label)}</span>
+          <input
+            type="text"
+            value={form[f.key]}
+            placeholder={t('generate.fb.idsPlaceholder')}
+            onChange={(e) => setForm((s) => ({ ...s, [f.key]: e.target.value }))}
+          />
+          <button
+            className="small"
+            disabled={props.selectedEdgeId === null}
+            onClick={() => props.addSelectedEdgeTo(f.key)}
+          >
+            {t('generate.fb.addSelected', { id: props.selectedEdgeId ?? '—' })}
+          </button>
+        </div>
+      ))}
+      <label className="optrow">
+        <span>{t('generate.fb.frontAxis')}</span>
+        <select
+          value={form.front_axis}
+          onChange={(e) => setForm((s) => ({ ...s, front_axis: e.target.value }))}
+        >
+          <option value="">{t('generate.fb.axisUnset')}</option>
+          {FRONT_AXES.map((a) => (
+            <option key={a} value={a}>{a}</option>
+          ))}
+        </select>
+      </label>
+      <div className="field">
+        <span className="small">{t('generate.fb.notes')}</span>
+        <input
+          type="text"
+          value={form.notes}
+          onChange={(e) => setForm((s) => ({ ...s, notes: e.target.value }))}
+        />
+      </div>
+      <button onClick={props.onSave}>{t('generate.fb.save')}</button>
+      {props.saved && (
+        <div className="muted small">
+          {t('generate.fb.savedAt', {
+            at: props.saved.updated_at,
+            fp: (props.saved.mesh_fingerprint ?? '—').slice(0, 12),
+          })}
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -744,14 +1531,44 @@ function DeltaRow(props: {
   );
 }
 
+/** Budget fields where an EMPTY box means "use the quality profile's value" —
+ *  never a silent 0 (work plan §3; gate G6). */
+const BUDGET_FIELDS: {
+  key: 'max_iterations' | 'max_candidates_per_round' | 'time_budget_s' | 'island_cap';
+  label: TKey;
+}[] = [
+  { key: 'max_iterations', label: 'generate.opt.maxIterations' },
+  { key: 'max_candidates_per_round', label: 'generate.opt.maxCandidatesPerRound' },
+  { key: 'time_budget_s', label: 'generate.opt.timeBudget' },
+  { key: 'island_cap', label: 'generate.opt.islandCap' },
+];
+
+const STRICT_FLAG_LABELS: Record<string, TKey> = {
+  auto_refine_user_seams: 'generate.flag.auto_refine_user_seams',
+  repair_user_seams: 'generate.flag.repair_user_seams',
+  enforce_user_mandatory: 'generate.flag.enforce_user_mandatory',
+  gate_user_mandatory: 'generate.flag.gate_user_mandatory',
+};
+
 function RunOptions(props: {
   options: GenerateUvOptions;
   setOptions: (o: GenerateUvOptions) => void;
+  mode: UvGenerateMode;
+  summary: UvGenerateRunView['summary'];
 }): JSX.Element {
   const t = useT();
-  const { options, setOptions } = props;
+  const { options, setOptions, mode } = props;
+  // Strict flags are locked in preserve mode: flipping one there is exactly the
+  // contradiction `validateModeRequest` rejects (work plan §3).
+  const strictLocked = mode === UvGenerateModeValues.PreserveExisting;
+  const profileId =
+    props.summary?.quality_profile?.profile_id ?? options.quality_profile ?? '—';
   return (
     <div className="runopts">
+      <div className="optrow">
+        <span>{t('generate.opt.qualityProfile')}</span>
+        <code className="small">{profileId}</code>
+      </div>
       <label className="optrow">
         <span>{t('generate.optimizeLayout')}</span>
         <input
@@ -772,7 +1589,55 @@ function RunOptions(props: {
           }
         />
       </label>
-      <div className="muted small">{t('generate.strictHint')}</div>
+      <label className="optrow">
+        <span>{t('generate.opt.seed')}</span>
+        <input
+          type="number"
+          min={0}
+          value={options.seed ?? 0}
+          onChange={(e) => setOptions({ ...options, seed: Number(e.target.value) || 0 })}
+        />
+      </label>
+      <label className="optrow">
+        <span>{t('generate.opt.marginPx')}</span>
+        <input
+          type="number"
+          min={0}
+          value={options.margin_px ?? 4}
+          onChange={(e) => setOptions({ ...options, margin_px: Number(e.target.value) || 0 })}
+        />
+      </label>
+      {BUDGET_FIELDS.map((f) => (
+        <label key={f.key} className="optrow">
+          <span>{t(f.label)}</span>
+          <input
+            type="number"
+            min={0}
+            value={options[f.key] ?? ''}
+            placeholder={t('generate.opt.profileDefault')}
+            onChange={(e) =>
+              setOptions({
+                ...options,
+                [f.key]: e.target.value === '' ? null : Number(e.target.value),
+              })
+            }
+          />
+        </label>
+      ))}
+      {STRICT_FLAGS.map((flag) => (
+        <label key={flag} className="optrow">
+          <span>{t(STRICT_FLAG_LABELS[flag])}</span>
+          <input
+            type="checkbox"
+            disabled={strictLocked}
+            checked={!!options[flag]}
+            onChange={(e) => setOptions({ ...options, [flag]: e.target.checked })}
+          />
+        </label>
+      ))}
+      <div className="muted small">
+        {strictLocked ? t('generate.strictHint') : t('generate.autoHint')}
+      </div>
     </div>
   );
 }
@@ -780,7 +1645,7 @@ function RunOptions(props: {
 // ---------------------------------------------------------------------------
 // Bottom: run status / raw reports (summary, p5_gate, seam_report) / logs
 // ---------------------------------------------------------------------------
-type BottomTab = 'summary' | 'candidate' | 'p5_gate' | 'seam_report' | 'logs';
+type BottomTab = 'summary' | 'candidate' | 'candidates' | 'p5_gate' | 'seam_report' | 'logs';
 
 const STATUS_TEXT: Record<string, TKey> = {
   accepted: 'generate.statusText.accepted',
@@ -820,6 +1685,7 @@ function GenerateBottomPanel(props: {
         <nav className="tabbar">
           <button className={tab === 'summary' ? 'active' : ''} onClick={() => setTab('summary')}>{t('common.tab.summary')}</button>
           <button className={tab === 'candidate' ? 'active' : ''} onClick={() => setTab('candidate')}>{t('generate.tab.candidates')}</button>
+          <button className={tab === 'candidates' ? 'active' : ''} onClick={() => setTab('candidates')}>{t('generate.tab.candidateHistory')}</button>
           <button className={tab === 'p5_gate' ? 'active' : ''} onClick={() => setTab('p5_gate')}>p5_gate</button>
           <button className={tab === 'seam_report' ? 'active' : ''} onClick={() => setTab('seam_report')}>seam_report</button>
           <button className={tab === 'logs' ? 'active' : ''} onClick={() => setTab('logs')}>{t('common.tab.logs')}</button>
@@ -828,6 +1694,7 @@ function GenerateBottomPanel(props: {
           {!rv && <div className="muted">{t('generate.noRunSelected')}</div>}
           {rv && tab === 'summary' && <Json data={rv.summary} empty={t('common.noSummary')} />}
           {rv && tab === 'candidate' && <Json data={rv.candidate_summary} empty={t('generate.noCandSummary')} />}
+          {rv && tab === 'candidates' && <CandidateHistoryTable rows={rv.candidate_history} />}
           {rv && tab === 'p5_gate' && <Json data={rv.p5_gate} empty={t('generate.noP5')} />}
           {rv && tab === 'seam_report' && <Json data={rv.seam_report} empty={t('generate.noSeamReport')} />}
           {rv && tab === 'logs' && (
@@ -845,6 +1712,50 @@ function GenerateBottomPanel(props: {
         </div>
       </div>
     </footer>
+  );
+}
+
+/** Per-round refinement log: what was cut, what it measured, was it kept (G5/G7). */
+function CandidateHistoryTable(props: { rows: CandidateHistoryEntry[] | null }): JSX.Element {
+  const t = useT();
+  const rows = props.rows ?? [];
+  if (rows.length === 0) return <div className="muted">{t('generate.noCandidateHistory')}</div>;
+  return (
+    <div className="candtable-wrap">
+      <table className="candtable">
+        <thead>
+          <tr>
+            <th>{t('generate.ch.round')}</th>
+            <th>{t('generate.ch.kind')}</th>
+            <th>{t('generate.ch.target')}</th>
+            <th>{t('generate.ch.beforeAfter')}</th>
+            <th>{t('generate.ch.accepted')}</th>
+            <th>{t('generate.ch.reason')}</th>
+            <th>{t('generate.ch.improvement')}</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((r, i) => (
+            <tr key={i} className={r.accepted ? '' : 'rejected'}>
+              <td>{r.round}</td>
+              <td>{r.kind}</td>
+              <td>
+                {r.target_island ?? '—'}
+                {r.target_metric ? ` · ${r.target_metric}` : ''}
+              </td>
+              <td>{fmtNum(r.before)} → {fmtNum(r.after)}</td>
+              <td>
+                <span className={`tag ${r.accepted ? 'ok' : 'unknown'}`}>
+                  {r.accepted ? t('common.yes') : t('common.no')}
+                </span>
+              </td>
+              <td>{r.reason}</td>
+              <td>{fmtNum(r.improvement_ratio)}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
   );
 }
 

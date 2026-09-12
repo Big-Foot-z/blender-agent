@@ -24,6 +24,8 @@ import {
   type SeamEditorRunView,
   type SeamEditorStatusDoc,
   type CandidateSummary,
+  type CandidateHistoryEntry,
+  type SeamOverlay,
   type UvGenerateRunView,
   type UvGenerateStatusDoc,
   type UvGenerateSummary,
@@ -595,6 +597,9 @@ export function getUvGenerateRunView(projectDir: string, runId: string): UvGener
     candidate_summary: readJsonIfExists<CandidateSummary>(join(dir, 'candidate_summary.json')),
     p5_gate: readJsonIfExists<Record<string, unknown>>(join(dir, 'p5_gate.json')),
     seam_report: readJsonIfExists<Record<string, unknown>>(join(dir, 'seam_report.json')),
+    // Review artifacts (gate G7): absent on a pre-automation run -> null.
+    seam_overlay: readJsonIfExists<SeamOverlay>(join(dir, 'seam_overlay.json')),
+    candidate_history: readJsonIfExists<CandidateHistoryEntry[]>(join(dir, 'candidate_history.json')),
     stdout: readTextIfExists(join(dir, 'stdout.log')),
     stderr: readTextIfExists(join(dir, 'stderr.log')),
     artifact_paths,

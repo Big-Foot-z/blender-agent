@@ -841,3 +841,79 @@ test('uv feedback: saved constraints are handed to the next run and skipped with
   assert.equal(secondView.summary!.feedback_applied!.reason, 'fingerprint_match');
   assert.equal(secondView.summary!.feedback_applied!.applied, true);
 });
+
+// The review UI reads the 3D seam overlay + the per-round refinement log from the
+// run directory; both are optional artifacts, so a run without them parses as null
+// (work plan §7; gate G7).
+test('uv generate run view: seam_overlay.json and candidate_history.json are parsed', async () => {
+  const { project, objectName } = seedSeamSpecProject('uv_generate_review_artifacts');
+  const runner = new UvGenerateRunner({ blenderPath: null, workerRoot: workerRoot(), mock: true });
+  const started = runner.start(project.id, project.dir!, { objectName });
+  await waitForTerminal(project.dir!, started.run_id);
+  const runDir = join(project.dir!, 'runs', started.run_id);
+
+  // 1. absent artifacts read as null, never as a throw (pre-automation runs).
+  const bare = getUvGenerateRunView(project.dir!, started.run_id);
+  assert.equal(bare.seam_overlay, null);
+  assert.equal(bare.candidate_history, null);
+
+  // 2. written artifacts are parsed into the view for the overlay/history tabs.
+  writeFileSync(
+    join(runDir, 'seam_overlay.json'),
+    JSON.stringify({
+      schema_version: 1,
+      object_name: objectName,
+      edges: [
+        {
+          edge_id: 12,
+          type: 'distortion_split',
+          reason: 'island 3 anisotropy p95 over cap',
+          stage: 'refine',
+          round: 2,
+          target_island: 3,
+          improvement_ratio: 0.31,
+          a: [0, 0, 0],
+          b: [1, 0, 0],
+        },
+      ],
+      conflicts: [{ edge_id: 12, user_rule: 'protected', engine_rule: 'split', resolution: 'kept_user' }],
+      type_counts: { distortion_split: 1 },
+    }),
+  );
+  writeFileSync(
+    join(runDir, 'candidate_history.json'),
+    JSON.stringify([
+      {
+        round: 2,
+        kind: 'distortion_split',
+        target_island: 3,
+        target_metric: 'anisotropy_p95',
+        added_edges: [12],
+        before: 1.9,
+        after: 1.3,
+        accepted: true,
+        reason: 'improved',
+        improvement_ratio: 0.31,
+        island_count_after: 9,
+        elapsed_s: 0.42,
+      },
+    ]),
+  );
+
+  const view = getUvGenerateRunView(project.dir!, started.run_id);
+  assert.ok(view.seam_overlay, 'seam_overlay.json parsed');
+  assert.equal(view.seam_overlay!.edges.length, 1);
+  assert.equal(view.seam_overlay!.edges[0].edge_id, 12);
+  assert.equal(view.seam_overlay!.edges[0].type, 'distortion_split');
+  assert.equal(view.seam_overlay!.edges[0].target_island, 3);
+  assert.deepEqual(view.seam_overlay!.edges[0].a, [0, 0, 0]);
+  assert.equal(view.seam_overlay!.conflicts.length, 1);
+  assert.equal(view.seam_overlay!.type_counts.distortion_split, 1);
+
+  assert.ok(view.candidate_history, 'candidate_history.json parsed');
+  assert.equal(view.candidate_history!.length, 1);
+  assert.equal(view.candidate_history![0].round, 2);
+  assert.equal(view.candidate_history![0].accepted, true);
+  assert.equal(view.candidate_history![0].before, 1.9);
+  assert.equal(view.candidate_history![0].after, 1.3);
+});
