@@ -29,6 +29,10 @@ const api: RendererApi = {
   seamSaveSpec: (input) => ipcRenderer.invoke(SeamIpc.SaveSpec, input),
   uvGenerateValidateInput: (input) => ipcRenderer.invoke(UvGenerateIpc.ValidateInput, input),
   uvGenerateSetMode: (input) => ipcRenderer.invoke(UvGenerateIpc.SetMode, input),
+  uvGenerateSetArtistApproval: (input) =>
+    ipcRenderer.invoke(UvGenerateIpc.SetArtistApproval, input),
+  uvGenerateGetFeedback: (input) => ipcRenderer.invoke(UvGenerateIpc.GetFeedback, input),
+  uvGenerateSaveFeedback: (input) => ipcRenderer.invoke(UvGenerateIpc.SaveFeedback, input),
   uvGenerateStart: (input) => ipcRenderer.invoke(UvGenerateIpc.Start, input),
   uvGenerateCancel: (input) => ipcRenderer.invoke(UvGenerateIpc.Cancel, input),
   uvGenerateGetRun: (input) => ipcRenderer.invoke(UvGenerateIpc.GetRun, input),
@@ -50,6 +54,7 @@ const api: RendererApi = {
   bridgeStatus: () => ipcRenderer.invoke(Ipc.BridgeStatus),
   bridgeRefresh: (input) => ipcRenderer.invoke(Ipc.BridgeRefresh, input),
   bridgeInstall: () => ipcRenderer.invoke(Ipc.BridgeInstall),
+  blenderCheckVersion: (input) => ipcRenderer.invoke(Ipc.BlenderCheckVersion, input),
   onRunUpdate: (cb) => {
     const listener = (_e: unknown, payload: { projectId: string; runId: string }) => cb(payload);
     ipcRenderer.on(Ipc.RunUpdate, listener);

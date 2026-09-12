@@ -35,6 +35,8 @@ import {
   MISSING_SEAM_SOURCE_CODE,
   MISSING_SEAM_SOURCE_MESSAGE,
   SeamSourceType,
+  UV_FEEDBACK_REL,
+  type BlenderVersionCheck,
   type GenerateUvOptions,
   type SeamSourceKind,
   type SeamSpec,
@@ -50,17 +52,21 @@ import {
   resolveProjectMode,
   resolveWorkingModel,
   setUvGenerateMode,
+  uvFeedbackPath,
   uvWorkDir,
   DERIVED_SEAM_SPEC_REL,
   SELECTED_UV_BLEND_REL,
   SELECTED_UV_SUMMARY_REL,
 } from './project-service';
+import { checkBlenderVersion } from './blenderVersion';
 
 export interface UvGenerateWorkerConfig {
   blenderPath: string | null;
   workerRoot: string; // absolute path to repo `worker/`
   mock?: boolean; // force the mock runner (tests / no Blender)
   onRunUpdate?: (projectId: string, runId: string) => void;
+  /** Gate G9: supported-Blender-version gate; injectable for tests. */
+  versionChecker?: (path: string) => BlenderVersionCheck;
 }
 
 export class UvGenerateRunner {
@@ -182,6 +188,14 @@ export class UvGenerateRunner {
     projectDir: string,
     input: { objectName?: string; options?: GenerateUvOptions; mode?: UvGenerateMode },
   ): { run_id: string; mode: UvGenerateMode } {
+    // Gate G9: an unsupported / unreadable Blender fails BEFORE any run
+    // directory exists, so a rejected request leaves no run behind.
+    if (!this.useMock() && this.cfg.blenderPath) {
+      const check = (this.cfg.versionChecker ?? checkBlenderVersion)(this.cfg.blenderPath);
+      if (!check.ok) {
+        throw Object.assign(new Error(check.message), { code: check.code, check });
+      }
+    }
     const project = readProject(projectDir);
     // Gate G2: the mode is decided (explicit argument > options.mode > project)
     // and a self-contradicting flag combination is rejected BEFORE any run
@@ -214,6 +228,12 @@ export class UvGenerateRunner {
     setUvGenerateMode(projectDir, mode);
     uvWorkDir(projectDir); // ensure work/uv exists for the handoff copy
 
+    // Gate G7: saved reviewer feedback (locks/protected/preferred) travels with
+    // the job. The worker compares `mesh_fingerprint` before applying it — a
+    // topology change must never silently re-use stale edge ids.
+    const feedbackAbs = uvFeedbackPath(projectDir);
+    const hasFeedback = existsSync(feedbackAbs);
+
     const job = {
       command: UvGenerateCommand.GenerateUvFromSeams,
       project_id: projectId,
@@ -234,6 +254,8 @@ export class UvGenerateRunner {
       selected_summary_out: join(projectDir, SELECTED_UV_SUMMARY_REL),
       derived_seam_spec_out: join(projectDir, DERIVED_SEAM_SPEC_REL),
       derived_seam_spec_out_rel: DERIVED_SEAM_SPEC_REL,
+      feedback: hasFeedback ? feedbackAbs : null,
+      feedback_rel: hasFeedback ? UV_FEEDBACK_REL : null,
     };
     writeFileSync(join(dir, 'job.json'), JSON.stringify(job, null, 2));
     writeQueuedStatus(dir, runId, modelRel, objectName, hasSpec ? specRel ?? '' : '', mode);
@@ -684,6 +706,7 @@ function mockGenerate(dir: string, runId: string, projectDir: string, job: any):
     solver_accepted: shipped,
     artist_approved: false,
     ...(auto ? autoReportBlocks(specSeamCount) : preserveReportBlocks()),
+    ...(auto ? mockFeedbackBlock(job.feedback) : {}),
   };
   writeFileSync(join(dir, 'uv_generate_summary.json'), JSON.stringify(summary, null, 2));
 
@@ -800,6 +823,35 @@ function autoReportBlocks(lockedSeamCount: number): Record<string, unknown> {
       mandatory_90_missing: 0,
       mandatory_90_uv_unsplit: 0,
       reported_only: false,
+    },
+  };
+}
+
+/**
+ * Mock re-application of saved reviewer feedback (gate G7).
+ *
+ * A feedback file with no `mesh_fingerprint` cannot be matched to this mesh, so
+ * it is NOT applied — the honest "no_fingerprint" reason. The mock has no real
+ * mesh hash, so a fingerprinted file is reported as a match; the real worker
+ * compares hashes and can report `fingerprint_mismatch`.
+ */
+function mockFeedbackBlock(feedbackAbs?: string | null): Record<string, unknown> {
+  if (!feedbackAbs || !existsSync(feedbackAbs)) return {};
+  let fb: Record<string, unknown> = {};
+  try {
+    fb = JSON.parse(readFileSync(feedbackAbs, 'utf-8')) as Record<string, unknown>;
+  } catch {
+    return {};
+  }
+  const count = (key: string): number => (Array.isArray(fb[key]) ? (fb[key] as unknown[]).length : 0);
+  const hasFingerprint = typeof fb.mesh_fingerprint === 'string' && fb.mesh_fingerprint !== '';
+  return {
+    feedback_applied: {
+      applied: hasFingerprint,
+      reason: hasFingerprint ? 'fingerprint_match' : 'no_fingerprint',
+      locked_seam_count: count('locked_seam_edges'),
+      protected_count: count('protected_edges'),
+      preferred_count: count('preferred_edges'),
     },
   };
 }

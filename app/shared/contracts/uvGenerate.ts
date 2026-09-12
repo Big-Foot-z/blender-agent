@@ -301,7 +301,47 @@ export const UvGenerateIpc = {
   GetCandidateSummary: 'uvGenerate:getCandidateSummary',
   /** Persist the project's execution mode (work plan §3; gate G2). */
   SetMode: 'uvGenerate:setMode',
+  /** Record the artist verdict — separate from `solver_accepted` (gate G6/G7). */
+  SetArtistApproval: 'uvGenerate:setArtistApproval',
+  /** Read the saved reviewer feedback (locks/protected/preferred) (gate G7). */
+  GetFeedback: 'uvGenerate:getFeedback',
+  /** Persist reviewer feedback so the next run can re-apply it (gate G7). */
+  SaveFeedback: 'uvGenerate:saveFeedback',
 } as const;
+
+// --- Reviewer feedback (gate G7) -------------------------------------------
+/** Project-relative path of the saved reviewer feedback (posix; joined in main). */
+export const UV_FEEDBACK_REL = 'work/uv/uv_feedback.json';
+
+/**
+ * Saved reviewer constraints, re-applied on a later run of the SAME mesh.
+ *
+ * `mesh_fingerprint` is what makes re-use safe: when the model's topology
+ * changes the edge ids no longer correspond, so the worker must refuse to reuse
+ * the constraints silently (gate G7 "topology 변경으로 edge 대응이 무효해지면
+ * 제약을 조용히 재사용하지 않음").
+ */
+export interface UvFeedback {
+  schema_version: 1;
+  mesh_fingerprint: string | null;
+  object_name: string | null;
+  locked_seam_edges: number[];
+  protected_edges: number[];
+  preferred_edges: number[];
+  front_axis: string;
+  notes: string;
+  updated_at: string;
+  source_run_id: string | null;
+}
+
+/** Whether a run actually applied the saved feedback, and why (gate G7). */
+export interface FeedbackApplied {
+  applied: boolean;
+  reason: 'fingerprint_match' | 'fingerprint_mismatch' | 'no_fingerprint';
+  locked_seam_count: number;
+  protected_count: number;
+  preferred_count: number;
+}
 
 // --- Summary shapes (plan §4.1) -------------------------------------------
 export interface GenerateMetrics {
@@ -577,6 +617,8 @@ export interface UvGenerateSummary {
   termination?: TerminationBlock | null;
   seam_length?: SeamLengthBlock | null;
   mandatory_audit?: MandatoryAuditBlock | null;
+  /** Saved reviewer feedback re-application verdict (gate G7). */
+  feedback_applied?: FeedbackApplied | null;
 }
 
 // --- Candidate summary (plan §5) ------------------------------------------

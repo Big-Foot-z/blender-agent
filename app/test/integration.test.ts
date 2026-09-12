@@ -29,8 +29,12 @@ import {
   registerRun,
   resolveWorkingModel,
   setActiveUserSeamSpec,
+  setArtistApproval,
   setSelectedUvLayer,
   setUvGenerateMode,
+  saveUvFeedback,
+  readUvFeedback,
+  uvFeedbackPath,
   seamsDir,
   absSourcePath,
 } from '../electron/main/project-service';
@@ -748,4 +752,92 @@ test('mvp5 export: rollback to a prior export re-pins latest_export_id, keeps ne
   assert.equal(openProject(project.dir!).latest_export_id, first);
   // newer export manifest is NOT deleted (plan §9 rules)
   assert.ok(existsSync(join(project.dir!, 'exports', second, 'export_manifest.json')));
+});
+
+// --- UV automation: reviewer approval + feedback (gates G6/G7) --------------
+
+test('uv artist approval: solver accepted and artist approved are recorded separately', async () => {
+  const { project, objectName } = seedSeamSpecProject('uv_artist_approval');
+  const runner = new UvGenerateRunner({ blenderPath: null, workerRoot: workerRoot(), mock: true });
+
+  // 1. an accepted solver run is NOT an artist approval (gate G6).
+  const started = runner.start(project.id, project.dir!, { objectName });
+  const view = await waitForTerminal(project.dir!, started.run_id);
+  assert.equal(view.status?.status, 'accepted');
+  assert.equal(view.summary!.solver_accepted, true);
+  assert.equal(view.summary!.artist_approved, false);
+  const summaryPath = join(project.dir!, 'runs', started.run_id, 'uv_generate_summary.json');
+  const summaryHash = sha256File(summaryPath);
+
+  // 2. a reviewer REJECTION stores the reason and the run it was made against.
+  const rejected = setArtistApproval(project.dir!, { approved: false, reason: 'seam on face' });
+  assert.equal(rejected.uv_artist_approval!.approved, false);
+  assert.equal(rejected.uv_artist_approval!.reason, 'seam on face');
+  assert.equal(rejected.uv_artist_approval!.run_id, started.run_id);
+  assert.equal(
+    openProject(project.dir!).uv_artist_approval!.run_id,
+    openProject(project.dir!).latest_uv_generate_run_id,
+  );
+
+  // 3. the solver verdict file is untouched by the artist verdict (gate G6).
+  assert.equal(sha256File(summaryPath), summaryHash, 'summary untouched by artist verdict');
+  const reread = getUvGenerateRunView(project.dir!, started.run_id);
+  assert.equal(reread.summary!.solver_accepted, true);
+  assert.equal(reread.summary!.artist_approved, false, 'artist verdict never edits the run summary');
+
+  // 4. a rejection without a reason is refused (gate G7 "거절 이유 저장").
+  assert.throws(
+    () => setArtistApproval(project.dir!, { approved: false }),
+    (err: unknown) => (err as Error).message === 'artist_rejection_requires_reason',
+  );
+  assert.equal(openProject(project.dir!).uv_artist_approval!.reason, 'seam on face');
+
+  // 5. an approval is timestamped.
+  const approved = setArtistApproval(project.dir!, { approved: true, reviewer: 'artist_a' });
+  assert.equal(approved.uv_artist_approval!.approved, true);
+  assert.ok(approved.uv_artist_approval!.approved_at, 'approval records approved_at');
+});
+
+test('uv feedback: saved constraints are handed to the next run and skipped without a fingerprint', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'uvproj-'));
+  const sourcePath = makeFakeSource();
+  const project = createProject({ root, name: 'uv_feedback', sourcePath, role: 'lowpoly' });
+  const objectName = 'SM_Test_Pottery_a_02';
+  setUvGenerateMode(project.dir!, 'auto_generate');
+  const runner = new UvGenerateRunner({ blenderPath: null, workerRoot: workerRoot(), mock: true });
+
+  // 1. save reviewer feedback: edge ids are de-duplicated and sorted.
+  const saved = saveUvFeedback(project.dir!, {
+    locked_seam_edges: [3, 1, 3],
+    protected_edges: [7],
+    preferred_edges: [],
+    front_axis: '-Y',
+  });
+  assert.ok(existsSync(uvFeedbackPath(project.dir!)), 'work/uv/uv_feedback.json written');
+  assert.deepEqual(saved.locked_seam_edges, [1, 3]);
+  assert.deepEqual(saved.protected_edges, [7]);
+  assert.equal(saved.front_axis, '-Y');
+  assert.equal(saved.mesh_fingerprint, null);
+  assert.deepEqual(readUvFeedback(project.dir!)!.locked_seam_edges, [1, 3]);
+
+  // 2. the next run carries the feedback path in its job (gate G7).
+  const first = runner.start(project.id, project.dir!, { objectName });
+  const firstView = await waitForTerminal(project.dir!, first.run_id);
+  const job = JSON.parse(readFileSync(join(project.dir!, 'runs', first.run_id, 'job.json'), 'utf-8'));
+  assert.equal(job.feedback, uvFeedbackPath(project.dir!));
+  assert.equal(job.feedback_rel, 'work/uv/uv_feedback.json');
+
+  // 3. no fingerprint -> the constraints are NOT silently re-used (gate G7).
+  assert.equal(firstView.summary!.feedback_applied!.reason, 'no_fingerprint');
+  assert.equal(firstView.summary!.feedback_applied!.applied, false);
+  assert.equal(firstView.summary!.feedback_applied!.locked_seam_count, 2);
+
+  // 4. with a fingerprint recorded, the same mesh re-applies them.
+  const withFp = saveUvFeedback(project.dir!, { mesh_fingerprint: 'abc' });
+  assert.equal(withFp.mesh_fingerprint, 'abc');
+  assert.deepEqual(withFp.locked_seam_edges, [1, 3], 'a partial patch keeps the saved edges');
+  const second = runner.start(project.id, project.dir!, { objectName });
+  const secondView = await waitForTerminal(project.dir!, second.run_id);
+  assert.equal(secondView.summary!.feedback_applied!.reason, 'fingerprint_match');
+  assert.equal(secondView.summary!.feedback_applied!.applied, true);
 });

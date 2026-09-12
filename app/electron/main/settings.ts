@@ -6,23 +6,15 @@
  */
 
 import Store from 'electron-store';
-import { existsSync } from 'fs';
 import { homedir } from 'os';
 import { join } from 'path';
 import type { AppSettings } from '@shared/contracts';
+import { detectBlenderPath } from './blenderVersion';
 
-const COMMON_BLENDER_PATHS = [
-  '/Applications/Blender.app/Contents/MacOS/Blender',
-  '/usr/bin/blender',
-  '/usr/local/bin/blender',
-  'C:\\Program Files\\Blender Foundation\\Blender\\blender.exe',
-];
-
+/** Gate G9: detection covers the common install paths plus the Windows
+ *  `Blender Foundation\Blender X.Y` version directories (newest first). */
 function detectBlender(): string | null {
-  for (const p of COMMON_BLENDER_PATHS) {
-    if (existsSync(p)) return p;
-  }
-  return null;
+  return detectBlenderPath();
 }
 
 const store = new Store<{ settings: AppSettings }>({

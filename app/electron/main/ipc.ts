@@ -21,6 +21,8 @@ import {
   type ReviewOptions,
   type RollbackTargetType,
   type SeamSpec,
+  type ArtistApproval,
+  type UvFeedback,
   type UvGenerateMode,
 } from '@shared/contracts';
 import {
@@ -38,8 +40,11 @@ import {
   openProject,
   readHistory,
   readProject,
+  readUvFeedback,
   resolveWorkingModel,
   rollbackProjectState,
+  saveUvFeedback,
+  setArtistApproval,
   setSelectedUvLayer,
   setUvGenerateMode,
   writeProject,
@@ -51,6 +56,7 @@ import { UvGenerateRunner } from './uvGenerate';
 import { ExportRunner } from './exportRunner';
 import { getSettings, setSettings } from './settings';
 import { blenderOpen, installBridge } from './blenderLauncher';
+import { checkBlenderVersion, clearBlenderVersionCache, detectBlenderPath } from './blenderVersion';
 import { bridgeRefresh, bridgeStatus } from './blenderBridge';
 import type { ApproveBlenderRefresh } from '@shared/contracts';
 
@@ -156,7 +162,13 @@ function makeExportRunner(): ExportRunner {
 
 export function registerIpc(): void {
   ipcMain.handle(Ipc.SettingsGet, () => getSettings());
-  ipcMain.handle(Ipc.SettingsSet, (_e, patch) => setSettings(patch));
+  ipcMain.handle(Ipc.SettingsSet, (_e, patch) => {
+    // Gate G9: a new executable invalidates the memoised version check.
+    if (patch && Object.prototype.hasOwnProperty.call(patch, 'blenderPath')) {
+      clearBlenderVersionCache();
+    }
+    return setSettings(patch);
+  });
 
   ipcMain.handle(Ipc.PickFile, async () => {
     const res = await dialog.showOpenDialog({
@@ -274,6 +286,13 @@ export function registerIpc(): void {
   ipcMain.handle(Ipc.BridgeInstall, () =>
     installBridge({ blenderPath: getSettings().blenderPath, workerRoot: resolveWorkerRoot() }),
   );
+
+  // Gate G9: explicit path > configured path > auto-detection, then the
+  // supported-version gate. Never throws — the renderer renders `code`.
+  ipcMain.handle(Ipc.BlenderCheckVersion, (_e, input?: { path?: string }) => {
+    const path = input?.path ?? getSettings().blenderPath ?? detectBlenderPath() ?? '';
+    return checkBlenderVersion(path);
+  });
 
   ipcMain.handle(Ipc.RunGet, (_e, input: { projectId: string; runId: string }) =>
     getRunView(dirForProject(input.projectId), input.runId),
@@ -394,6 +413,25 @@ export function registerIpc(): void {
     UvGenerateIpc.SetMode,
     (_e, input: { projectId: string; mode: UvGenerateMode }) =>
       setUvGenerateMode(dirForProject(input.projectId), input.mode),
+  );
+
+  // Gate G6/G7: the artist verdict is stored on the project, never folded into
+  // the run's solver verdict. A rejection must carry a reason (throws otherwise).
+  ipcMain.handle(
+    UvGenerateIpc.SetArtistApproval,
+    (_e, input: { projectId: string; approval: ArtistApproval }) =>
+      setArtistApproval(dirForProject(input.projectId), input.approval),
+  );
+
+  // Gate G7: reviewer feedback is saved and handed to the next run.
+  ipcMain.handle(UvGenerateIpc.GetFeedback, (_e, input: { projectId: string }) =>
+    readUvFeedback(dirForProject(input.projectId)),
+  );
+
+  ipcMain.handle(
+    UvGenerateIpc.SaveFeedback,
+    (_e, input: { projectId: string; feedback: Partial<UvFeedback> }) =>
+      saveUvFeedback(dirForProject(input.projectId), input.feedback),
   );
 
   ipcMain.handle(

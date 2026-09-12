@@ -7,7 +7,7 @@
 
 import { randomUUID } from 'crypto';
 import { existsSync, mkdirSync, copyFileSync, readFileSync, writeFileSync, readdirSync } from 'fs';
-import { extname, isAbsolute, join } from 'path';
+import { dirname, extname, isAbsolute, join } from 'path';
 import {
   SCHEMA_VERSION,
   type MeshRole,
@@ -41,6 +41,9 @@ import {
   type RollbackResult,
   SUPPORTED_EXPORT_FORMATS,
   resolveGenerateMode,
+  UV_FEEDBACK_REL,
+  type ArtistApproval,
+  type UvFeedback,
   type UvGenerateMode,
 } from '@shared/contracts';
 
@@ -404,6 +407,94 @@ export function setUvGenerateMode(projectDir: string, mode: UvGenerateMode): Pro
   const project = readProject(projectDir);
   project.uv_generate_mode = resolveGenerateMode(mode);
   return writeProject(projectDir, project);
+}
+
+/**
+ * Record the ARTIST verdict (gate G6/G7).
+ *
+ * Deliberately writes only `project.uv_artist_approval` — the run's `status.json`
+ * and `uv_generate_summary.json` keep the solver verdict untouched, so
+ * `solver_accepted` and artist approval stay two separate facts. A rejection must
+ * carry a reason, and it is pinned to the run it was made against.
+ */
+export function setArtistApproval(projectDir: string, approval: ArtistApproval): Project {
+  const project = readProject(projectDir);
+  const reason = (approval.reason ?? '').trim();
+  if (!approval.approved && reason === '') {
+    throw new Error('artist_rejection_requires_reason');
+  }
+  project.uv_artist_approval = {
+    approved: approval.approved,
+    run_id: approval.run_id ?? project.latest_uv_generate_run_id ?? null,
+    reviewer: approval.reviewer ?? null,
+    reason: approval.reason ?? null,
+    approved_at: nowIso(),
+  };
+  return writeProject(projectDir, project);
+}
+
+/** Absolute path of the saved reviewer feedback file (gate G7). */
+export function uvFeedbackPath(projectDir: string): string {
+  return join(projectDir, ...UV_FEEDBACK_REL.split('/'));
+}
+
+/** Normalize an edge-id list: integers only, de-duplicated, ascending. */
+function normalizeEdgeIds(value: unknown): number[] {
+  if (!Array.isArray(value)) return [];
+  const out = new Set<number>();
+  for (const raw of value) {
+    const n = Number(raw);
+    if (Number.isInteger(n)) out.add(n);
+  }
+  return [...out].sort((a, b) => a - b);
+}
+
+/** Read the saved reviewer feedback, or null when nothing is saved (gate G7). */
+export function readUvFeedback(projectDir: string): UvFeedback | null {
+  const path = uvFeedbackPath(projectDir);
+  if (!existsSync(path)) return null;
+  try {
+    return JSON.parse(readFileSync(path, 'utf-8')) as UvFeedback;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Merge a feedback patch into the saved file (gate G7).
+ *
+ * `mesh_fingerprint` is only overwritten when the patch supplies one — it is the
+ * key the worker compares before re-applying constraints, so a partial save must
+ * never blank it out.
+ */
+export function saveUvFeedback(projectDir: string, patch: Partial<UvFeedback>): UvFeedback {
+  const existing = readUvFeedback(projectDir);
+  const next: UvFeedback = {
+    schema_version: 1,
+    mesh_fingerprint:
+      patch.mesh_fingerprint !== undefined
+        ? patch.mesh_fingerprint
+        : existing?.mesh_fingerprint ?? null,
+    object_name: patch.object_name !== undefined ? patch.object_name : existing?.object_name ?? null,
+    locked_seam_edges: normalizeEdgeIds(
+      patch.locked_seam_edges !== undefined ? patch.locked_seam_edges : existing?.locked_seam_edges,
+    ),
+    protected_edges: normalizeEdgeIds(
+      patch.protected_edges !== undefined ? patch.protected_edges : existing?.protected_edges,
+    ),
+    preferred_edges: normalizeEdgeIds(
+      patch.preferred_edges !== undefined ? patch.preferred_edges : existing?.preferred_edges,
+    ),
+    front_axis: patch.front_axis !== undefined ? patch.front_axis : existing?.front_axis ?? '',
+    notes: patch.notes !== undefined ? patch.notes : existing?.notes ?? '',
+    updated_at: nowIso(),
+    source_run_id:
+      patch.source_run_id !== undefined ? patch.source_run_id : existing?.source_run_id ?? null,
+  };
+  const path = uvFeedbackPath(projectDir);
+  mkdirSync(dirname(path), { recursive: true });
+  writeFileSync(path, JSON.stringify(next, null, 2));
+  return next;
 }
 
 /** Append a generate run and point `latest_uv_generate_run_id` at it (plan §9). */

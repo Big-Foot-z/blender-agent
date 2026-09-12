@@ -14,7 +14,7 @@
     "typecheck:node": "tsc --noEmit -p tsconfig.node.json",
     "typecheck:web": "tsc --noEmit -p tsconfig.web.json",
     "typecheck": "npm run typecheck:node && npm run typecheck:web",
-    "test:integration": "tsx --tsconfig tsconfig.node.json --test test/integration.test.ts test/blender-bridge.test.ts test/uv-generate-contract.test.ts",
+    "test:integration": "tsx --tsconfig tsconfig.node.json --test test/integration.test.ts test/blender-bridge.test.ts test/uv-generate-contract.test.ts test/blender-version.test.ts",
     "start": "electron-vite preview",
     "dist": "npm run build && electron-builder",
     "dist:mac": "npm run build && electron-builder --mac",

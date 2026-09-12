@@ -32,6 +32,7 @@ import type {
   CandidateSummary,
   GenerateUvOptions,
   SelectCandidateResult,
+  UvFeedback,
   UvGenerateMode,
   UvGenerateRunView,
   ValidateGenerateInput,
@@ -98,6 +99,8 @@ export const Ipc = {
   BridgeStatus: 'blender:bridgeStatus',
   BridgeRefresh: 'blender:bridgeRefresh',
   BridgeInstall: 'blender:bridgeInstall',
+  /** Detect + validate the configured Blender version (gate G9). */
+  BlenderCheckVersion: 'blender:checkVersion',
   // main -> renderer push event
   RunUpdate: 'run:update',
 } as const;
@@ -263,6 +266,25 @@ export interface AppSettings {
   /** Auto-refresh a connected Blender session after a low-poly approval
    *  (bridge plan §4.3). Optional so pre-bridge stored settings still load. */
   autoRefreshBlender?: boolean;
+  /** Last observed Blender version string (gate G9); optional so pre-G9
+   *  stored settings still load. */
+  blenderVersion?: string | null;
+  /** Last full version-gate result for `blenderPath` (gate G9). */
+  blenderVersionCheck?: BlenderVersionCheck | null;
+}
+
+/**
+ * Result of the supported-Blender-version gate (G9): the pinned range, what
+ * was actually detected, and a stable error code for the UI.
+ */
+export interface BlenderVersionCheck {
+  ok: boolean;
+  version: string | null;
+  build_hash: string | null;
+  min_version: string;
+  tested_version: string;
+  code: null | 'blender_not_found' | 'blender_version_unreadable' | 'blender_version_unsupported';
+  message: string;
 }
 
 // --- Blender launcher + bridge (3D viewer + bridge plan §3, §4) ------------
@@ -373,6 +395,18 @@ export interface RendererApi {
   }): Promise<ValidateGenerateInput>;
   /** Persist the project's execution mode (work plan §3; gate G2). */
   uvGenerateSetMode(input: { projectId: string; mode: UvGenerateMode }): Promise<Project>;
+  /** Record the artist verdict — kept apart from `solver_accepted` (gate G6/G7). */
+  uvGenerateSetArtistApproval(input: {
+    projectId: string;
+    approval: ArtistApproval;
+  }): Promise<Project>;
+  /** Read the saved reviewer feedback, or null when nothing is saved (gate G7). */
+  uvGenerateGetFeedback(input: { projectId: string }): Promise<UvFeedback | null>;
+  /** Persist reviewer feedback for the next run of the same mesh (gate G7). */
+  uvGenerateSaveFeedback(input: {
+    projectId: string;
+    feedback: Partial<UvFeedback>;
+  }): Promise<UvFeedback>;
   uvGenerateStart(input: {
     projectId: string;
     objectName?: string;
@@ -418,5 +452,8 @@ export interface RendererApi {
   bridgeRefresh(input: { projectId: string }): Promise<BridgeRefreshResult>;
   /** Headless-install the bridge addon into the configured Blender. */
   bridgeInstall(): Promise<{ status: string; log: string }>;
+  /** Detect/validate the Blender version at `path` (default: the configured
+   *  path, else auto-detection) against the supported range (gate G9). */
+  blenderCheckVersion(input?: { path?: string }): Promise<BlenderVersionCheck>;
   onRunUpdate(cb: (payload: { projectId: string; runId: string }) => void): () => void;
 }
