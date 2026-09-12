@@ -75,7 +75,41 @@ def resolve_export_object(bpy, object_name: str | None):
     return obj
 
 
-def set_active_uv_layer(obj, layer_name: str | None) -> tuple[str | None, list[str]]:
+def make_uv_layer_exclusive(obj, layer_name: str | None) -> list[str]:
+    """Remove every UV layer except ``layer_name``; return the removed names.
+
+    Pure enough to unit-test with a fake ``uv_layers`` collection (only ``__iter__``,
+    ``.name`` and ``.remove(layer)`` are used).
+
+    Why: FBX / glTF importers keep EVERY UV layer and re-activate the FIRST one, so
+    an asset exported with two layers (original ``UVMap`` + optimized ``AI_UV``)
+    re-reads with the ORIGINAL UV active — the G9 re-read audit then measures the
+    wrong map (observed: fbx ``mandatory_90_uv_unsplit`` = 68). Shipping exactly one
+    UV layer makes the exported file unambiguous for any consumer.
+
+    In-memory only: the caller must never save the source ``selected_uv.blend`` back
+    (plan §11, §15), so dropping layers here cannot damage the accepted asset.
+    """
+    removed: list[str] = []
+    uv_layers = getattr(obj.data, "uv_layers", None)
+    if uv_layers is None or not layer_name:
+        return removed
+    doomed = [layer for layer in uv_layers if layer.name != layer_name]
+    if len(doomed) >= len(list(uv_layers)):
+        # ``layer_name`` is not present — never strip the object's only UVs.
+        return removed
+    for layer in doomed:
+        name = layer.name
+        try:
+            uv_layers.remove(layer)
+        except (RuntimeError, TypeError, ValueError):  # pragma: no cover - Blender build dependent
+            continue
+        removed.append(name)
+    return removed
+
+
+def set_active_uv_layer(obj, layer_name: str | None, *,
+                        exclusive: bool = False) -> tuple[str | None, list[str]]:
     """Activate ``layer_name`` (and mark it active-for-render); keep active if None.
 
     Returns ``(active_uv_layer_name, warnings)``. A requested-but-missing layer is
@@ -89,6 +123,10 @@ def set_active_uv_layer(obj, layer_name: str | None) -> tuple[str | None, list[s
     for render (e.g. the source ``UVChannel_1`` next to the optimized ``AI_UV``)
     silently ships the WRONG, un-optimized UVs while the manifest/preview report the
     active one (MVP3 existing-UV repack follow-up — preview ≠ exported OBJ bug).
+
+    ``exclusive=True`` additionally drops every other UV layer (see
+    :func:`make_uv_layer_exclusive`) and reports the removed names as warnings.
+    Default ``False`` keeps the historical behaviour untouched.
     """
     warnings: list[str] = []
     uv_layers = obj.data.uv_layers
@@ -111,7 +149,12 @@ def set_active_uv_layer(obj, layer_name: str | None) -> tuple[str | None, list[s
             active.active_render = True
         except (AttributeError, RuntimeError):  # pragma: no cover - Blender build dependent
             pass
-    return (active.name if active is not None else None), warnings
+    active_name = active.name if active is not None else None
+    if exclusive and active_name:
+        removed = make_uv_layer_exclusive(obj, active_name)
+        if removed:
+            warnings.append(f"removed non-exported UV layers: {removed}")
+    return active_name, warnings
 
 
 def build_export_object(bpy, obj, options: dict):

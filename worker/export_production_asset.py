@@ -212,11 +212,22 @@ def _run_export(bpy, contract, job: dict, out_dir: str, status_path: str, status
     if active_uv is None:
         return _fail("no_uv_layer",
                      "selected UV model has no UV layer to export (re-run MVP 3)")
+    # Ship exactly ONE UV layer: FBX/glTF importers keep every layer and re-activate
+    # the FIRST one, so a leftover original ``UVMap`` next to ``AI_UV`` makes the
+    # re-read (and any DCC consumer) read the WRONG map (G9 re-read audit). This
+    # mutates the in-memory mesh only — this worker NEVER saves back into
+    # ``selected_uv_model`` (plan §11, §15), so the accepted asset is untouched.
+    removed_uv_layers = exporter.make_uv_layer_exclusive(obj, active_uv)
     source_faces = len(obj.data.polygons)
     source_vertices = len(obj.data.vertices)
     triangulated = bool(options.get("triangulate", False))
     warnings: list[str] = list(uv_warnings)
+    if removed_uv_layers:
+        warnings.append(
+            "removed non-exported UV layers so the export ships only "
+            f"{active_uv!r}: {removed_uv_layers}")
 
+    print(f"export_production_asset: removed_uv_layers={removed_uv_layers}", flush=True)
     print(f"export_production_asset: object={object_name!r} uv_layer={active_uv!r} "
           f"formats={formats} faces={source_faces} verts={source_vertices} "
           f"apply_scale={options.get('apply_scale')} triangulate={triangulated} "
