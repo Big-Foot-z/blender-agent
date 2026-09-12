@@ -3,7 +3,7 @@
 - 대응 문서: [Acceptance Gate](UV_AUTOMATION_ACCEPTANCE_GATES.ko.md), [작업 계획서](UV_AUTOMATION_WORK_PLAN.ko.md)
 - 판정 기준 코드: `082f70e` (main)
 - 실행 환경: Windows 10 Home 10.0.19045 x64, Python 3.14.4 (uv), Node/npm 11, Blender 5.1.2 (build hash ec6e62d40fa9, 2026-05-19), electron-builder 24.13.3
-- 증거 경로: `tests/e2e/*` 실행 결과 JSON(세션 scratchpad `evidence_final/`), 본 문서의 표. 실모델(human statue 등)과 리뷰어는 이 세션에 없다.
+- 증거 경로: `tests/e2e/*` 실행 결과 JSON(저장소 `docs/evidence/uv_automation_082f70e/`), 본 문서의 표. 실모델(human statue 등)과 리뷰어는 이 세션에 없다.
 - 판정은 메인이 최종 코드 기준 raw 출력을 직접 대조해 내렸다. 구현 완료와 실행 검증, solver accepted 와 아티스트 승인을 구분한다.
 
 ## 요약 표

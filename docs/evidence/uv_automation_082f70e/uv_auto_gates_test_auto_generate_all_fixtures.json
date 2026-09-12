@@ -1,0 +1,646 @@
+{
+  "test": "test_auto_generate_all_fixtures",
+  "blender": {
+    "executable": "C:/Program Files/Blender Foundation\\Blender 5.1\\blender.exe",
+    "version": "5.1.2",
+    "build_hash": "ec6e62d40fa9",
+    "build_date": "2026-05-19",
+    "raw": "Blender 5.1.2\n\tbuild date: 2026-05-19\n\tbuild time: 01:37:34\n\tbuild commit date: 2026-05-18\n\tbuild commit time: 13:43\n\tbuild hash: ec6e62d40fa9\n\tbuild branch: blender-v5.1-release\n\tbuild platform: Windows\n\tbuild type: Release\n\tbuild c flags:  -Wall -Werror=implicit-function-declaration -Werror=return-type -Wno-tautological-compare -Wno-unknown-pragmas -Wno-char-subscripts -Wstrict-prototypes -Wmissing-prototypes -Wunused-parameter -Wundef -Wundef-prefix -Werror=unguarded-availability-new /W3 -Wno-c++98-compat -Wno-old-style-cast -Wno-unsafe-buffer-usage -Wno-missing-prototypes -Wno-sign-conversion -Wno-missing-field-initializers -Wno-extra-semi -Wno-language-extension-token -Wno-implicit-float-conversion -Wno-c++98-compat-pedantic -Wno-implicit-int-float-conversion -Wno-double-promotion -Wno-pre-c++17-compat -Wno-shorten-64-to-32 -Wno-c++98-compat-local-type-template-args -Wno-reserved-identifier -Wno-cast-align -Wno-documentation -Wno-disabled-macro-expansion -Wno-extra-semi-stmt -Wno-zero-as-null-pointer-constant -Wno-float-conversion -Wno-reserved-macro-identifier -Wno-cast-function-type-strict -Wno-float-equal -Wno-implicit-int-conversion -Wno-shadow -Wno-shadow-field-in-constructor -Wno-cast-qual -Wno-pre-c++14-compat -Wno-global-constructors -Wno-switch-enum -Wno-exit-time-destructors -Wno-ctad-maybe-unsupported -Wno-undefined-func-template -Wno-c++98-compat-extra-semi -Wno-cast-function-type -Wno-nullability-extension -Wno-shadow-field -Wno-conditional-uninitialized -Wno-unused-parameter -Wno-suggest-destructor-override -Wno-shadow-uncaptured-local -Wno-unused-macros -Wno-covered-switch-default -Wno-signed-enum-bitfield -Wno-declaration-after-statement -Wno-implicit-fallthrough -Wno-non-virtual-dtor -Wno-nested-anon-types -Wno-gnu-zero-variadic-macro-arguments -Wno-unreachable-code-break -Wno-inconsistent-missing-destructor-override -Wno-format-pedantic -Wno-nonportable-system-include-path -Wno-undef -Wno-ignored-qualifiers -Wno-used-but-marked-unused -Wno-header-hygiene -Wno-char-subscripts -Wno-unreachable-code-return -Wno-unused-template -Wno-gnu-anonymous-struct -Wno-deprecated-copy-with-user-provided-dtor -Wno-inconsistent-missing-override -Wno-unreachable-code -Wno-deprecated-dynamic-exception-spec -Wno-bad-function-cast -Wno-microsoft-enum-value -Wno-deprecated-copy-with-user-provided-copy -Wno-zero-length-array -Wno-unused-function -Wno-pedantic -Wno-deprecated-copy-with-dtor -Wno-documentation-unknown-command -Wno-undefined-reinterpret-cast -Wno-format-nonliteral -Wno-comma -Wno-documentation-deprecated-sync -Wno-shift-sign-overflow -Wno-pre-c++17-compat-pedantic -Wno-c++98-compat-unnamed-type-template-args -Wno-sign-compare -Wno-format -Wno-c++98-compat-bind-to-temporary-copy -Wno-enum-enum-conversion -Wno-anon-enum-enum-conversion -Wno-range-loop-bind-reference -Wno-enum-float-conversion -Wno-keyword-macro -Wno-deprecated-copy -Wno-unused-member-function -Wno-missing-noreturn -Wno-missing-variable-declarations -Wno-documentation-html -Wno-gnu-redeclared-enum -Wno-deprecated-declarations -Wno-overloaded-virtual -Wno-c++98-c++11-compat-binary-literal -Wno-deprecated-redundant-constexpr-static-def -Wno-missing-braces -Wno-c99-extensions -Wno-strict-prototypes -Wno-unreachable-code-loop-increment -Wno-gnu-case-range -Wno-duplicate-enum -Wno-null-pointer-subtraction -Wno-deprecated-literal-operator -Wno-newline-eof -Wno-microsoft-cast -Wno-date-time -Wno-delete-non-abstract-non-virtual-dtor -Wno-unused-private-field -Wno-flexible-array-extensions -Wno-string-conversion -Wno-final-dtor-non-final-class -Wno-microsoft-unqualified-friend -Wno-invalid-noreturn -Wno-invalid-utf8 -Wno-four-char-constants -Wno-parentheses -Wno-pessimizing-move -Wno-deprecated-non-prototype -Wno-bitfield-enum-conversion -Wno-unused-lambda-capture -Wno-shadow-field-in-constructor-modified -Wno-switch-default -Wno-nan-infinity-disabled -Wno-pre-c11-compat /DWIN32 /D_WINDOWS  /MP /nologo /J /Gy /Gd /showFilenames -Wno-unused-command-line-argument -Wno-microsoft-enum-forward-reference /clang:-funsigned-char /clang:-fno-strict-aliasing /clang:-ffp-contract=off -march=x86-64-v2 \n\tbuild c++ flags:  -Wall -Wno-tautological-compare -Wno-unknown-pragmas -Wno-char-subscripts -Wno-overloaded-virtual -Wno-sign-compare -Wno-invalid-offsetof -Wno-suggest-override -Wundef -Wundef-prefix -Wunused-parameter -Wmismatched-tags -Werror=unguarded-availability-new /W3 -Wno-c++98-compat -Wno-old-style-cast -Wno-unsafe-buffer-usage -Wno-missing-prototypes -Wno-sign-conversion -Wno-missing-field-initializers -Wno-extra-semi -Wno-language-extension-token -Wno-implicit-float-conversion -Wno-c++98-compat-pedantic -Wno-implicit-int-float-conversion -Wno-double-promotion -Wno-pre-c++17-compat -Wno-shorten-64-to-32 -Wno-c++98-compat-local-type-template-args -Wno-reserved-identifier -Wno-cast-align -Wno-documentation -Wno-disabled-macro-expansion -Wno-extra-semi-stmt -Wno-zero-as-null-pointer-constant -Wno-float-conversion -Wno-reserved-macro-identifier -Wno-cast-function-type-strict -Wno-float-equal -Wno-implicit-int-conversion -Wno-shadow -Wno-shadow-field-in-constructor -Wno-cast-qual -Wno-pre-c++14-compat -Wno-global-constructors -Wno-switch-enum -Wno-exit-time-destructors -Wno-ctad-maybe-unsupported -Wno-undefined-func-template -Wno-c++98-compat-extra-semi -Wno-cast-function-type -Wno-nullability-extension -Wno-shadow-field -Wno-conditional-uninitialized -Wno-unused-parameter -Wno-suggest-destructor-override -Wno-shadow-uncaptured-local -Wno-unused-macros -Wno-covered-switch-default -Wno-signed-enum-bitfield -Wno-declaration-after-statement -Wno-implicit-fallthrough -Wno-non-virtual-dtor -Wno-nested-anon-types -Wno-gnu-zero-variadic-macro-arguments -Wno-unreachable-code-break -Wno-inconsistent-missing-destructor-override -Wno-format-pedantic -Wno-nonportable-system-include-path -Wno-undef -Wno-ignored-qualifiers -Wno-used-but-marked-unused -Wno-header-hygiene -Wno-char-subscripts -Wno-unreachable-code-return -Wno-unused-template -Wno-gnu-anonymous-struct -Wno-deprecated-copy-with-user-provided-dtor -Wno-inconsistent-missing-override -Wno-unreachable-code -Wno-deprecated-dynamic-exception-spec -Wno-bad-function-cast -Wno-microsoft-enum-value -Wno-deprecated-copy-with-user-provided-copy -Wno-zero-length-array -Wno-unused-function -Wno-pedantic -Wno-deprecated-copy-with-dtor -Wno-documentation-unknown-command -Wno-undefined-reinterpret-cast -Wno-format-nonliteral -Wno-comma -Wno-documentation-deprecated-sync -Wno-shift-sign-overflow -Wno-pre-c++17-compat-pedantic -Wno-c++98-compat-unnamed-type-template-args -Wno-sign-compare -Wno-format -Wno-c++98-compat-bind-to-temporary-copy -Wno-enum-enum-conversion -Wno-anon-enum-enum-conversion -Wno-range-loop-bind-reference -Wno-enum-float-conversion -Wno-keyword-macro -Wno-deprecated-copy -Wno-unused-member-function -Wno-missing-noreturn -Wno-missing-variable-declarations -Wno-documentation-html -Wno-gnu-redeclared-enum -Wno-deprecated-declarations -Wno-overloaded-virtual -Wno-c++98-c++11-compat-binary-literal -Wno-deprecated-redundant-constexpr-static-def -Wno-missing-braces -Wno-c99-extensions -Wno-strict-prototypes -Wno-unreachable-code-loop-increment -Wno-gnu-case-range -Wno-duplicate-enum -Wno-null-pointer-subtraction -Wno-deprecated-literal-operator -Wno-newline-eof -Wno-microsoft-cast -Wno-date-time -Wno-delete-non-abstract-non-virtual-dtor -Wno-unused-private-field -Wno-flexible-array-extensions -Wno-string-conversion -Wno-final-dtor-non-final-class -Wno-microsoft-unqualified-friend -Wno-invalid-noreturn -Wno-invalid-utf8 -Wno-four-char-constants -Wno-parentheses -Wno-pessimizing-move -Wno-deprecated-non-prototype -Wno-bitfield-enum-conversion -Wno-unused-lambda-capture -Wno-shadow-field-in-constructor-modified -Wno-switch-default -Wno-nan-infinity-disabled -Wno-pre-c11-compat /DWIN32 /D_WINDOWS   /EHsc  /Gy /MP /nologo /J /Gd /showFilenames /EHsc -Wno-unused-command-line-argument -Wno-microsoft-enum-forward-reference /clang:-funsigned-char /clang:-fno-strict-aliasing /clang:-ffp-contract=off -march=x86-64-v2 \n\tbuild link flags: /MACHINE:X64  /SUBSYSTEM:CONSOLE /STACK:2097152 /ignore:4049 /ignore:4217 /ignore:4221\n\tbuild system: CMake",
+    "returncode": 0
+  },
+  "git_head": "082f70ea923f214d72c8ae7f63d932206ba71e35",
+  "rows": [
+    {
+      "fixture": "plane_grid",
+      "exit_code": 0,
+      "stderr_tail": "",
+      "status": "accepted",
+      "status_error": null,
+      "warnings": [
+        "missing artifact: baseline_uv_layout.png",
+        "missing artifact: baseline_checker_front.png",
+        "missing artifact: baseline_checker_side.png",
+        "missing artifact: selected_uv_layout.png",
+        "missing artifact: selected_checker_front.png",
+        "missing artifact: selected_checker_side.png"
+      ],
+      "auto_gate": {
+        "valid": true,
+        "passed": true,
+        "failures": [],
+        "invalid_reasons": []
+      },
+      "acceptance_reason": null,
+      "mandatory_90_missing": 0,
+      "mandatory_90_uv_unsplit": 0,
+      "correctness": {
+        "passed": true,
+        "failed_checks": []
+      },
+      "final_reread_audit": {
+        "present": true,
+        "passed": true,
+        "error": null
+      },
+      "mesh_identity_unchanged": true,
+      "distortion_v2_global": {
+        "anisotropy_p95": 1.0011504795093187,
+        "anisotropy_max": 1.0016651843186626,
+        "area_stretch_mean": 0.0002493682721435056,
+        "exceed_area_fraction": 0.0
+      },
+      "island_count": 1,
+      "seam_length": {
+        "total": 8.0,
+        "auxiliary": 0.0,
+        "auxiliary_normalized": 0.0
+      },
+      "termination": {
+        "reason": "quality_passed",
+        "iterations": 0,
+        "candidates_evaluated": 0,
+        "elapsed_s": 0.568241399989347
+      },
+      "performance": {
+        "elapsed_s": 0.967,
+        "peak_memory_mb": 231.492
+      }
+    },
+    {
+      "fixture": "cube",
+      "exit_code": 0,
+      "stderr_tail": "",
+      "status": "accepted",
+      "status_error": null,
+      "warnings": [
+        "missing artifact: baseline_uv_layout.png",
+        "missing artifact: baseline_checker_front.png",
+        "missing artifact: baseline_checker_side.png",
+        "missing artifact: selected_uv_layout.png",
+        "missing artifact: selected_checker_front.png",
+        "missing artifact: selected_checker_side.png"
+      ],
+      "auto_gate": {
+        "valid": true,
+        "passed": true,
+        "failures": [],
+        "invalid_reasons": []
+      },
+      "acceptance_reason": null,
+      "mandatory_90_missing": 0,
+      "mandatory_90_uv_unsplit": 0,
+      "correctness": {
+        "passed": true,
+        "failed_checks": []
+      },
+      "final_reread_audit": {
+        "present": true,
+        "passed": true,
+        "error": null
+      },
+      "mesh_identity_unchanged": true,
+      "distortion_v2_global": {
+        "anisotropy_p95": 1.0000003262298816,
+        "anisotropy_max": 1.0000003262298816,
+        "area_stretch_mean": 9.721481517561402e-08,
+        "exceed_area_fraction": 0.0
+      },
+      "island_count": 6,
+      "seam_length": {
+        "total": 24.0,
+        "auxiliary": 0.0,
+        "auxiliary_normalized": 0.0
+      },
+      "termination": {
+        "reason": "quality_passed",
+        "iterations": 0,
+        "candidates_evaluated": 0,
+        "elapsed_s": 8.264425699991989
+      },
+      "performance": {
+        "elapsed_s": 8.561,
+        "peak_memory_mb": 235.246
+      }
+    },
+    {
+      "fixture": "bevel_cube",
+      "exit_code": 0,
+      "stderr_tail": "",
+      "status": "accepted",
+      "status_error": null,
+      "warnings": [
+        "missing artifact: baseline_uv_layout.png",
+        "missing artifact: baseline_checker_front.png",
+        "missing artifact: baseline_checker_side.png",
+        "missing artifact: selected_uv_layout.png",
+        "missing artifact: selected_checker_front.png",
+        "missing artifact: selected_checker_side.png"
+      ],
+      "auto_gate": {
+        "valid": true,
+        "passed": true,
+        "failures": [],
+        "invalid_reasons": []
+      },
+      "acceptance_reason": null,
+      "mandatory_90_missing": 0,
+      "mandatory_90_uv_unsplit": 0,
+      "correctness": {
+        "passed": true,
+        "failed_checks": []
+      },
+      "final_reread_audit": {
+        "present": true,
+        "passed": true,
+        "error": null
+      },
+      "mesh_identity_unchanged": true,
+      "distortion_v2_global": {
+        "anisotropy_p95": 1.0545815149413424,
+        "anisotropy_max": 2.7162501253592164,
+        "area_stretch_mean": 0.010031945431571532,
+        "exceed_area_fraction": 0.00020148924175497396
+      },
+      "island_count": 4,
+      "seam_length": {
+        "total": 23.30923575708728,
+        "auxiliary": 23.30923575708728,
+        "auxiliary_normalized": 6.728796769479396
+      },
+      "termination": {
+        "reason": "quality_passed",
+        "iterations": 2,
+        "candidates_evaluated": 6,
+        "elapsed_s": 26.665975800002343
+      },
+      "performance": {
+        "elapsed_s": 28.363,
+        "peak_memory_mb": 263.828
+      }
+    },
+    {
+      "fixture": "cylinder_capped",
+      "exit_code": 0,
+      "stderr_tail": "",
+      "status": "accepted",
+      "status_error": null,
+      "warnings": [
+        "missing artifact: baseline_uv_layout.png",
+        "missing artifact: baseline_checker_front.png",
+        "missing artifact: baseline_checker_side.png",
+        "missing artifact: selected_uv_layout.png",
+        "missing artifact: selected_checker_front.png",
+        "missing artifact: selected_checker_side.png"
+      ],
+      "auto_gate": {
+        "valid": true,
+        "passed": true,
+        "failures": [],
+        "invalid_reasons": []
+      },
+      "acceptance_reason": null,
+      "mandatory_90_missing": 0,
+      "mandatory_90_uv_unsplit": 0,
+      "correctness": {
+        "passed": true,
+        "failed_checks": []
+      },
+      "final_reread_audit": {
+        "present": true,
+        "passed": true,
+        "error": null
+      },
+      "mesh_identity_unchanged": true,
+      "distortion_v2_global": {
+        "anisotropy_p95": 1.0035729864778158,
+        "anisotropy_max": 1.0050632252629323,
+        "area_stretch_mean": 0.0007626490262238296,
+        "exceed_area_fraction": 0.0
+      },
+      "island_count": 4,
+      "seam_length": {
+        "total": 16.485780448673815,
+        "auxiliary": 4.0,
+        "auxiliary_normalized": 1.1547005383792517
+      },
+      "termination": {
+        "reason": "quality_passed",
+        "iterations": 0,
+        "candidates_evaluated": 0,
+        "elapsed_s": 11.069030400001793
+      },
+      "performance": {
+        "elapsed_s": 12.242,
+        "peak_memory_mb": 255.836
+      }
+    },
+    {
+      "fixture": "uv_sphere",
+      "exit_code": 0,
+      "stderr_tail": "",
+      "status": "accepted",
+      "status_error": null,
+      "warnings": [
+        "missing artifact: baseline_uv_layout.png",
+        "missing artifact: baseline_checker_front.png",
+        "missing artifact: baseline_checker_side.png",
+        "missing artifact: selected_uv_layout.png",
+        "missing artifact: selected_checker_front.png",
+        "missing artifact: selected_checker_side.png"
+      ],
+      "auto_gate": {
+        "valid": true,
+        "passed": true,
+        "failures": [],
+        "invalid_reasons": []
+      },
+      "acceptance_reason": null,
+      "mandatory_90_missing": 0,
+      "mandatory_90_uv_unsplit": 0,
+      "correctness": {
+        "passed": true,
+        "failed_checks": []
+      },
+      "final_reread_audit": {
+        "present": true,
+        "passed": true,
+        "error": null
+      },
+      "mesh_identity_unchanged": true,
+      "distortion_v2_global": {
+        "anisotropy_p95": 1.5406232049454611,
+        "anisotropy_max": 1.7712864784469444,
+        "area_stretch_mean": 0.14327827627997514,
+        "exceed_area_fraction": 0.017268369911136613
+      },
+      "island_count": 2,
+      "seam_length": {
+        "total": 7.387802311609548,
+        "auxiliary": 7.387802311609548,
+        "auxiliary_normalized": 2.1326748478499766
+      },
+      "termination": {
+        "reason": "quality_passed",
+        "iterations": 0,
+        "candidates_evaluated": 0,
+        "elapsed_s": 4.863232599993353
+      },
+      "performance": {
+        "elapsed_s": 7.877,
+        "peak_memory_mb": 227.902
+      }
+    },
+    {
+      "fixture": "torus",
+      "exit_code": 0,
+      "stderr_tail": "",
+      "status": "accepted",
+      "status_error": null,
+      "warnings": [
+        "missing artifact: baseline_uv_layout.png",
+        "missing artifact: baseline_checker_front.png",
+        "missing artifact: baseline_checker_side.png",
+        "missing artifact: selected_uv_layout.png",
+        "missing artifact: selected_checker_front.png",
+        "missing artifact: selected_checker_side.png"
+      ],
+      "auto_gate": {
+        "valid": true,
+        "passed": true,
+        "failures": [],
+        "invalid_reasons": []
+      },
+      "acceptance_reason": null,
+      "mandatory_90_missing": 0,
+      "mandatory_90_uv_unsplit": 0,
+      "correctness": {
+        "passed": true,
+        "failed_checks": []
+      },
+      "final_reread_audit": {
+        "present": true,
+        "passed": true,
+        "error": null
+      },
+      "mesh_identity_unchanged": true,
+      "distortion_v2_global": {
+        "anisotropy_p95": 1.2964697484947232,
+        "anisotropy_max": 1.847000874731454,
+        "area_stretch_mean": 0.08048014986447882,
+        "exceed_area_fraction": 0.005405146639948383
+      },
+      "island_count": 3,
+      "seam_length": {
+        "total": 19.24992093389658,
+        "auxiliary": 19.24992093389658,
+        "auxiliary_normalized": 5.391056180569849
+      },
+      "termination": {
+        "reason": "quality_passed",
+        "iterations": 0,
+        "candidates_evaluated": 0,
+        "elapsed_s": 11.55378909999854
+      },
+      "performance": {
+        "elapsed_s": 14.207,
+        "peak_memory_mb": 229.375
+      }
+    },
+    {
+      "fixture": "suzanne",
+      "exit_code": 0,
+      "stderr_tail": "",
+      "status": "needs_user_review",
+      "status_error": null,
+      "warnings": [
+        "missing artifact: baseline_uv_layout.png",
+        "missing artifact: baseline_checker_front.png",
+        "missing artifact: baseline_checker_side.png",
+        "missing artifact: selected_uv_layout.png",
+        "missing artifact: selected_checker_front.png",
+        "missing artifact: selected_checker_side.png",
+        "final re-read audit failed: see final_reread_audit",
+        "auto gate: quality_profile_failed",
+        "auto gate: correctness_failed",
+        "auto gate: reread_audit_failed"
+      ],
+      "auto_gate": {
+        "valid": true,
+        "passed": false,
+        "failures": [
+          "quality_profile_failed",
+          "correctness_failed",
+          "reread_audit_failed"
+        ],
+        "invalid_reasons": []
+      },
+      "acceptance_reason": null,
+      "mandatory_90_missing": 0,
+      "mandatory_90_uv_unsplit": 0,
+      "correctness": {
+        "passed": false,
+        "failed_checks": [
+          "overlap",
+          "orientation",
+          "island_gap"
+        ]
+      },
+      "final_reread_audit": {
+        "present": true,
+        "passed": false,
+        "error": null
+      },
+      "mesh_identity_unchanged": true,
+      "distortion_v2_global": {
+        "anisotropy_p95": 1.9765700190734674,
+        "anisotropy_max": 11.251919033676876,
+        "area_stretch_mean": 0.16155756582805444,
+        "exceed_area_fraction": 0.11521642270696741
+      },
+      "island_count": 12,
+      "seam_length": {
+        "total": 34.76256062558462,
+        "auxiliary": 19.059989773145205,
+        "auxiliary_normalized": 5.048509210985353
+      },
+      "termination": {
+        "reason": "no_improving_candidate",
+        "iterations": 1,
+        "candidates_evaluated": 3,
+        "elapsed_s": 36.432746000005864
+      },
+      "performance": {
+        "elapsed_s": 39.964,
+        "peak_memory_mb": 239.477
+      }
+    },
+    {
+      "fixture": "concave_plate",
+      "exit_code": 0,
+      "stderr_tail": "",
+      "status": "accepted",
+      "status_error": null,
+      "warnings": [
+        "missing artifact: baseline_uv_layout.png",
+        "missing artifact: baseline_checker_front.png",
+        "missing artifact: baseline_checker_side.png",
+        "missing artifact: selected_uv_layout.png",
+        "missing artifact: selected_checker_front.png",
+        "missing artifact: selected_checker_side.png"
+      ],
+      "auto_gate": {
+        "valid": true,
+        "passed": true,
+        "failures": [],
+        "invalid_reasons": []
+      },
+      "acceptance_reason": null,
+      "mandatory_90_missing": 0,
+      "mandatory_90_uv_unsplit": 0,
+      "correctness": {
+        "passed": true,
+        "failed_checks": []
+      },
+      "final_reread_audit": {
+        "present": true,
+        "passed": true,
+        "error": null
+      },
+      "mesh_identity_unchanged": true,
+      "distortion_v2_global": {
+        "anisotropy_p95": 1.3207089052369785,
+        "anisotropy_max": 1.3293461860429068,
+        "area_stretch_mean": 0.09113817333169921,
+        "exceed_area_fraction": 0.0
+      },
+      "island_count": 10,
+      "seam_length": {
+        "total": 17.600000023841858,
+        "auxiliary": 0.0,
+        "auxiliary_normalized": 0.0
+      },
+      "termination": {
+        "reason": "quality_passed",
+        "iterations": 0,
+        "candidates_evaluated": 0,
+        "elapsed_s": 13.478046999996877
+      },
+      "performance": {
+        "elapsed_s": 13.864,
+        "peak_memory_mb": 261.051
+      }
+    },
+    {
+      "fixture": "angle_boundary",
+      "exit_code": 0,
+      "stderr_tail": "",
+      "status": "accepted",
+      "status_error": null,
+      "warnings": [
+        "missing artifact: baseline_uv_layout.png",
+        "missing artifact: baseline_checker_front.png",
+        "missing artifact: baseline_checker_side.png",
+        "missing artifact: selected_uv_layout.png",
+        "missing artifact: selected_checker_front.png",
+        "missing artifact: selected_checker_side.png"
+      ],
+      "auto_gate": {
+        "valid": true,
+        "passed": true,
+        "failures": [],
+        "invalid_reasons": []
+      },
+      "acceptance_reason": null,
+      "mandatory_90_missing": 0,
+      "mandatory_90_uv_unsplit": 0,
+      "correctness": {
+        "passed": true,
+        "failed_checks": []
+      },
+      "final_reread_audit": {
+        "present": true,
+        "passed": true,
+        "error": null
+      },
+      "mesh_identity_unchanged": true,
+      "distortion_v2_global": {
+        "anisotropy_p95": 1.0004011698332407,
+        "anisotropy_max": 1.0004011698332407,
+        "area_stretch_mean": 0.00013379851357277073,
+        "exceed_area_fraction": 0.0
+      },
+      "island_count": 5,
+      "seam_length": {
+        "total": 19.999999893151468,
+        "auxiliary": 0.0,
+        "auxiliary_normalized": 0.0
+      },
+      "termination": {
+        "reason": "quality_passed",
+        "iterations": 0,
+        "candidates_evaluated": 0,
+        "elapsed_s": 10.395694199993159
+      },
+      "performance": {
+        "elapsed_s": 10.741,
+        "peak_memory_mb": 240.066
+      }
+    },
+    {
+      "fixture": "degenerate_input",
+      "exit_code": 0,
+      "stderr_tail": "",
+      "status": "needs_user_review",
+      "status_error": null,
+      "warnings": [
+        "missing artifact: baseline_uv_layout.png",
+        "missing artifact: baseline_checker_front.png",
+        "missing artifact: baseline_checker_side.png",
+        "missing artifact: selected_uv_layout.png",
+        "missing artifact: selected_checker_front.png",
+        "missing artifact: selected_checker_side.png",
+        "input defects: non_manifold_edge_count=1,zero_area_face_count=1,input_defect_triangle_count=1",
+        "auto gate: input_defects"
+      ],
+      "auto_gate": {
+        "valid": true,
+        "passed": false,
+        "failures": [
+          "input_defects"
+        ],
+        "invalid_reasons": []
+      },
+      "acceptance_reason": null,
+      "mandatory_90_missing": 0,
+      "mandatory_90_uv_unsplit": 0,
+      "correctness": {
+        "passed": true,
+        "failed_checks": []
+      },
+      "final_reread_audit": {
+        "present": true,
+        "passed": true,
+        "error": null
+      },
+      "mesh_identity_unchanged": true,
+      "distortion_v2_global": {
+        "anisotropy_p95": 1.0000003630592316,
+        "anisotropy_max": 1.000000513443421,
+        "area_stretch_mean": 1.629120564907667e-07,
+        "exceed_area_fraction": 0.0
+      },
+      "island_count": 10,
+      "seam_length": {
+        "total": 38.0,
+        "auxiliary": 0.0,
+        "auxiliary_normalized": 0.0
+      },
+      "termination": {
+        "reason": "quality_passed",
+        "iterations": 0,
+        "candidates_evaluated": 0,
+        "elapsed_s": 35.09789109999838
+      },
+      "performance": {
+        "elapsed_s": 35.371,
+        "peak_memory_mb": 235.773
+      }
+    },
+    {
+      "fixture": "protected_path",
+      "exit_code": 0,
+      "stderr_tail": "",
+      "status": "accepted",
+      "status_error": null,
+      "warnings": [
+        "missing artifact: baseline_uv_layout.png",
+        "missing artifact: baseline_checker_front.png",
+        "missing artifact: baseline_checker_side.png",
+        "missing artifact: selected_uv_layout.png",
+        "missing artifact: selected_checker_front.png",
+        "missing artifact: selected_checker_side.png"
+      ],
+      "auto_gate": {
+        "valid": true,
+        "passed": true,
+        "failures": [],
+        "invalid_reasons": []
+      },
+      "acceptance_reason": null,
+      "mandatory_90_missing": 0,
+      "mandatory_90_uv_unsplit": 0,
+      "correctness": {
+        "passed": true,
+        "failed_checks": []
+      },
+      "final_reread_audit": {
+        "present": true,
+        "passed": true,
+        "error": null
+      },
+      "mesh_identity_unchanged": true,
+      "distortion_v2_global": {
+        "anisotropy_p95": 1.011381389237037,
+        "anisotropy_max": 1.0151541096783667,
+        "area_stretch_mean": 0.004358018720125728,
+        "exceed_area_fraction": 0.0
+      },
+      "island_count": 1,
+      "seam_length": {
+        "total": 8.185543166294282,
+        "auxiliary": 0.0,
+        "auxiliary_normalized": 0.0
+      },
+      "termination": {
+        "reason": "quality_passed",
+        "iterations": 0,
+        "candidates_evaluated": 0,
+        "elapsed_s": 0.9562201000080677
+      },
+      "performance": {
+        "elapsed_s": 1.502,
+        "peak_memory_mb": 233.273
+      }
+    }
+  ]
+}

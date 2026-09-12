@@ -1,0 +1,182 @@
+{
+  "generated_at_utc": "2026-09-12T12:47:39Z",
+  "code_sha": "082f70ea923f214d72c8ae7f63d932206ba71e35",
+  "blender": {
+    "executable": "C:/Program Files/Blender Foundation\\Blender 5.1\\blender.exe",
+    "version": "5.1.2",
+    "build_hash": "ec6e62d40fa9",
+    "build_date": "2026-05-19",
+    "raw": "Blender 5.1.2\n\tbuild date: 2026-05-19\n\tbuild time: 01:37:34\n\tbuild commit date: 2026-05-18\n\tbuild commit time: 13:43\n\tbuild hash: ec6e62d40fa9\n\tbuild branch: blender-v5.1-release\n\tbuild platform: Windows\n\tbuild type: Release\n\tbuild c flags:  -Wall -Werror=implicit-function-declaration -Werror=return-type -Wno-tautological-compare -Wno-unknown-pragmas -Wno-char-subscripts -Wstrict-prototypes -Wmissing-prototypes -Wunused-parameter -Wundef -Wundef-prefix -Werror=unguarded-availability-new /W3 -Wno-c++98-compat -Wno-old-style-cast -Wno-unsafe-buffer-usage -Wno-missing-prototypes -Wno-sign-conversion -Wno-missing-field-initializers -Wno-extra-semi -Wno-language-extension-token -Wno-implicit-float-conversion -Wno-c++98-compat-pedantic -Wno-implicit-int-float-conversion -Wno-double-promotion -Wno-pre-c++17-compat -Wno-shorten-64-to-32 -Wno-c++98-compat-local-type-template-args -Wno-reserved-identifier -Wno-cast-align -Wno-documentation -Wno-disabled-macro-expansion -Wno-extra-semi-stmt -Wno-zero-as-null-pointer-constant -Wno-float-conversion -Wno-reserved-macro-identifier -Wno-cast-function-type-strict -Wno-float-equal -Wno-implicit-int-conversion -Wno-shadow -Wno-shadow-field-in-constructor -Wno-cast-qual -Wno-pre-c++14-compat -Wno-global-constructors -Wno-switch-enum -Wno-exit-time-destructors -Wno-ctad-maybe-unsupported -Wno-undefined-func-template -Wno-c++98-compat-extra-semi -Wno-cast-function-type -Wno-nullability-extension -Wno-shadow-field -Wno-conditional-uninitialized -Wno-unused-parameter -Wno-suggest-destructor-override -Wno-shadow-uncaptured-local -Wno-unused-macros -Wno-covered-switch-default -Wno-signed-enum-bitfield -Wno-declaration-after-statement -Wno-implicit-fallthrough -Wno-non-virtual-dtor -Wno-nested-anon-types -Wno-gnu-zero-variadic-macro-arguments -Wno-unreachable-code-break -Wno-inconsistent-missing-destructor-override -Wno-format-pedantic -Wno-nonportable-system-include-path -Wno-undef -Wno-ignored-qualifiers -Wno-used-but-marked-unused -Wno-header-hygiene -Wno-char-subscripts -Wno-unreachable-code-return -Wno-unused-template -Wno-gnu-anonymous-struct -Wno-deprecated-copy-with-user-provided-dtor -Wno-inconsistent-missing-override -Wno-unreachable-code -Wno-deprecated-dynamic-exception-spec -Wno-bad-function-cast -Wno-microsoft-enum-value -Wno-deprecated-copy-with-user-provided-copy -Wno-zero-length-array -Wno-unused-function -Wno-pedantic -Wno-deprecated-copy-with-dtor -Wno-documentation-unknown-command -Wno-undefined-reinterpret-cast -Wno-format-nonliteral -Wno-comma -Wno-documentation-deprecated-sync -Wno-shift-sign-overflow -Wno-pre-c++17-compat-pedantic -Wno-c++98-compat-unnamed-type-template-args -Wno-sign-compare -Wno-format -Wno-c++98-compat-bind-to-temporary-copy -Wno-enum-enum-conversion -Wno-anon-enum-enum-conversion -Wno-range-loop-bind-reference -Wno-enum-float-conversion -Wno-keyword-macro -Wno-deprecated-copy -Wno-unused-member-function -Wno-missing-noreturn -Wno-missing-variable-declarations -Wno-documentation-html -Wno-gnu-redeclared-enum -Wno-deprecated-declarations -Wno-overloaded-virtual -Wno-c++98-c++11-compat-binary-literal -Wno-deprecated-redundant-constexpr-static-def -Wno-missing-braces -Wno-c99-extensions -Wno-strict-prototypes -Wno-unreachable-code-loop-increment -Wno-gnu-case-range -Wno-duplicate-enum -Wno-null-pointer-subtraction -Wno-deprecated-literal-operator -Wno-newline-eof -Wno-microsoft-cast -Wno-date-time -Wno-delete-non-abstract-non-virtual-dtor -Wno-unused-private-field -Wno-flexible-array-extensions -Wno-string-conversion -Wno-final-dtor-non-final-class -Wno-microsoft-unqualified-friend -Wno-invalid-noreturn -Wno-invalid-utf8 -Wno-four-char-constants -Wno-parentheses -Wno-pessimizing-move -Wno-deprecated-non-prototype -Wno-bitfield-enum-conversion -Wno-unused-lambda-capture -Wno-shadow-field-in-constructor-modified -Wno-switch-default -Wno-nan-infinity-disabled -Wno-pre-c11-compat /DWIN32 /D_WINDOWS  /MP /nologo /J /Gy /Gd /showFilenames -Wno-unused-command-line-argument -Wno-microsoft-enum-forward-reference /clang:-funsigned-char /clang:-fno-strict-aliasing /clang:-ffp-contract=off -march=x86-64-v2 \n\tbuild c++ flags:  -Wall -Wno-tautological-compare -Wno-unknown-pragmas -Wno-char-subscripts -Wno-overloaded-virtual -Wno-sign-compare -Wno-invalid-offsetof -Wno-suggest-override -Wundef -Wundef-prefix -Wunused-parameter -Wmismatched-tags -Werror=unguarded-availability-new /W3 -Wno-c++98-compat -Wno-old-style-cast -Wno-unsafe-buffer-usage -Wno-missing-prototypes -Wno-sign-conversion -Wno-missing-field-initializers -Wno-extra-semi -Wno-language-extension-token -Wno-implicit-float-conversion -Wno-c++98-compat-pedantic -Wno-implicit-int-float-conversion -Wno-double-promotion -Wno-pre-c++17-compat -Wno-shorten-64-to-32 -Wno-c++98-compat-local-type-template-args -Wno-reserved-identifier -Wno-cast-align -Wno-documentation -Wno-disabled-macro-expansion -Wno-extra-semi-stmt -Wno-zero-as-null-pointer-constant -Wno-float-conversion -Wno-reserved-macro-identifier -Wno-cast-function-type-strict -Wno-float-equal -Wno-implicit-int-conversion -Wno-shadow -Wno-shadow-field-in-constructor -Wno-cast-qual -Wno-pre-c++14-compat -Wno-global-constructors -Wno-switch-enum -Wno-exit-time-destructors -Wno-ctad-maybe-unsupported -Wno-undefined-func-template -Wno-c++98-compat-extra-semi -Wno-cast-function-type -Wno-nullability-extension -Wno-shadow-field -Wno-conditional-uninitialized -Wno-unused-parameter -Wno-suggest-destructor-override -Wno-shadow-uncaptured-local -Wno-unused-macros -Wno-covered-switch-default -Wno-signed-enum-bitfield -Wno-declaration-after-statement -Wno-implicit-fallthrough -Wno-non-virtual-dtor -Wno-nested-anon-types -Wno-gnu-zero-variadic-macro-arguments -Wno-unreachable-code-break -Wno-inconsistent-missing-destructor-override -Wno-format-pedantic -Wno-nonportable-system-include-path -Wno-undef -Wno-ignored-qualifiers -Wno-used-but-marked-unused -Wno-header-hygiene -Wno-char-subscripts -Wno-unreachable-code-return -Wno-unused-template -Wno-gnu-anonymous-struct -Wno-deprecated-copy-with-user-provided-dtor -Wno-inconsistent-missing-override -Wno-unreachable-code -Wno-deprecated-dynamic-exception-spec -Wno-bad-function-cast -Wno-microsoft-enum-value -Wno-deprecated-copy-with-user-provided-copy -Wno-zero-length-array -Wno-unused-function -Wno-pedantic -Wno-deprecated-copy-with-dtor -Wno-documentation-unknown-command -Wno-undefined-reinterpret-cast -Wno-format-nonliteral -Wno-comma -Wno-documentation-deprecated-sync -Wno-shift-sign-overflow -Wno-pre-c++17-compat-pedantic -Wno-c++98-compat-unnamed-type-template-args -Wno-sign-compare -Wno-format -Wno-c++98-compat-bind-to-temporary-copy -Wno-enum-enum-conversion -Wno-anon-enum-enum-conversion -Wno-range-loop-bind-reference -Wno-enum-float-conversion -Wno-keyword-macro -Wno-deprecated-copy -Wno-unused-member-function -Wno-missing-noreturn -Wno-missing-variable-declarations -Wno-documentation-html -Wno-gnu-redeclared-enum -Wno-deprecated-declarations -Wno-overloaded-virtual -Wno-c++98-c++11-compat-binary-literal -Wno-deprecated-redundant-constexpr-static-def -Wno-missing-braces -Wno-c99-extensions -Wno-strict-prototypes -Wno-unreachable-code-loop-increment -Wno-gnu-case-range -Wno-duplicate-enum -Wno-null-pointer-subtraction -Wno-deprecated-literal-operator -Wno-newline-eof -Wno-microsoft-cast -Wno-date-time -Wno-delete-non-abstract-non-virtual-dtor -Wno-unused-private-field -Wno-flexible-array-extensions -Wno-string-conversion -Wno-final-dtor-non-final-class -Wno-microsoft-unqualified-friend -Wno-invalid-noreturn -Wno-invalid-utf8 -Wno-four-char-constants -Wno-parentheses -Wno-pessimizing-move -Wno-deprecated-non-prototype -Wno-bitfield-enum-conversion -Wno-unused-lambda-capture -Wno-shadow-field-in-constructor-modified -Wno-switch-default -Wno-nan-infinity-disabled -Wno-pre-c11-compat /DWIN32 /D_WINDOWS   /EHsc  /Gy /MP /nologo /J /Gd /showFilenames /EHsc -Wno-unused-command-line-argument -Wno-microsoft-enum-forward-reference /clang:-funsigned-char /clang:-fno-strict-aliasing /clang:-ffp-contract=off -march=x86-64-v2 \n\tbuild link flags: /MACHINE:X64  /SUBSYSTEM:CONSOLE /STACK:2097152 /ignore:4049 /ignore:4217 /ignore:4221\n\tbuild system: CMake",
+    "returncode": 0
+  },
+  "hardware": {
+    "platform": "Windows-10-10.0.19045-SP0",
+    "processor": "AMD64 Family 25 Model 33 Stepping 0, AuthenticAMD",
+    "machine": "AMD64",
+    "cpu_count": 12,
+    "python": "3.14.4",
+    "total_memory_mb": 49077.7
+  },
+  "fixture": "suzanne",
+  "fixture_face_count": 500,
+  "fixture_vertex_count": 507,
+  "uv_run": {
+    "returncode": 0,
+    "wall_s": 27.356
+  },
+  "uv_status": "needs_user_review",
+  "uv_performance": {
+    "elapsed_s": 25.206,
+    "peak_memory_mb": 238.922
+  },
+  "uv_mandatory_audit": {
+    "mandatory_90_edges": 118,
+    "mandatory_90_missing": 0,
+    "mandatory_90_fold_edges": 76,
+    "mandatory_90_uv_unsplit": 0,
+    "uv_unsplit_edge_ids": [],
+    "reported_only": false
+  },
+  "uv_final_reread_audit": {
+    "source": ".staging/selected_uv.blend",
+    "mandatory_90_uv_unsplit": 0,
+    "mandatory_90_missing_remapped": 0,
+    "edge_id_remap": false,
+    "unmatched_edges": 0,
+    "correctness": {
+      "passed": false,
+      "checks": [
+        {
+          "name": "overlap",
+          "passed": false,
+          "value": 0.0006864141134035016,
+          "limit": 1e-08
+        },
+        {
+          "name": "orientation",
+          "passed": false,
+          "value": 1,
+          "limit": 0
+        },
+        {
+          "name": "degenerate",
+          "passed": true,
+          "value": 0,
+          "limit": 0
+        },
+        {
+          "name": "bounds",
+          "passed": true,
+          "value": [
+            0.0010821210453286767,
+            0.0010821212781593204,
+            0.998917818069458,
+            0.9523265361785889
+          ],
+          "limit": [
+            -0.0001,
+            1.0001
+          ]
+        },
+        {
+          "name": "island_gap",
+          "passed": false,
+          "value": 2.1555150988378853,
+          "limit": 4.0
+        }
+      ],
+      "overlap_area_total": 0.0006864141134035016,
+      "local_flip_count": 1,
+      "mirrored_island_count": 0,
+      "uv_degenerate_count": 0,
+      "min_island_gap_px": 2.1555150988378853,
+      "bounds_ok": true
+    },
+    "distortion_global": {
+      "anisotropy_mean": 1.3426008728680836,
+      "anisotropy_p95": 1.9765700190734674,
+      "anisotropy_max": 11.251919033676876,
+      "area_stretch_mean": 0.16155756582805444,
+      "area_stretch_p95": 0.4954585736122115,
+      "area_stretch_max": 1.9655885109009883,
+      "exceed_area_fraction": 0.11521642270696741,
+      "area_3d": 12.46087636855145,
+      "area_uv": 0.4191963414101548,
+      "triangle_count": 968
+    },
+    "passed": false
+  },
+  "export_input": "run/selected_uv.blend",
+  "export_input_note": "UV run ended needs_user_review, not accepted; the run directory's selected_uv.blend was exported instead of the work/uv handoff copy.",
+  "export_returncode": 0,
+  "export_status": "accepted",
+  "export_files": {
+    "fbx": "Fixture_low_uv.fbx",
+    "glb": "Fixture_low_uv.glb"
+  },
+  "reread": {
+    "fbx": {
+      "model": "C:\\Users\\whxod\\AppData\\Local\\Temp\\pytest-of-whxod\\pytest-28\\test_auto_uv_then_export_rerea0\\exports\\export_g9\\Fixture_low_uv.fbx",
+      "format": "fbx",
+      "object_name": "Fixture_AI_Export",
+      "uv_layers": [
+        "AI_UV"
+      ],
+      "active_uv_layer": "AI_UV",
+      "vertex_count": 507,
+      "face_count": 500,
+      "triangle_count": 968,
+      "mandatory_audit": {
+        "mandatory_90_fold_edges": 76,
+        "mandatory_90_uv_unsplit": 0,
+        "uv_unsplit_edge_ids": []
+      },
+      "mandatory_90_uv_unsplit": 0,
+      "uv_bounds_ok": true,
+      "loop_count": 1968,
+      "source": "C:\\Users\\whxod\\AppData\\Local\\Temp\\pytest-of-whxod\\pytest-28\\test_auto_uv_then_export_rerea0\\run\\selected_uv.blend",
+      "source_face_count": 500,
+      "source_triangle_count": 968,
+      "mandatory_audit_source_matched": {
+        "mandatory_90_fold_edges": 76,
+        "mandatory_90_uv_unsplit": 0,
+        "uv_unsplit_edge_ids": [],
+        "excluded_non_source_edges": 0
+      },
+      "returncode": 0
+    },
+    "glb": {
+      "model": "C:\\Users\\whxod\\AppData\\Local\\Temp\\pytest-of-whxod\\pytest-28\\test_auto_uv_then_export_rerea0\\exports\\export_g9\\Fixture_low_uv.glb",
+      "format": "glb",
+      "object_name": "Fixture_AI_Export",
+      "uv_layers": [
+        "UVMap"
+      ],
+      "active_uv_layer": "UVMap",
+      "vertex_count": 1966,
+      "face_count": 968,
+      "triangle_count": 968,
+      "mandatory_audit": {
+        "mandatory_90_fold_edges": 2,
+        "mandatory_90_uv_unsplit": 2,
+        "uv_unsplit_edge_ids": [
+          779,
+          784
+        ]
+      },
+      "mandatory_90_uv_unsplit": 2,
+      "uv_bounds_ok": true,
+      "loop_count": 2904,
+      "source": "C:\\Users\\whxod\\AppData\\Local\\Temp\\pytest-of-whxod\\pytest-28\\test_auto_uv_then_export_rerea0\\run\\selected_uv.blend",
+      "source_face_count": 500,
+      "source_triangle_count": 968,
+      "mandatory_audit_source_matched": {
+        "mandatory_90_fold_edges": 0,
+        "mandatory_90_uv_unsplit": 0,
+        "uv_unsplit_edge_ids": [],
+        "excluded_non_source_edges": 2
+      },
+      "returncode": 0
+    }
+  }
+}
