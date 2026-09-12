@@ -82,6 +82,21 @@ def mandatory_seam_audit(mesh: MeshGraph, seams: set[int], *,
             "missing_edge_ids": missing}
 
 
+def seam_set_audit(mesh: MeshGraph, seams, *, locked=(), forbidden=(),
+                   fold_angle: float = FOLD_ANGLE) -> dict:
+    """G4 constraint audit over a finished seam set: the R2 mandatory audit plus the two
+    user-control laws — every user-locked seam must still be present (``locked_missing``
+    empty) and no protected/forbidden edge may have been cut (``forbidden_in_seams`` empty,
+    mandatory folds excluded because R2 wins over a protected edge and is reported as a
+    conflict elsewhere, never silently dropped)."""
+    out = mandatory_seam_audit(mesh, seams, fold_angle=fold_angle)
+    mandatory = mandatory_seam_edges(mesh, fold_angle=fold_angle)
+    sset = set(seams)
+    out["locked_missing"] = sorted(set(locked) - sset)
+    out["forbidden_in_seams"] = sorted((sset & set(forbidden)) - mandatory)
+    return out
+
+
 def interior_fold_edges(mesh: MeshGraph, seams: set[int], *,
                         fold_angle: float = FOLD_ANGLE) -> list[int]:
     """Mandatory fold edges (≥ ``fold_angle``, 2-face) whose two faces land in the SAME
@@ -245,8 +260,15 @@ def split_welded_folds(mesh: MeshGraph, seams: set[int], welded_edge_ids,
     creases, forbids the preserve set, penalises flat edges). E plus the two extensions
     separates the disk, so the next unwrap UV-cuts E while touching as few low-angle edges as
     possible. If the local cut fails to separate (rare; non-disk/closed chart) it falls back
-    to the old VSA chart split. Returns ``{"added": set, "local_cuts": int, "fallback": int}``
-    — ``added`` are the auxiliary (non-mandatory) seam edges, recorded for later pruning."""
+    to the old VSA chart split. That fallback is itself constrained: the forbidden edges are
+    filtered out of the VSA cut and the result is RE-VERIFIED to actually separate the fold's
+    two faces — if the filtered cut no longer separates them, every edge it added is reverted
+    and the fold is counted as ``blocked`` instead of ``fallback`` (a protected region with no
+    legal cut path must surface as a conflict, never as a silent partial cut).
+
+    Returns ``{"added": set, "local_cuts": int, "fallback": int, "blocked": int,
+    "blocked_edge_ids": list}`` — ``added`` are the auxiliary (non-mandatory) seam edges,
+    recorded for later pruning."""
     if normals is None:
         normals = _face_normals(mesh)
     forbidden = set(forbidden)
@@ -254,6 +276,8 @@ def split_welded_folds(mesh: MeshGraph, seams: set[int], welded_edge_ids,
     added: set[int] = set()
     local = 0
     fallback = 0
+    blocked = 0
+    blocked_edge_ids: list[int] = []
 
     def chart_of(face):
         charts = flood_charts(mesh, seams)
@@ -293,9 +317,16 @@ def split_welded_folds(mesh: MeshGraph, seams: set[int], welded_edge_ids,
         ns = [s for s in ns if s not in forbidden]
         if ns:
             seams.update(ns)
-            added.update(ns)
-            fallback += 1
-    return {"added": added, "local_cuts": local, "fallback": fallback}
+            _, fc3 = chart_of(fa)
+            if fc3.get(fa) != fc3.get(fb):
+                added.update(ns)
+                fallback += 1
+                continue
+            seams.difference_update(ns)   # filtered cut no longer separates -> revert
+        blocked += 1
+        blocked_edge_ids.append(eid)
+    return {"added": added, "local_cuts": local, "fallback": fallback,
+            "blocked": blocked, "blocked_edge_ids": blocked_edge_ids}
 
 
 def flood_charts(mesh: MeshGraph, seams: set[int]) -> list[list[int]]:
@@ -458,6 +489,26 @@ def split_chart(mesh: MeshGraph, face_ids, seams: set[int],
     return group_a, group_b, new_seams
 
 
+def constrained_split_chart(mesh: MeshGraph, face_ids, seams: set[int], forbidden,
+                            normals: np.ndarray | None = None,
+                            ) -> tuple[list[int], list[int], list[int], list[int]]:
+    """:func:`split_chart` under the user's protected-edge law (G4). Returns
+    ``(group_a, group_b, new_seams, rejected_forbidden_edges)``.
+
+    If the VSA cut would traverse a protected edge the WHOLE split is rejected — the
+    offending edges are returned in ``rejected_forbidden_edges`` and ``new_seams`` is empty.
+    The forbidden edges are deliberately NOT filtered out of the cut: a partially filtered
+    cut no longer separates the chart and would leave an incomplete boundary behind."""
+    group_a, group_b, new_seams = split_chart(mesh, face_ids, seams, normals)
+    forb = set(forbidden)
+    if not forb:
+        return group_a, group_b, new_seams, []
+    hit = sorted(e for e in new_seams if e in forb)
+    if hit:
+        return group_a, group_b, [], hit
+    return group_a, group_b, new_seams, []
+
+
 def _charts_from_seams(mesh: MeshGraph, seams: set[int]) -> list[list[int]]:
     """Connected charts (flood fill) — the single source of truth. Every chart is
     connected by construction, so χ is meaningful and groups are never scattered."""
@@ -472,6 +523,8 @@ def segment(
     max_charts: int = DEFAULT_MAX_CHARTS,
     merge: bool = True,
     straighten: bool = True,
+    locked_seams=None,
+    forbidden=None,
 ) -> ChartSegmentation:
     """Segment ``mesh`` into few near-developable charts (chart-UV plan §5).
 
@@ -488,14 +541,23 @@ def segment(
     - merge: fold adjacent charts whose union is still a developable disk sharing no
       mandatory seam (R1 minimality).
 
+    ``locked_seams`` (user seam lock) are seeded alongside the mandatory folds and are never
+    removed or re-routed by absorb/merge/straighten; ``forbidden`` (user protected edges) are
+    never introduced as a seam by any split or straightening move (G4). Both default to empty,
+    which reproduces the unconstrained behaviour exactly.
+
     Guarantees: charts partition the faces, each connected and a topological disk;
     no chart smaller than 5 faces unless walled by mandatory seams."""
     normals = _face_normals(mesh)
-    seams = mandatory_seam_edges(mesh, fold_angle=fold_angle)
+    locked = frozenset(locked_seams or ())
+    forb = frozenset(forbidden or ())
+    mandatory = mandatory_seam_edges(mesh, fold_angle=fold_angle)
+    seams = set(mandatory) | set(locked)
     history = [{"stage": "initial", "charts": len(_charts_from_seams(mesh, seams)),
-                "mandatory_seams": len(seams)}]
+                "mandatory_seams": len(mandatory), "locked_seams": len(locked)}]
 
     # R1 split loop (worst normal-cone first), seam-centric.
+    rejected_split = 0
     for _ in range(max_charts * 4):
         charts = _charts_from_seams(mesh, seams)
         if len(charts) >= max_charts:
@@ -507,52 +569,62 @@ def segment(
         for fs in ranked:
             if normal_cone_halfangle(mesh, fs, normals) <= cone_limit:
                 break
-            _, _, new_seams = split_chart(mesh, fs, seams, normals)
+            _, _, new_seams, rejected = constrained_split_chart(mesh, fs, seams, forb, normals)
+            if rejected:
+                rejected_split += 1      # protected edge on the cut -> try the next chart
+                continue
             if new_seams:
                 seams.update(new_seams)
                 progressed = True
                 break
         if not progressed:
             break
-    history.append({"stage": "split", "charts": len(_charts_from_seams(mesh, seams))})
+    history.append({"stage": "split", "charts": len(_charts_from_seams(mesh, seams)),
+                    "rejected_forbidden": rejected_split})
 
     # Disk-ification: a non-disk chart flips/overlaps in ABF, so the disk invariant is
     # NON-NEGOTIABLE — it is completed regardless of ``max_charts`` (the cap may be
     # exceeded and reported, but the invariant is always kept). Bounded by face count.
+    rejected_disk = 0
     for _ in range(mesh.face_count + 1):
         nondisk = [fs for fs in _charts_from_seams(mesh, seams) if not is_disk(mesh, fs)]
         if not nondisk:
             break
         progressed = False
         for fs in sorted(nondisk, key=len, reverse=True):
-            _, _, new_seams = split_chart(mesh, fs, seams, normals)
+            _, _, new_seams, rejected = constrained_split_chart(mesh, fs, seams, forb, normals)
+            if rejected:
+                rejected_disk += 1       # protected edge on the cut -> try the next chart
+                continue
             if new_seams:
                 seams.update(new_seams)
                 progressed = True
                 break
         if not progressed:
-            break
+            break                        # every candidate rejected/unsplittable -> stop
     charts = _charts_from_seams(mesh, seams)
     non_disk = sum(0 if is_disk(mesh, fs) else 1 for fs in charts)
-    history.append({"stage": "diskify", "charts": len(charts), "non_disk": non_disk})
+    history.append({"stage": "diskify", "charts": len(charts), "non_disk": non_disk,
+                    "rejected_forbidden": rejected_disk})
 
     # Confetti absorption (R1): merge alone only folds developable-disk unions, so
     # tiny slivers (a few faces from an over-eager split) never get absorbed. Force any
     # chart below ``min_chart_faces`` into a neighbour across a NON-mandatory boundary;
     # a sliver fully walled by R2 folds is left and reported.
-    _absorb_small_charts(mesh, seams, fold_angle=fold_angle, min_chart_faces=5)
+    _absorb_small_charts(mesh, seams, fold_angle=fold_angle, min_chart_faces=5, locked=locked)
     history.append({"stage": "absorb", "charts": len(_charts_from_seams(mesh, seams))})
 
     if merge:
-        _merge_pass(mesh, seams, normals, cone_limit, fold_angle)
+        _merge_pass(mesh, seams, normals, cone_limit, fold_angle, locked=locked)
         history.append({"stage": "merge", "charts": len(_charts_from_seams(mesh, seams))})
 
     # U1.5 boundary straightening (better packing), then a final merge to fold any
     # charts the straightening made mergeable.
     if straighten:
-        n_moved = straighten_boundaries(mesh, seams, fold_angle=fold_angle)
+        n_moved = straighten_boundaries(mesh, seams, fold_angle=fold_angle,
+                                        locked=locked, forbidden=forb)
         if merge:
-            _merge_pass(mesh, seams, normals, cone_limit, fold_angle)
+            _merge_pass(mesh, seams, normals, cone_limit, fold_angle, locked=locked)
         history.append({"stage": "straighten", "moved": n_moved,
                         "charts": len(_charts_from_seams(mesh, seams))})
 
@@ -560,6 +632,8 @@ def segment(
     # and every pass (absorb/merge/straighten) already refuses to cross them, but re-assert
     # the union here as a belt-and-suspenders guard so no refactor can ever drop one.
     seams |= mandatory_seam_edges(mesh, fold_angle=fold_angle)
+    # Same belt-and-suspenders guard for the user's seam lock (G4: "사용자 seam lock 제거 0").
+    seams |= set(locked)
 
     # NOTE: folds that are interior to a chart (a lone crease that doesn't reach the
     # boundary, or one a merge buried) would weld in the UV. We do NOT pre-split them all
@@ -570,11 +644,13 @@ def segment(
     charts = _charts_from_seams(mesh, seams)
     face_chart = {fid: cid for cid, fs in enumerate(charts) for fid in fs}
     final_nondisk = sum(0 if is_disk(mesh, fs) else 1 for fs in charts)
-    audit = mandatory_seam_audit(mesh, seams, fold_angle=fold_angle)
+    audit = seam_set_audit(mesh, seams, locked=locked, forbidden=forb, fold_angle=fold_angle)
     history.append({"stage": "final", "charts": len(charts), "non_disk": final_nondisk,
                     "cap_exceeded": len(charts) > max_charts,
                     "mandatory_90_edges": audit["mandatory_90_edges"],
-                    "mandatory_90_missing": audit["mandatory_90_missing"]})
+                    "mandatory_90_missing": audit["mandatory_90_missing"],
+                    "locked_missing": len(audit["locked_missing"]),
+                    "forbidden_in_seams": len(audit["forbidden_in_seams"])})
     return ChartSegmentation(mesh=mesh, face_chart=face_chart, seams=seams, history=history)
 
 
@@ -596,7 +672,8 @@ def _connected_faces(mesh: MeshGraph, face_set: set[int], adjacency) -> bool:
 
 
 def straighten_boundaries(mesh: MeshGraph, seams: set[int], *, fold_angle: float = FOLD_ANGLE,
-                          min_chart_faces: int = 5, passes: int = 4) -> int:
+                          min_chart_faces: int = 5, passes: int = 4,
+                          locked=frozenset(), forbidden=frozenset()) -> int:
     """U1.5 — straighten jagged chart borders by relabelling boundary faces to minimise
     total non-mandatory boundary length (chart-UV plan §5.5). A face that juts into a
     neighbour (more seam edges to it than back to its own chart) is moved there, which
@@ -605,8 +682,13 @@ def straighten_boundaries(mesh: MeshGraph, seams: set[int], *, fold_angle: float
     Mandatory (R2) seams are NEVER re-routed: a face is not moved across a fold, and a
     move is rejected if it would bury a mandatory edge inside a chart. Every move keeps
     both charts connected topological disks of ≥ ``min_chart_faces`` (the disk + no-1-face
-    guards). Returns the number of faces relabelled."""
-    mandatory = mandatory_seam_edges(mesh, fold_angle=fold_angle)
+    guards). Returns the number of faces relabelled.
+
+    ``locked`` (user seam lock) joins the mandatory set as PROTECTED: a face is never moved
+    across a locked seam, so no move can dissolve one. A move whose newly added seams would
+    land on a ``forbidden`` (protected) edge is skipped (G4)."""
+    protected = set(mandatory_seam_edges(mesh, fold_angle=fold_angle)) | set(locked)
+    forbidden = set(forbidden)
     adjacency = mesh.face_adjacency()
     moved = 0
 
@@ -626,8 +708,8 @@ def straighten_boundaries(mesh: MeshGraph, seams: set[int], *, fold_angle: float
                 nc = face_chart[nb]
                 if nc == cid:
                     to_self.append(eid)
-                elif eid in mandatory:
-                    blocked.add(nc)          # cannot move across an R2 fold
+                elif eid in protected:
+                    blocked.add(nc)          # cannot move across an R2 fold / locked seam
                 else:
                     by_neighbor.setdefault(nc, []).append(eid)
             cands = {c: e for c, e in by_neighbor.items() if c not in blocked}
@@ -638,6 +720,8 @@ def straighten_boundaries(mesh: MeshGraph, seams: set[int], *, fold_angle: float
             added = to_self                  # f→old-chart edges become seams
             if len(removed) <= len(added):
                 continue                      # not a straightening (net seams not reduced)
+            if forbidden and not forbidden.isdisjoint(added):
+                continue                      # would cut a user-protected edge (G4)
 
             new_self = chart_faces[cid] - {fid}
             new_tgt = chart_faces[target] | {fid}
@@ -661,12 +745,14 @@ def straighten_boundaries(mesh: MeshGraph, seams: set[int], *, fold_angle: float
 
 
 def _absorb_small_charts(mesh: MeshGraph, seams: set[int], *, fold_angle: float,
-                         min_chart_faces: int) -> None:
+                         min_chart_faces: int, locked=frozenset()) -> None:
     """Dissolve every chart smaller than ``min_chart_faces`` into the neighbour with the
     most shared non-mandatory boundary (chart-UV plan §5.4 confetti guard). Unconditional
     on developability — a stray sliver must not survive — but never crosses an R2 seam.
-    A sliver fully bounded by mandatory seams is left in place (reported via chart count)."""
-    mandatory = mandatory_seam_edges(mesh, fold_angle=fold_angle)
+    A sliver fully bounded by mandatory seams is left in place (reported via chart count).
+    ``locked`` (user seam lock) is treated exactly like a mandatory seam — never dissolved,
+    so a sliver walled by locked seams is left in place too (G4)."""
+    protected = set(mandatory_seam_edges(mesh, fold_angle=fold_angle)) | set(locked)
     adjacency = mesh.face_adjacency()
 
     for _ in range(mesh.face_count + 1):
@@ -684,7 +770,7 @@ def _absorb_small_charts(mesh: MeshGraph, seams: set[int], *, fold_angle: float,
             for f in fs:
                 for nb, eid in adjacency[f]:
                     nc = face_chart.get(nb)
-                    if nc is not None and nc != cid and eid in seams and eid not in mandatory:
+                    if nc is not None and nc != cid and eid in seams and eid not in protected:
                         by_neighbor.setdefault(nc, []).append(eid)
             if not by_neighbor:
                 continue  # walled by mandatory seams -> leave it
@@ -702,11 +788,12 @@ def _absorb_small_charts(mesh: MeshGraph, seams: set[int], *, fold_angle: float,
             return
 
 
-def _merge_pass(mesh, seams: set[int], normals, cone_limit, fold_angle):
+def _merge_pass(mesh, seams: set[int], normals, cone_limit, fold_angle, *, locked=frozenset()):
     """Greedily remove a non-mandatory shared boundary between two charts when their
     union stays a developable disk (R1 minimality, chart-UV plan §5.4). Seam-centric:
-    operates on the seam set, re-deriving charts each round."""
-    mandatory = mandatory_seam_edges(mesh, fold_angle=fold_angle)
+    operates on the seam set, re-deriving charts each round. ``locked`` (user seam lock) is
+    protected exactly like a mandatory seam and is never dissolved by a merge (G4)."""
+    protected = set(mandatory_seam_edges(mesh, fold_angle=fold_angle)) | set(locked)
 
     changed = True
     while changed:
@@ -719,7 +806,7 @@ def _merge_pass(mesh, seams: set[int], normals, cone_limit, fold_angle):
         border: dict[tuple[int, int], list[int]] = {}
         for eid in seams:
             e = mesh.edges[eid]
-            if eid in mandatory or len(e.face_ids) != 2:
+            if eid in protected or len(e.face_ids) != 2:
                 continue
             ca, cb = face_chart.get(e.face_ids[0]), face_chart.get(e.face_ids[1])
             if ca is None or cb is None or ca == cb:
