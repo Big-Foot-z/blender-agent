@@ -171,3 +171,65 @@ def test_three_runs_are_identical(monkeypatch):
                 assert other["metrics"][key] != other["metrics"][key], key
                 continue
             assert abs(float(other["metrics"][key]) - value) <= 1e-6, key
+
+
+# ------------------------------------------------- 6. packing margin / island gap (G1/G5)
+
+
+def test_pack_margin_meets_profile_margin_px(monkeypatch):
+    """G1: every pack uses a margin that satisfies margin_px @ texture_size_px, and both
+    the resolved UV margin and the profile texture context are recorded on the result."""
+    mesh, backend, obj = _sphere(monkeypatch)
+    result = run_chart_uv(obj, mesh, max_rounds=3, margin=0.005,
+                          texture_size_px=1024, margin_px=4,
+                          budget={"max_candidates_per_round": 2})
+
+    expected = max(0.005, 4 / 1024)
+    assert result["pack_margin_uv"] == expected
+    assert result["margin_px"] == 4
+    assert result["texture_size_px"] == 1024
+    assert result["quality_profile"]["margin_px"] == 4
+    assert result["quality_profile"]["texture_size_px"] == 1024
+
+    unwraps = [c for c in backend.calls if c[0] == "unwrap"]
+    assert unwraps, "the run must have unwrapped at least once"
+    assert all(float(c[2]) >= expected - 1e-12 for c in unwraps), \
+        [float(c[2]) for c in unwraps]
+
+
+def test_island_gap_failure_is_repacked_never_recut(monkeypatch):
+    """G5 (packing 단독 문제로 추가 절개 0): an island-gap-ONLY correctness failure is
+    resolved by re-packing wider; the shipped seam set is identical to the clean run."""
+    from uv_agent.geometry import uv_correctness
+
+    mesh, _backend, obj = _sphere(monkeypatch)
+    baseline = run_chart_uv(obj, mesh, max_rounds=3, use_refinement_loop=False)
+
+    mesh2, backend2, obj2 = _sphere(monkeypatch)
+    real_audit = uv_correctness.island_gap_audit
+    state = {"calls": 0}
+
+    def failing_twice(*args, **kwargs):
+        report = dict(real_audit(*args, **kwargs))
+        state["calls"] += 1
+        if state["calls"] <= 2:
+            report.update({"passed": False, "min_gap_px": 1.0})
+        else:
+            report.update({"passed": True})
+        return report
+
+    monkeypatch.setattr(uv_correctness, "island_gap_audit", failing_twice)
+    result = run_chart_uv(obj2, mesh2, max_rounds=3, use_refinement_loop=False)
+
+    records = [h for h in result["history"] if h.get("stage") == "gap_repack"]
+    assert len(records) == 1, result["history"]
+    assert records[0]["attempts"] == 2
+    assert records[0]["passed"] is True
+    assert "min_gap_px" in records[0]
+
+    # No seam was added/removed to fix the gap — the layout was only re-packed.
+    assert result["seams"] == baseline["seams"]
+    gap_repacks = [c for c in backend2.calls if c[0] == "repack"]
+    assert len(gap_repacks) >= 2
+    expected = result["pack_margin_uv"]
+    assert [float(c[2]) for c in gap_repacks[-2:]] == [expected * 1.5, expected * 2.0]

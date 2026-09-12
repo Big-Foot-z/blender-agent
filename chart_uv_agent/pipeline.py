@@ -213,6 +213,58 @@ def _apply_v2_metrics(metrics: dict, measurement: dict) -> None:
     metrics["metric_version"] = 2
 
 
+#: Re-pack margin multipliers tried when the ONLY failing correctness check is the island
+#: gap (G1 packing 간격 / G5 "packing 단독 문제로 추가 절개 0").
+_GAP_REPACK_FACTORS = (1.5, 2.0, 3.0)
+
+
+def _pack_margin_for(profile, margin: float | None) -> float:
+    """The UV-space pack margin that satisfies the profile's ``margin_px`` @ ``texture_size_px``
+    (G1: packing 간격은 texture_size 에 대한 margin_px 를 충족해야 하고 둘 다 profile 에 기록)."""
+    floor = float(profile.margin_px) / float(max(1, profile.texture_size_px))
+    return max(float(margin or 0.0), floor)
+
+
+def _island_gap_only_failure(correctness: dict) -> bool:
+    """True when ``island_gap`` is the ONE failing correctness check (overlap / orientation /
+    degenerate / bounds all pass) — the only case a pure re-pack can repair."""
+    checks = {str(c.get("name")): bool(c.get("passed"))
+              for c in (correctness or {}).get("checks", ())}
+    if checks.get("island_gap", True):
+        return False
+    return all(v for k, v in checks.items() if k != "island_gap")
+
+
+def _gap_repack_pass(obj, mesh, final_seams, *, profile, regions, pack_margin: float,
+                     history: list) -> None:
+    """G1/G5: if the shipped layout fails ONLY the island-gap check, re-pack with a
+    progressively larger margin (≤3 attempts). The seam set is NEVER touched — a packing
+    gap is not a reason to cut. Measures in place (``measure_layout`` never unwraps)."""
+    from chart_uv_agent.refinement_loop import measure_layout
+    from chart_uv_agent.unwrap import repack
+
+    def _measure():
+        return measure_layout(obj, mesh, final_seams, profile=profile, stage="final",
+                              regions=regions)
+
+    def _gap(m):
+        return (m.get("correctness") or {}).get("island_gap") or {}
+
+    measurement = _measure()
+    if not _island_gap_only_failure(measurement.get("correctness") or {}):
+        return
+    attempts, passed = 0, False
+    for k in _GAP_REPACK_FACTORS:
+        attempts += 1
+        repack(obj, margin=pack_margin * k)
+        measurement = _measure()
+        if bool(_gap(measurement).get("passed", False)):
+            passed = True
+            break
+    history.append({"stage": "gap_repack", "attempts": int(attempts), "passed": bool(passed),
+                    "min_gap_px": float(_gap(measurement).get("min_gap_px", float("nan")))})
+
+
 def _charts(mesh: MeshGraph, seams: set[int]) -> tuple[list[list[int]], dict[int, int]]:
     charts = flood_charts(mesh, seams)
     face_chart = {f: cid for cid, fs in enumerate(charts) for f in fs}
@@ -287,7 +339,8 @@ def _uv_audit_metrics(mesh, uvmap) -> dict:
 
 
 def run_chart_uv(obj, mesh: MeshGraph, *, config: ChartGateConfig | None = None,
-                 cone_limit: float = 150.0, max_rounds: int = 24, margin: float = 0.005,
+                 cone_limit: float = 150.0, max_rounds: int = 24,
+                 margin: float | None = 0.005,
                  shape_passes: bool = False, forbidden_edges=None, region_policy=None,
                  prune_auxiliary: bool = True, min_improvement_ratio: float = 0.15,
                  user_seam_spec=None, auto_refine_user_seams: bool = False,
@@ -348,6 +401,9 @@ def run_chart_uv(obj, mesh: MeshGraph, *, config: ChartGateConfig | None = None,
     started_at = time.monotonic()
     profile = _resolve_profile(quality_profile, texture_size_px=texture_size_px,
                                margin_px=margin_px)
+    # G1: every pack in this run uses a margin that satisfies the profile's margin_px @
+    # texture_size_px (the caller's ``margin`` is only a floor, never a ceiling).
+    pack_margin = _pack_margin_for(profile, margin)
     budget = _resolve_budget(profile, budget, seed=seed)
     candidate_history: list[dict] = []
     termination_records: list[dict] = []
@@ -358,7 +414,7 @@ def run_chart_uv(obj, mesh: MeshGraph, *, config: ChartGateConfig | None = None,
     # §12 success criterion #1) and a dedicated report-only path runs instead.
     if user_seam_spec is not None:
         return _run_user_seam_uv(obj, mesh, user_seam_spec, config=config,
-                                 base_forbidden=set(forbidden_edges or ()), margin=margin,
+                                 base_forbidden=set(forbidden_edges or ()), margin=pack_margin,
                                  auto_refine=auto_refine_user_seams,
                                  repair_user_seams=repair_user_seams,
                                  enforce_mandatory=enforce_user_mandatory,
@@ -426,7 +482,7 @@ def run_chart_uv(obj, mesh: MeshGraph, *, config: ChartGateConfig | None = None,
     rounds_exhausted = False          # the loop used every allowed round (G5 termination)
 
     for rnd in range(max_rounds):
-        unwrap_and_pack(obj, seams, margin=margin)
+        unwrap_and_pack(obj, seams, margin=pack_margin)
         uvmap = read_uvmap(obj, mesh)
         plan = island_plan_from_seams(mesh, seams)
         ev = evaluate_uv_solution(mesh, plan, uvmap)
@@ -527,9 +583,9 @@ def run_chart_uv(obj, mesh: MeshGraph, *, config: ChartGateConfig | None = None,
         if not changed and metrics["raster_overlap_ratio"] > config.raster_overlap_max:
             if diag["cross_charts"] and not bbox_packed:
                 if not raster_margin_bumped:
-                    repack(obj, margin=min(0.05, margin * 4)); raster_margin_bumped = True
+                    repack(obj, margin=min(0.05, pack_margin * 4)); raster_margin_bumped = True
                 else:
-                    repack(obj, margin=margin, pack_shape="AABB"); bbox_packed = True
+                    repack(obj, margin=pack_margin, pack_shape="AABB"); bbox_packed = True
                 changed = True
                 rec["action"] = "repack"; rec["reason"] = "raster_overlap_cross_invasion"
             else:
@@ -567,7 +623,7 @@ def run_chart_uv(obj, mesh: MeshGraph, *, config: ChartGateConfig | None = None,
             before_seams = set(seams)
             ref = refinement_loop.run_refinement(
                 obj, mesh, seams, constraints=constraints, profile=profile,
-                budget={**budget, "max_iterations": 1}, margin=margin, regions=regions,
+                budget={**budget, "max_iterations": 1}, margin=pack_margin, regions=regions,
                 history=history, candidate_history=candidate_history)
             termination_records.append(ref["termination"])
             seams = set(ref["seams"])
@@ -633,7 +689,7 @@ def run_chart_uv(obj, mesh: MeshGraph, *, config: ChartGateConfig | None = None,
         # the only packing action (more, smaller charts pack *worse*, so splitting is
         # counterproductive). Only reached when a hard gate other than packing still fails.
         if not changed and metrics["packing_efficiency"] < config.packing_min and not repacked:
-            repack(obj, margin=margin * 0.5)
+            repack(obj, margin=pack_margin * 0.5)
             repacked = True
             changed = True  # re-measure next round without changing seams
             rec["action"] = "repack"; rec["reason"] = "packing_retune"
@@ -660,14 +716,14 @@ def run_chart_uv(obj, mesh: MeshGraph, *, config: ChartGateConfig | None = None,
     # are captured for the before/after table.
     final_seams = set(best["seams"])
     pre = dict(best["metrics"])
-    correctness = correctness_pass(obj, mesh, final_seams, config, margin=margin,
+    correctness = correctness_pass(obj, mesh, final_seams, config, margin=pack_margin,
                                    forbidden=forbidden, reject_history=history)
     final_seams |= mandatory
 
     def measure():
         """Unwrap+pack the current ``final_seams`` and return (metrics, gate, ev). Owns the
         object's shipped UV — every seam edit here is followed by exactly one re-unwrap."""
-        unwrap_and_pack(obj, final_seams, margin=margin)
+        unwrap_and_pack(obj, final_seams, margin=pack_margin)
         uvm = read_uvmap(obj, mesh)
         pl = island_plan_from_seams(mesh, final_seams)
         e = evaluate_uv_solution(mesh, pl, uvm)
@@ -739,7 +795,13 @@ def run_chart_uv(obj, mesh: MeshGraph, *, config: ChartGateConfig | None = None,
             ("raster_overlap_ratio", "stretch_score", "packing_efficiency",
              "convexity_p10", "island_count")},
         "stuck_charts": stuck_charts, "shippable": shippable_with_stuck(gate, stuck_charts),
+        "pack_margin_uv": float(pack_margin), "margin_px": int(profile.margin_px),
+        "texture_size_px": int(profile.texture_size_px),
     }
+    # G1/G5: an island-gap-ONLY correctness failure is repaired by re-packing wider, never
+    # by cutting. Runs before the final v2 measurement so the report describes the re-pack.
+    _gap_repack_pass(obj, mesh, final_seams, profile=profile, regions=regions,
+                     pack_margin=pack_margin, history=history)
     # v2 FINAL measurement of the shipped UV + the G1/G4/G5 evidence blocks. Measured after
     # every seam edit, so it describes exactly the layout the object now holds.
     v2_block, v2_measurement = _v2_result_block(
@@ -799,6 +861,9 @@ def _run_user_seam_uv(obj, mesh: MeshGraph, spec, *, config: ChartGateConfig,
     started_at = time.monotonic() if started_at is None else float(started_at)
     profile = _resolve_profile(quality_profile, texture_size_px=texture_size_px,
                                margin_px=margin_px)
+    # G1: same rule as the no-spec path — the pack margin must satisfy the profile's
+    # margin_px @ texture_size_px; the caller's ``margin`` is only a floor.
+    pack_margin = _pack_margin_for(profile, margin)
     budget = _resolve_budget(profile, budget)
     candidate_history: list[dict] = []
     termination_records: list[dict] = []
@@ -853,7 +918,7 @@ def _run_user_seam_uv(obj, mesh: MeshGraph, spec, *, config: ChartGateConfig,
 
     def measure():
         """Unwrap+pack the current ``final_seams`` and measure — owns the shipped UV."""
-        unwrap_and_pack(obj, final_seams, margin=margin)
+        unwrap_and_pack(obj, final_seams, margin=pack_margin)
         return _eval_current()
 
     metrics, gate, ev = measure()
@@ -889,7 +954,7 @@ def _run_user_seam_uv(obj, mesh: MeshGraph, spec, *, config: ChartGateConfig,
         before_seams = set(final_seams)
         ref = refinement_loop.run_refinement(
             obj, mesh, final_seams, constraints=constraints, profile=profile,
-            budget=budget, margin=margin, regions=regions, history=history,
+            budget=budget, margin=pack_margin, regions=regions, history=history,
             candidate_history=candidate_history)
         termination_records.append(ref["termination"])
         final_seams = set(ref["seams"])
@@ -915,10 +980,16 @@ def _run_user_seam_uv(obj, mesh: MeshGraph, spec, *, config: ChartGateConfig,
         lo_cfg = layout_optimization_config or LayoutOptimizationConfig(
             enabled=True, mode="user_reference")
 
-        def _apply_spec(sp):
+        def _apply_spec(sp, *, promote_margin: bool = False):
             """Unwrap+pack ``final_seams`` per ``sp``; for a custom backend, follow with the
             island-level density-normalize/orient + MaxRects/shelf re-pack (MVP3 §2 Goal B,
-            §5). Never touches the seam set."""
+            §5). Never touches the seam set.
+
+            ``promote_margin`` (the FINAL application only — candidate comparison must keep
+            each candidate's own margin) raises the spec margin to the G1 pack margin."""
+            sp = dict(sp)
+            if promote_margin:
+                sp["margin"] = max(sp["margin"], pack_margin)
             unwrap_and_pack(obj, final_seams, margin=sp["margin"], method=sp["unwrap_method"],
                             minimize_iters=sp["minimize_iters"], pack_shape=sp["pack_shape"],
                             rotate=sp["rotate"], average_scale=sp["average_scale"])
@@ -936,7 +1007,7 @@ def _run_user_seam_uv(obj, mesh: MeshGraph, spec, *, config: ChartGateConfig,
 
         layout_opt = run_layout_optimization(_measure_candidate, dict(metrics), lo_cfg,
                                              mode="user_reference")
-        _apply_spec(layout_opt.selected_spec)
+        _apply_spec(layout_opt.selected_spec, promote_margin=True)
         metrics, gate, ev = _eval_current()   # the shipped (best) layout
         history.append({"stage": "layout_optimization",
                         "selected_candidate_id": layout_opt.selected_candidate_id,
@@ -981,7 +1052,13 @@ def _run_user_seam_uv(obj, mesh: MeshGraph, spec, *, config: ChartGateConfig,
         "metrics_before_correctness": {}, "stuck_charts": [],
         "shippable": shippable_with_stuck(gate, []),
         "user_seams": user_block,
+        "pack_margin_uv": float(pack_margin), "margin_px": int(profile.margin_px),
+        "texture_size_px": int(profile.texture_size_px),
     }
+    # G1/G5: island-gap-ONLY failures are re-packed (after the layout-optimization candidate
+    # has been applied), never cut.
+    _gap_repack_pass(obj, mesh, final_seams, profile=profile, regions=regions,
+                     pack_margin=pack_margin, history=history)
     # Same v2 final measurement + evidence blocks as the no-spec path (G1/G4/G5).
     v2_block, v2_measurement = _v2_result_block(
         obj, mesh, final_seams, profile=profile, regions=regions, constraints=constraints,
