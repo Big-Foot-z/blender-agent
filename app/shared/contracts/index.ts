@@ -28,9 +28,11 @@ import type {
 // MVP 3 generate + optimize contract (run, candidate summary, validation, IPC).
 export * from './uvGenerate';
 import type {
+  ArtistApproval,
   CandidateSummary,
   GenerateUvOptions,
   SelectCandidateResult,
+  UvGenerateMode,
   UvGenerateRunView,
   ValidateGenerateInput,
 } from './uvGenerate';
@@ -131,6 +133,10 @@ export interface Project {
   // UV-boundary fallback (revision plan §3.1): pointer to the most recent
   // accepted derived seam spec. Never overwrites `active_user_seam_spec`.
   latest_derived_seam_spec?: string | null;
+  // --- UV automation extension (work plan §3; gates G2/G6) — optional so a
+  // project with no mode is read as `preserve_existing`. ---
+  uv_generate_mode?: UvGenerateMode | null;
+  uv_artist_approval?: ArtistApproval | null;
   // --- MVP 5 production export extension (plan §2) — optional ---
   latest_export_id?: string | null;
   exports?: string[];

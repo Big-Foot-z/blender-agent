@@ -81,6 +81,26 @@ export interface SeamSource {
 
 export const SUPPORTED_GENERATE_EXTS = ['.blend', '.fbx', '.obj', '.glb', '.gltf'] as const;
 
+// --- Execution modes (work plan §3; gate G2) -------------------------------
+// `preserve_existing` is the default so a legacy project with no `mode` keeps its
+// MVP 3 strict behaviour; `auto_generate` is only ever entered explicitly.
+export const UvGenerateMode = {
+  AutoGenerate: 'auto_generate',
+  PreserveExisting: 'preserve_existing',
+} as const;
+export type UvGenerateMode = (typeof UvGenerateMode)[keyof typeof UvGenerateMode];
+
+export const DEFAULT_UV_GENERATE_MODE: UvGenerateMode = UvGenerateMode.PreserveExisting;
+
+/** The four strict flags that, if flipped on, would let the seam set change. */
+export const STRICT_FLAGS = [
+  'auto_refine_user_seams',
+  'repair_user_seams',
+  'enforce_user_mandatory',
+  'gate_user_mandatory',
+] as const;
+export type StrictFlag = (typeof STRICT_FLAGS)[number];
+
 // --- Strict user/reference defaults (plan §1) -----------------------------
 export const DEFAULT_LAYOUT_OPT_PRESET = 'user_reference';
 export const DEFAULT_LAYOUT_OPT_MAX_CANDIDATES = 24;
@@ -101,9 +121,24 @@ export interface GenerateUvOptions {
   texture_size_px?: number;
   checker_scale?: number;
   render_size_px?: number;
+  // Execution mode + common automation options (work plan §3, §5; gates G2/G5).
+  // `null` means "use the quality profile's value" — never silently 0 (gate G6).
+  mode?: UvGenerateMode;
+  quality_profile?: string;
+  seed?: number;
+  margin_px?: number;
+  max_iterations?: number | null;
+  max_candidates_per_round?: number | null;
+  time_budget_s?: number | null;
+  island_cap?: number | null;
 }
 
-export const STRICT_GENERATE_OPTIONS: Required<
+export const DEFAULT_QUALITY_PROFILE = 'engineering_v0';
+export const DEFAULT_SEED = 0;
+export const DEFAULT_MARGIN_PX = 4;
+
+/** The fully resolved option set a mode's defaults provide (work plan §3). */
+export type ResolvedGenerateOptions = Required<
   Pick<
     GenerateUvOptions,
     | 'uv_engine'
@@ -116,8 +151,17 @@ export const STRICT_GENERATE_OPTIONS: Required<
     | 'layout_opt_max_candidates'
     | 'render_previews'
     | 'save_selected_blend'
+    | 'quality_profile'
+    | 'seed'
+    | 'margin_px'
+    | 'max_iterations'
+    | 'max_candidates_per_round'
+    | 'time_budget_s'
+    | 'island_cap'
   >
-> = {
+>;
+
+export const STRICT_GENERATE_OPTIONS: ResolvedGenerateOptions = {
   uv_engine: 'chart',
   auto_refine_user_seams: false,
   repair_user_seams: false,
@@ -128,11 +172,122 @@ export const STRICT_GENERATE_OPTIONS: Required<
   layout_opt_max_candidates: DEFAULT_LAYOUT_OPT_MAX_CANDIDATES,
   render_previews: true,
   save_selected_blend: true,
+  // Common automation options — shared by BOTH modes (work plan §3, §5).
+  quality_profile: DEFAULT_QUALITY_PROFILE,
+  seed: DEFAULT_SEED,
+  margin_px: DEFAULT_MARGIN_PX,
+  max_iterations: null,
+  max_candidates_per_round: null,
+  time_budget_s: null,
+  island_cap: null,
 };
 
-/** Overlay caller options on the strict defaults (mirror `merge_options`). */
-export function mergeGenerateOptions(user?: GenerateUvOptions | null): GenerateUvOptions {
-  return { ...STRICT_GENERATE_OPTIONS, ...(user ?? {}) };
+/**
+ * `auto_generate` defaults: the same surface as the strict/preserve defaults with
+ * the four seam-changing flags ON, because automatic cutting is the point of the
+ * mode (work plan §3). Seam locks/protections are enforced by the constraint
+ * evaluation, not by holding these flags false.
+ */
+export const AUTO_GENERATE_OPTIONS: ResolvedGenerateOptions = {
+  ...STRICT_GENERATE_OPTIONS,
+  auto_refine_user_seams: true,
+  repair_user_seams: true,
+  enforce_user_mandatory: true,
+  gate_user_mandatory: true,
+};
+
+/** Per-mode default option sets (work plan §3 "UI/TS/Python의 기본값을 맞춘다"). */
+export const MODE_GENERATE_OPTIONS: Record<UvGenerateMode, ResolvedGenerateOptions> = {
+  [UvGenerateMode.PreserveExisting]: STRICT_GENERATE_OPTIONS,
+  [UvGenerateMode.AutoGenerate]: AUTO_GENERATE_OPTIONS,
+};
+
+/** Normalize a raw mode value; empty/absent falls back to the default (gate G2). */
+export function resolveGenerateMode(value: unknown): UvGenerateMode {
+  if (value === null || value === undefined || value === '') return DEFAULT_UV_GENERATE_MODE;
+  if (value === UvGenerateMode.AutoGenerate || value === UvGenerateMode.PreserveExisting) {
+    return value;
+  }
+  throw new Error(`unknown_mode: ${String(value)}`);
+}
+
+export interface ModeRequestError {
+  code: string;
+  message: string;
+  flag?: string;
+}
+
+export interface ModeRequestValidation {
+  ok: boolean;
+  mode: UvGenerateMode | null;
+  errors: ModeRequestError[];
+}
+
+/**
+ * Reject a mode + raw-options combination that contradicts itself BEFORE the run
+ * starts (work plan §3; gate G2).
+ */
+export function validateModeRequest(
+  mode: unknown,
+  rawOptions?: GenerateUvOptions | null,
+): ModeRequestValidation {
+  const errors: ModeRequestError[] = [];
+  let resolved: UvGenerateMode;
+  try {
+    resolved = resolveGenerateMode(mode);
+  } catch {
+    errors.push({ code: 'unknown_mode', message: `Unknown generate mode: ${String(mode)}` });
+    return { ok: false, mode: null, errors };
+  }
+
+  const raw = (rawOptions ?? {}) as Record<string, unknown>;
+  for (const flag of STRICT_FLAGS) {
+    const value = raw[flag];
+    if (value === undefined) continue;
+    if (resolved === UvGenerateMode.PreserveExisting && value === true) {
+      errors.push({
+        code: 'strict_flag_contradicts_preserve',
+        message: `${flag}=true contradicts mode ${resolved}`,
+        flag,
+      });
+    } else if (resolved === UvGenerateMode.AutoGenerate && value === false) {
+      errors.push({
+        code: 'strict_flag_contradicts_auto',
+        message: `${flag}=false contradicts mode ${resolved}`,
+        flag,
+      });
+    }
+  }
+
+  const optionMode = raw.mode;
+  if (
+    optionMode !== undefined &&
+    optionMode !== null &&
+    optionMode !== '' &&
+    optionMode !== resolved
+  ) {
+    errors.push({
+      code: 'mode_mismatch',
+      message: `options.mode ${String(optionMode)} does not match requested mode ${resolved}`,
+    });
+  }
+
+  return { ok: errors.length === 0, mode: resolved, errors };
+}
+
+/**
+ * Overlay caller options on the mode's defaults (mirror `merge_options`).
+ *
+ * The mode is decided by precedence: explicit `mode` argument > `user.mode` >
+ * `DEFAULT_UV_GENERATE_MODE`, so an existing `mergeGenerateOptions(x)` call keeps
+ * its strict/preserve behaviour. The resolved mode is recorded in the result.
+ */
+export function mergeGenerateOptions(
+  user?: GenerateUvOptions | null,
+  mode?: UvGenerateMode,
+): GenerateUvOptions {
+  const resolved = resolveGenerateMode(mode ?? user?.mode ?? null);
+  return { ...MODE_GENERATE_OPTIONS[resolved], ...(user ?? {}), mode: resolved };
 }
 
 // --- IPC channels (preload <-> main, plan §11 Session E) ------------------
@@ -206,6 +361,147 @@ export interface LayoutOptimizationBlock {
   verdict?: OptimizationVerdict | string;
 }
 
+// --- Automation report blocks (work plan §3-§5; gates G1/G3/G5/G6) ---------
+// All optional on the summary so a pre-automation run still parses.
+
+/** The frozen quality profile a run was scored against (gate G8). */
+export interface QualityProfileBlock {
+  profile_id: string;
+  metric_version: number;
+  calibrated: boolean;
+  [k: string]: unknown;
+}
+
+/** Automatic-mode gate verdict (gate G2/G6). `valid` false means not evaluable. */
+export interface AutoGateBlock {
+  valid: boolean;
+  passed: boolean;
+  failures: string[];
+  invalid_reasons: string[];
+}
+
+/** Locked/protected seam constraints carried into the automatic solver (gate G4). */
+export interface AutoConstraintsBlock {
+  locked_seam_count?: number;
+  locked_missing_count?: number;
+  protected_count?: number;
+  protected_cut_count?: number;
+  conflict_count?: number;
+  conflicts_unresolved?: boolean;
+  valid: boolean;
+}
+
+/** Distortion v2 metric set — global, per-island or per-region (work plan §4). */
+export interface DistortionMetricSet {
+  anisotropy_mean?: number;
+  anisotropy_p95?: number;
+  anisotropy_max?: number;
+  area_stretch_mean?: number;
+  area_stretch_p95?: number;
+  area_stretch_max?: number;
+  exceed_area_fraction?: number;
+}
+
+export interface DistortionIslandRow extends DistortionMetricSet {
+  island_id: number;
+  face_count: number;
+  area_3d?: number;
+  area_uv?: number;
+}
+
+export interface DistortionV2Block {
+  metric_version: number;
+  evaluation_stage?: string;
+  scale_policy?: string;
+  valid: boolean;
+  global: DistortionMetricSet;
+  islands: DistortionIslandRow[];
+  degenerate_triangles?: {
+    input_defect_count: number;
+    uv_degenerate_count: number;
+  };
+  regions?: Record<string, DistortionMetricSet>;
+}
+
+/** Hard UV correctness checks (gate G1). */
+export interface CorrectnessCheck {
+  name: string;
+  passed: boolean;
+  value?: number | null;
+  limit?: number | null;
+  detail?: string;
+}
+
+export interface CorrectnessBlock {
+  passed: boolean;
+  checks: CorrectnessCheck[];
+  overlap_area_total?: number;
+  local_flip_count?: number;
+  mirrored_island_count?: number;
+  uv_degenerate_count?: number;
+  min_island_gap_px?: number | null;
+  bounds_ok?: boolean;
+}
+
+/** Re-read of the saved file, re-measured from disk (gate G6). */
+export interface RereadAuditBlock {
+  passed: boolean;
+  source?: string;
+  mandatory_90_uv_unsplit?: number;
+  correctness?: CorrectnessBlock | null;
+  edge_id_remap?: boolean;
+  [k: string]: unknown;
+}
+
+/** Before/after mesh hash so UV work never silently changed the mesh (gate G1). */
+export interface MeshIdentityBlock {
+  before_sha256?: string;
+  after_sha256?: string;
+  unchanged: boolean;
+  vertex_count?: number;
+  face_count?: number;
+  loop_count?: number;
+}
+
+/** Why the candidate search stopped and what it spent (gate G5). */
+export interface TerminationBlock {
+  reason: string;
+  iterations: number;
+  candidates_evaluated: number;
+  elapsed_s: number;
+  budget?: Record<string, number | null>;
+}
+
+/** Seam length accounting by origin (work plan §5). */
+export interface SeamLengthBlock {
+  mandatory: number;
+  user: number;
+  auxiliary: number;
+  total: number;
+  bbox_diagonal: number;
+  auxiliary_normalized: number;
+  mandatory_edge_count?: number;
+  user_edge_count?: number;
+  auxiliary_edge_count?: number;
+}
+
+/** 90-degree mandatory seam audit; `reported_only` in preserve mode (gate G2). */
+export interface MandatoryAuditBlock {
+  mandatory_90_edges: number;
+  mandatory_90_missing: number;
+  mandatory_90_uv_unsplit: number;
+  reported_only?: boolean;
+}
+
+/** Artist sign-off — tracked separately from the solver verdict (gate G6/G7). */
+export interface ArtistApproval {
+  approved: boolean;
+  run_id?: string | null;
+  reviewer?: string | null;
+  reason?: string | null;
+  approved_at?: string | null;
+}
+
 /** Stable artifact keys -> run-relative filenames (plan §4.1). */
 export interface GenerateArtifacts {
   summary?: string;
@@ -222,6 +518,16 @@ export interface GenerateArtifacts {
   selected_checker_front?: string;
   selected_checker_side?: string;
   selected_blend?: string;
+  // --- Automation artifacts (work plan §4, §7; gates G3/G5/G6) — optional ---
+  distortion_v2?: string;
+  correctness?: string;
+  final_reread_audit?: string;
+  run_manifest?: string;
+  candidate_history?: string;
+  mesh_identity?: string;
+  quality_profile?: string;
+  seam_overlay?: string;
+  selected_heatmap_anisotropy?: string;
 }
 
 export interface UvGenerateWorkerError {
@@ -250,6 +556,23 @@ export interface UvGenerateSummary {
   layout_optimization: LayoutOptimizationBlock;
   artifacts: GenerateArtifacts;
   warnings: string[];
+  // --- Automation extension (work plan §3-§5; gates G2/G3/G5/G6) — optional
+  // so a pre-automation summary still parses. ---
+  mode?: UvGenerateMode;
+  solver_accepted?: boolean;
+  artist_approved?: boolean;
+  artist_approval?: ArtistApproval | null;
+  acceptance_reason?: string | null;
+  quality_profile?: QualityProfileBlock | null;
+  auto_gate?: AutoGateBlock | null;
+  auto_constraints?: AutoConstraintsBlock | null;
+  distortion_v2?: DistortionV2Block | null;
+  correctness?: CorrectnessBlock | null;
+  final_reread_audit?: RereadAuditBlock | null;
+  mesh_identity?: MeshIdentityBlock | null;
+  termination?: TerminationBlock | null;
+  seam_length?: SeamLengthBlock | null;
+  mandatory_audit?: MandatoryAuditBlock | null;
 }
 
 // --- Candidate summary (plan §5) ------------------------------------------

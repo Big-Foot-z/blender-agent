@@ -25,11 +25,21 @@ MVP 3 product rules encoded here (plan §1, §6, §13):
 - Layout optimization selects the best SAFE candidate (no raster overlap, in
   bounds) over a FIXED seam set, or explicitly keeps the baseline (plan §5, §14).
 - Failures are always representable as JSON (never only stdout/stderr).
+
+Run modes (work plan §3, gates G2/G6):
+
+- ``preserve_existing`` (default, and how a mode-less legacy project is read):
+  the existing seam set is held FIXED; only unwrap/layout is optimized, and its
+  ``accepted`` is NOT an automatic-UV-rule pass.
+- ``auto_generate``: explicit automatic cutting from an approved low-poly with no
+  spec/UV required; user seams stay locked and the automatic gate decides status.
+- Raw option flags contradicting the chosen mode are rejected at request time.
 """
 
 from __future__ import annotations
 
 import json
+import math
 import os
 from datetime import datetime, timezone
 from typing import Any, Iterable
@@ -106,6 +116,14 @@ DEFAULT_FOLD_ANGLE = 90.0
 # MVP 2 working ``.blend`` (plan §2, §4.1).
 SUPPORTED_MODEL_EXTS = (".blend", ".fbx", ".obj", ".glb", ".gltf")
 
+# --- Run modes (work plan §3, gate G2) --------------------------------------
+# ``preserve_existing`` is the default so a legacy project with no ``mode`` keeps
+# its MVP 3 strict behaviour; ``auto_generate`` is only ever entered explicitly.
+MODE_AUTO_GENERATE = "auto_generate"
+MODE_PRESERVE_EXISTING = "preserve_existing"
+MODES = (MODE_AUTO_GENERATE, MODE_PRESERVE_EXISTING)
+DEFAULT_MODE = MODE_PRESERVE_EXISTING
+
 # --- Default Generate options (plan §1 strict user/reference defaults) ------
 # These hold the seam set FIXED: no auto refine, no repair, no mandatory enforce
 # or gate. Layout optimization is on; the preset + candidate cap match the plan.
@@ -133,6 +151,38 @@ STRICT_FLAGS = (
     "enforce_user_mandatory",
     "gate_user_mandatory",
 )
+
+# --- Common automation options (work plan §3, §4; gates G2/G5/G8) -----------
+# Shared by BOTH modes so a run is reproducible and budget-bounded. ``None``
+# means "use the quality profile's value" — never silently 0 (gate G6).
+DEFAULT_QUALITY_PROFILE = "engineering_v0"
+DEFAULT_SEED = 0
+DEFAULT_TEXTURE_SIZE_PX = 1024
+DEFAULT_MARGIN_PX = 4
+COMMON_AUTOMATION_OPTIONS: dict[str, Any] = {
+    "quality_profile": DEFAULT_QUALITY_PROFILE,
+    "seed": DEFAULT_SEED,
+    "texture_size_px": DEFAULT_TEXTURE_SIZE_PX,
+    "margin_px": DEFAULT_MARGIN_PX,
+    "max_iterations": None,
+    "max_candidates_per_round": None,
+    "time_budget_s": None,
+    "island_cap": None,
+}
+STRICT_OPTIONS.update(COMMON_AUTOMATION_OPTIONS)
+
+# ``auto_generate`` defaults: same surface as the strict/preserve defaults with
+# the four seam-changing flags ON, because automatic cutting is the point of the
+# mode (work plan §3). Seam locks/protections are enforced by the constraint
+# evaluation, not by holding these flags false.
+AUTO_OPTIONS: dict[str, Any] = dict(STRICT_OPTIONS)
+AUTO_OPTIONS.update({flag: True for flag in STRICT_FLAGS})
+
+# Per-mode default option sets (work plan §3 "UI/TS/Python의 기본값을 맞춘다").
+MODE_OPTIONS: dict[str, dict[str, Any]] = {
+    MODE_PRESERVE_EXISTING: STRICT_OPTIONS,
+    MODE_AUTO_GENERATE: AUTO_OPTIONS,
+}
 
 # Project-relative handoff paths (plan §2, §9). The accepted summary + selected
 # UV blend are copied here so MVP 4/5 read one stable file (plan §9).
@@ -205,6 +255,17 @@ SELECTED_BLEND_FILE = "selected_uv.blend"
 DERIVED_SEAM_SPEC_FILE = "derived_from_uv_boundary.json"
 SEAM_SOURCE_RESOLUTION_FILE = "seam_source_resolution.json"
 DERIVED_SEAM_SPEC_REL = os.path.join("work", "seams", "derived_from_uv_boundary.json")
+# Automatic-mode artifacts (work plan §3/§4, gates G0/G1/G3/G5/G6/G7). All
+# optional in the registry: a preserve_existing run does not emit them.
+DISTORTION_V2_FILE = "distortion_v2.json"
+CORRECTNESS_FILE = "correctness.json"
+FINAL_REREAD_AUDIT_FILE = "final_reread_audit.json"
+RUN_MANIFEST_FILE = "run_manifest.json"
+CANDIDATE_HISTORY_FILE = "candidate_history.json"
+MESH_IDENTITY_FILE = "mesh_identity.json"
+QUALITY_PROFILE_FILE = "quality_profile.json"
+SEAM_OVERLAY_FILE = "seam_overlay.json"
+SELECTED_HEATMAP_ANISOTROPY_FILE = "selected_heatmap_anisotropy.png"
 REQUIRED_PREVIEWS = (
     "baseline_uv_layout.png",
     "baseline_checker_front.png",
@@ -226,6 +287,15 @@ ARTIFACT_FILES: dict[str, tuple[str, bool]] = {
     "selected_checker_front": ("selected_checker_front.png", True),
     "selected_checker_side": ("selected_checker_side.png", True),
     "selected_blend": (SELECTED_BLEND_FILE, False),
+    "distortion_v2": (DISTORTION_V2_FILE, False),
+    "correctness": (CORRECTNESS_FILE, False),
+    "final_reread_audit": (FINAL_REREAD_AUDIT_FILE, False),
+    "run_manifest": (RUN_MANIFEST_FILE, False),
+    "candidate_history": (CANDIDATE_HISTORY_FILE, False),
+    "mesh_identity": (MESH_IDENTITY_FILE, False),
+    "quality_profile": (QUALITY_PROFILE_FILE, False),
+    "seam_overlay": (SEAM_OVERLAY_FILE, False),
+    "selected_heatmap_anisotropy": (SELECTED_HEATMAP_ANISOTROPY_FILE, False),
 }
 
 
@@ -312,22 +382,89 @@ def finalize_status(
 # ---------------------------------------------------------------------------
 # Options (plan §1 strict defaults, §4.1 options block)
 # ---------------------------------------------------------------------------
-def default_options() -> dict:
-    """A fresh copy of the strict user/reference defaults (plan §1)."""
-    return dict(STRICT_OPTIONS)
+def resolve_mode(value: Any) -> str:
+    """Normalize a raw ``mode`` value (work plan §3, gate G2).
 
-
-def merge_options(user_options: dict | None) -> dict:
-    """Overlay caller-supplied options on the strict defaults (plan §4.1).
-
-    The strict defaults win for any key the caller omits, so a run started with
-    no options is fully strict. A caller MAY override (e.g. to lower
-    ``layout_opt_max_candidates`` for a fast smoke), but flipping a strict flag on
-    is recorded faithfully and then fails seam integrity (plan §6, §14).
+    A missing / null / empty mode is ``preserve_existing`` so an older project
+    keeps its behaviour; anything else unknown is a hard error rather than a
+    silent fallback to automatic cutting.
     """
-    opts = default_options()
-    for k, v in (user_options or {}).items():
+    if value is None or value == "":
+        return DEFAULT_MODE
+    if value in MODES:
+        return str(value)
+    raise ValueError(f"unknown_mode: {value!r}")
+
+
+def validate_mode_request(mode: Any, raw_options: dict | None) -> dict:
+    """Reject mode/flag combinations that contradict each other (work plan §3).
+
+    Returns ``{"ok": bool, "mode": str|None, "errors": [{"code","message","flag"?}]}``.
+    Only keys the caller EXPLICITLY supplied are checked — an omitted flag takes
+    its mode default and is never a contradiction.
+    """
+    errors: list[dict] = []
+    raw = raw_options or {}
+    try:
+        resolved = resolve_mode(mode)
+    except ValueError as exc:
+        return {"ok": False, "mode": None,
+                "errors": [{"code": "unknown_mode", "message": str(exc)}]}
+
+    if "mode" in raw and raw.get("mode") != mode:
+        errors.append({
+            "code": "mode_mismatch",
+            "message": f"options mode {raw.get('mode')!r} does not match requested mode {mode!r}",
+        })
+
+    for flag in STRICT_FLAGS:
+        if flag not in raw:
+            continue
+        value = raw[flag]
+        if resolved == MODE_PRESERVE_EXISTING and value is True:
+            errors.append({
+                "code": "strict_flag_contradicts_preserve",
+                "message": f"{flag}=true would change the preserved seam set",
+                "flag": flag,
+            })
+        elif resolved == MODE_AUTO_GENERATE and value is False:
+            errors.append({
+                "code": "strict_flag_contradicts_auto",
+                "message": f"{flag}=false disables automatic seam generation",
+                "flag": flag,
+            })
+
+    return {"ok": not errors, "mode": resolved, "errors": errors}
+
+
+def default_options(mode: str = DEFAULT_MODE) -> dict:
+    """A fresh copy of the defaults for ``mode`` (plan §1, work plan §3).
+
+    Includes the ``"mode"`` key so an options block is self-describing end to end
+    (UI -> IPC -> worker -> report, gate G2).
+    """
+    resolved = resolve_mode(mode)
+    opts = dict(MODE_OPTIONS[resolved])
+    opts["mode"] = resolved
+    return opts
+
+
+def merge_options(user_options: dict | None, mode: str | None = None) -> dict:
+    """Overlay caller-supplied options on the mode defaults (plan §4.1, §3).
+
+    The mode is decided by: explicit ``mode`` argument > ``user_options["mode"]`` >
+    :data:`DEFAULT_MODE`. The defaults win for any key the caller omits, so a run
+    started with no options is fully strict/preserving. A caller MAY override
+    (e.g. lower ``layout_opt_max_candidates`` for a fast smoke); a contradictory
+    override is recorded faithfully here and rejected by
+    :func:`validate_mode_request` / seam integrity (plan §6, §14).
+    """
+    user = user_options or {}
+    resolved = resolve_mode(mode if mode is not None else user.get("mode"))
+    opts = default_options(resolved)
+    for k, v in user.items():
         opts[k] = v
+    opts["mode"] = resolved
     return opts
 
 
@@ -576,6 +713,170 @@ def classify_generate_status(integrity: dict, quality: dict) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Automatic mode: cut constraints, gate, status (work plan §3, gates G4/G6)
+# ---------------------------------------------------------------------------
+def evaluate_auto_constraints(auto_block: dict | None) -> dict:
+    """Check the automatic-mode cut constraints (work plan §3, gate G4).
+
+    ``auto_block`` is the solver's constraint report::
+
+        {"locked_seam_edges": [...], "locked_missing": [...],
+         "protected_edges": [...], "protected_cut": [...],
+         "conflicts": [{"edge_id": ...}], "conflicts_unresolved": bool}
+
+    Returns ``{"block": {...counts + valid}, "violations": [...], "valid": bool}``.
+    A locked user seam that disappeared, a protected edge that was cut, or an
+    unresolved mandatory/protect conflict each block acceptance.
+    """
+    blk = auto_block or {}
+    locked = [int(e) for e in (blk.get("locked_seam_edges") or [])]
+    locked_missing = [int(e) for e in (blk.get("locked_missing") or [])]
+    protected = [int(e) for e in (blk.get("protected_edges") or [])]
+    protected_cut = [int(e) for e in (blk.get("protected_cut") or [])]
+    conflicts = list(blk.get("conflicts") or [])
+    conflicts_unresolved = bool(blk.get("conflicts_unresolved", False))
+
+    violations: list[dict] = []
+    if locked_missing:
+        violations.append({"code": "locked_seam_removed", "edges": sorted(locked_missing)})
+    if protected_cut:
+        violations.append({"code": "protected_edge_cut", "edges": sorted(protected_cut)})
+    if conflicts_unresolved:
+        violations.append({"code": "pending_conflict", "count": len(conflicts)})
+
+    block = {
+        "locked_seam_count": len(locked),
+        "locked_missing_count": len(locked_missing),
+        "protected_edge_count": len(protected),
+        "protected_cut_count": len(protected_cut),
+        "conflict_count": len(conflicts),
+        "conflicts_unresolved": conflicts_unresolved,
+        "valid": not violations,
+    }
+    return {"block": block, "violations": violations, "valid": not violations}
+
+
+_MANDATORY_AUDIT_KEYS = ("mandatory_90_missing", "mandatory_90_uv_unsplit")
+
+
+def _mandatory_count(value: Any) -> tuple[int | None, str | None]:
+    """``(count, invalid_reason)`` for one mandatory-audit number (gate G6).
+
+    A missing / non-integer / NaN / Infinity count is never read as 0 — an
+    unevaluatable audit must not produce ``accepted`` (work plan §3 상태).
+    """
+    if isinstance(value, float) and (math.isnan(value) or math.isinf(value)):
+        return None, "mandatory_audit_invalid"
+    if isinstance(value, bool) or not isinstance(value, int):
+        return None, "mandatory_audit_missing"
+    return value, None
+
+
+def evaluate_auto_gate(
+    *,
+    mandatory: dict | None,
+    quality: dict | None,
+    correctness: dict | None,
+    constraints: dict | None,
+    reread_audit: dict | None = None,
+) -> dict:
+    """The automatic-mode required gate (work plan §3 상태, gates G1/G3/G6).
+
+    Returns ``{"valid": bool, "passed": bool, "failures": [code],
+    "invalid_reasons": [str]}``. ``valid`` is false when a required input is
+    missing or not evaluatable (which must never be read as a pass); ``failures``
+    holds the gates that were evaluated and failed. ``passed`` requires both.
+    """
+    failures: list[str] = []
+    invalid_reasons: list[str] = []
+
+    m = mandatory or {}
+    for key in _MANDATORY_AUDIT_KEYS:
+        count, reason = _mandatory_count(m.get(key))
+        if reason is not None:
+            if reason not in invalid_reasons:
+                invalid_reasons.append(reason)
+        elif count > 0:
+            failures.append(key)
+
+    if quality is None or quality.get("valid") is not True:
+        invalid_reasons.append("quality_metrics_invalid")
+    elif not quality.get("passed"):
+        failures.append("quality_profile_failed")
+
+    if correctness is None:
+        invalid_reasons.append("correctness_missing")
+    elif not correctness.get("passed"):
+        failures.append("correctness_failed")
+
+    if constraints is None:
+        invalid_reasons.append("constraints_missing")
+    elif not constraints.get("valid"):
+        failures.append("constraints_violated")
+
+    if reread_audit is not None and not reread_audit.get("passed"):
+        failures.append("reread_audit_failed")
+
+    valid = not invalid_reasons
+    return {
+        "valid": valid,
+        "passed": valid and not failures,
+        "failures": failures,
+        "invalid_reasons": invalid_reasons,
+    }
+
+
+def classify_generate_status_v2(
+    mode: str,
+    *,
+    integrity: dict | None = None,
+    quality: dict | None = None,
+    auto_gate: dict | None = None,
+) -> str:
+    """The terminal status for a completed run, per mode (work plan §3 상태).
+
+    ``preserve_existing`` delegates to :func:`classify_generate_status` (seam
+    integrity + layout quality); ``auto_generate`` accepts only when the
+    automatic gate is both evaluatable and passing. A missing input is always
+    ``needs_user_review``, never ``accepted``.
+    """
+    resolved = resolve_mode(mode)
+    if resolved == MODE_AUTO_GENERATE:
+        if auto_gate is None:
+            return STATUS_NEEDS_USER_REVIEW
+        if auto_gate.get("valid") and auto_gate.get("passed"):
+            return STATUS_ACCEPTED
+        return STATUS_NEEDS_USER_REVIEW
+    if integrity is None or quality is None:
+        return STATUS_NEEDS_USER_REVIEW
+    return classify_generate_status(integrity, quality)
+
+
+def finalize_acceptance(
+    status: str,
+    *,
+    artifacts_saved: bool,
+    handoff_ok: bool,
+    mesh_identity_ok: bool,
+) -> tuple[str, str | None]:
+    """Downgrade an ``accepted`` run that could not actually ship (gate G6).
+
+    Replacing the previously approved artifacts needs ``accepted`` AND a
+    successful required-artifact save AND a successful handoff AND an unchanged
+    mesh identity. Returns ``(status, reason|None)``.
+    """
+    if status != STATUS_ACCEPTED:
+        return status, None
+    if not artifacts_saved:
+        return STATUS_NEEDS_USER_REVIEW, "required_artifact_save_failed"
+    if not handoff_ok:
+        return STATUS_NEEDS_USER_REVIEW, "handoff_failed"
+    if not mesh_identity_ok:
+        return STATUS_NEEDS_USER_REVIEW, "mesh_identity_changed"
+    return STATUS_ACCEPTED, None
+
+
+# ---------------------------------------------------------------------------
 # Candidate summary normalization (plan §5)
 # ---------------------------------------------------------------------------
 def _normalize_candidate(cand: dict, *, average_scale: bool) -> dict:
@@ -750,6 +1051,19 @@ def build_generate_summary(
     selected_candidate_id: str | None = None,
     selected_uv_model: str | None = None,
     warnings: list[str] | None = None,
+    mode: str | None = None,
+    quality_profile: dict | None = None,
+    auto_gate: dict | None = None,
+    auto_constraints: dict | None = None,
+    distortion_v2: dict | None = None,
+    correctness: dict | None = None,
+    final_reread_audit: dict | None = None,
+    mesh_identity: dict | None = None,
+    termination: dict | None = None,
+    seam_length: dict | None = None,
+    mandatory_audit: dict | None = None,
+    artist_approval: dict | None = None,
+    acceptance_reason: str | None = None,
 ) -> dict:
     """Assemble ``uv_generate_summary.json`` (plan §4.1).
 
@@ -757,6 +1071,11 @@ def build_generate_summary(
     on an accepted run, or ``None`` when nothing shipped (plan §6).
     ``seam_source`` records whether the seam set came from the explicit MVP 2 spec
     or was derived from a UV island boundary (revision plan §2.3, §4).
+
+    The keyword-only automation blocks (``mode`` .. ``acceptance_reason``) are all
+    optional and default to ``None`` so existing callers are unchanged (work plan
+    §3, gates G6/G7). ``solver_accepted`` and ``artist_approved`` are reported
+    separately: a passing solver run is never an artist approval (gate G6/G7).
     """
     return {
         "schema_version": SCHEMA_VERSION,
@@ -774,6 +1093,21 @@ def build_generate_summary(
         "layout_optimization": layout_optimization,
         "artifacts": artifacts,
         "warnings": list(warnings or []),
+        "mode": mode or DEFAULT_MODE,
+        "quality_profile": quality_profile,
+        "auto_gate": auto_gate,
+        "auto_constraints": auto_constraints,
+        "distortion_v2": distortion_v2,
+        "correctness": correctness,
+        "final_reread_audit": final_reread_audit,
+        "mesh_identity": mesh_identity,
+        "termination": termination,
+        "seam_length": seam_length,
+        "mandatory_audit": mandatory_audit,
+        "solver_accepted": status == STATUS_ACCEPTED,
+        "artist_approved": bool(artist_approval and artist_approval.get("approved")),
+        "artist_approval": artist_approval,
+        "acceptance_reason": acceptance_reason,
     }
 
 
