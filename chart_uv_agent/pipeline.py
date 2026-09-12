@@ -107,7 +107,9 @@ def _resolve_budget(profile, budget=None, *, seed=None) -> dict:
 
 
 def _termination_block(records, *, budget: dict, elapsed: float, passed: bool,
-                       exhausted_rounds: bool, candidate_count: int | None = None) -> dict:
+                       exhausted_rounds: bool, candidate_count: int | None = None,
+                       island_count: int | None = None,
+                       island_cap: int | None = None) -> dict:
     """Roll the per-round :func:`run_refinement` terminations up into ONE explicit
     termination for the whole pipeline (G5: 종료 이유 + 실제 사용량 기록).
 
@@ -124,6 +126,12 @@ def _termination_block(records, *, budget: dict, elapsed: float, passed: bool,
     elif "time_budget" in reasons:
         reason = "time_budget"
     elif "island_cap" in reasons:
+        reason = "island_cap"
+    elif (evaluated == 0 and island_count is not None and island_cap is not None
+          and int(island_count) >= int(island_cap)):
+        # The island cap was already reached before any candidate could be proposed, so the
+        # refinement loop never ran. The honest reason is the cap, not "max_rounds" and not
+        # the catch-all "no_improving_candidate" (G5: 종료 이유 정확성).
         reason = "island_cap"
     elif exhausted_rounds:
         reason = "max_rounds"
@@ -170,7 +178,8 @@ def _v2_result_block(obj, mesh: MeshGraph, final_seams: set[int], *, profile, re
                      constraints, forbidden: set[int], mandatory: set[int],
                      distortion_seams: set[int], candidate_history, termination_records,
                      budget: dict, elapsed: float, gate,
-                     exhausted_rounds: bool) -> tuple[dict, dict]:
+                     exhausted_rounds: bool,
+                     island_cap: int | None = None) -> tuple[dict, dict]:
     """Final v2 measurement of the SHIPPED UV plus the G1/G2/G4/G5 report blocks.
 
     Measures the layout already on ``obj`` (never unwraps), so the numbers describe exactly
@@ -199,7 +208,9 @@ def _v2_result_block(obj, mesh: MeshGraph, final_seams: set[int], *, profile, re
         "termination": _termination_block(termination_records, budget=budget,
                                           elapsed=elapsed, passed=passed,
                                           exhausted_rounds=exhausted_rounds,
-                                          candidate_count=len(candidate_history or ())),
+                                          candidate_count=len(candidate_history or ()),
+                                          island_count=len(flood_charts(mesh, final_seams)),
+                                          island_cap=island_cap),
         "seam_length": seam_length_report(mesh, final_seams, mandatory=mandatory,
                                           user=constraints.locked,
                                           distortion_seams=distortion_seams),
@@ -674,8 +685,12 @@ def run_chart_uv(obj, mesh: MeshGraph, *, config: ChartGateConfig | None = None,
         if use_refinement_loop and not changed:
             v2_needed = not _round_v2()["passed"]
             rec["v2_passed"] = not v2_needed
+        # The cap that actually applies is the STRICTER of the gate cap and the refinement
+        # budget's ``island_cap`` — refining past the budget cap would produce islands the
+        # refinement loop itself would refuse (G5).
+        refine_island_cap = min(int(config.island_count_max), int(budget["island_cap"]))
         if use_refinement_loop and not changed and (global_over or worst_over or v2_needed) \
-                and len(charts) < config.island_count_max:
+                and len(charts) < refine_island_cap:
             before_seams = set(seams)
             ref = refinement_loop.run_refinement(
                 obj, mesh, seams, constraints=constraints, profile=profile,
@@ -693,6 +708,12 @@ def run_chart_uv(obj, mesh: MeshGraph, *, config: ChartGateConfig | None = None,
                 rec["refinement_reason"] = ref["termination"]["reason"]
             else:
                 rec["refinement_reason"] = ref["termination"]["reason"]
+        elif use_refinement_loop and not changed and (global_over or worst_over or v2_needed) \
+                and len(charts) >= refine_island_cap:
+            # Refinement was skipped because the island cap is already reached — recorded so
+            # the round history says WHY nothing was refined (G5).
+            if not rec.get("reason"):
+                rec["reason"] = "island_cap_reached"
 
         if not use_refinement_loop and not changed and (global_over or worst_over) \
                 and len(charts) < config.island_count_max and rnd < max_rounds - 1:
@@ -866,7 +887,8 @@ def run_chart_uv(obj, mesh: MeshGraph, *, config: ChartGateConfig | None = None,
         forbidden=forbidden, mandatory=mandatory, distortion_seams=distortion_seams,
         candidate_history=candidate_history, termination_records=termination_records,
         budget=budget, elapsed=time.monotonic() - started_at, gate=gate,
-        exhausted_rounds=rounds_exhausted)
+        exhausted_rounds=rounds_exhausted,
+        island_cap=min(int(config.island_count_max), int(budget["island_cap"])))
     result.update(v2_block)
     # G1 (topology/입력): the input-defect diagnosis ships with every automatic result.
     result["input_diagnostics"] = _input_diagnostics(mesh, v2_block.get("distortion_v2"))
@@ -1124,7 +1146,8 @@ def _run_user_seam_uv(obj, mesh: MeshGraph, spec, *, config: ChartGateConfig,
         forbidden=forbidden, mandatory=mandatory, distortion_seams=distortion_seams,
         candidate_history=candidate_history, termination_records=termination_records,
         budget=budget, elapsed=time.monotonic() - started_at, gate=gate,
-        exhausted_rounds=False)
+        exhausted_rounds=False,
+        island_cap=min(int(config.island_count_max), int(budget["island_cap"])))
     result.update(v2_block)
     # Same G1 input-defect diagnosis as the no-spec path.
     result["input_diagnostics"] = _input_diagnostics(mesh, v2_block.get("distortion_v2"))

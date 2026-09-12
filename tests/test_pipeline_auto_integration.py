@@ -296,3 +296,15 @@ def test_input_diagnostics_flags_a_zero_area_face(monkeypatch):
 
     assert diag["zero_area_face_count"] >= 1, diag
     assert diag["ok"] is False, diag
+
+
+def test_island_cap_termination_reason(monkeypatch):
+    """G5: the island cap reached BEFORE any candidate could be evaluated must be reported
+    as ``island_cap``, never as ``max_rounds`` / ``no_improving_candidate``."""
+    mesh, _backend, obj = _sphere(monkeypatch)
+    result = run_chart_uv(obj, mesh, max_rounds=3,
+                          budget={"island_cap": 1, "max_candidates_per_round": 2})
+
+    termination = result["termination"]
+    assert termination["candidates_evaluated"] == 0, termination
+    assert termination["reason"] == "island_cap", termination
