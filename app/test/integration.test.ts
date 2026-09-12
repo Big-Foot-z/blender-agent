@@ -540,6 +540,27 @@ test('uv generate mode: auto_generate runs without a seam source and records the
   assert.equal(openProject(project.dir!).uv_generate_mode, 'auto_generate');
 });
 
+// Gate G2/G9: an imported UV-less low-poly project has no `selected_object`
+// (that is only written by the low-poly / UV review paths), so the workspace
+// sends an explicit object with the start request. The run must use it AND the
+// project must record it.
+test('uv generate: auto mode start persists an explicit objectName on a project without selected_object', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'uvproj-'));
+  const sourcePath = makeFakeSource();
+  const project = createProject({ root, name: 'uv_generate_no_selected', sourcePath });
+  assert.equal(project.selected_object, null, 'imported project has no selected object');
+  setUvGenerateMode(project.dir!, 'auto_generate');
+  const runner = new UvGenerateRunner({ blenderPath: null, workerRoot: workerRoot(), mock: true });
+
+  const started = runner.start(project.id, project.dir!, { objectName: 'Fixture' });
+  assert.equal(started.mode, 'auto_generate');
+  const job = JSON.parse(
+    readFileSync(join(project.dir!, 'runs', started.run_id, 'job.json'), 'utf-8'),
+  );
+  assert.equal(job.object_name, 'Fixture');
+  assert.equal(openProject(project.dir!).selected_object, 'Fixture');
+});
+
 test('uv generate mode: contradictory raw flags are rejected before a run directory exists', async () => {
   const { project, objectName } = seedSeamSpecProject('uv_generate_mode_conflict');
   const runner = new UvGenerateRunner({ blenderPath: null, workerRoot: workerRoot(), mock: true });

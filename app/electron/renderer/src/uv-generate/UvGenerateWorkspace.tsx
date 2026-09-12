@@ -19,6 +19,7 @@ import type {
   DistortionIslandRow,
   GenerateMetrics,
   GenerateUvOptions,
+  MeshObjectSummary,
   Project,
   SeamIntegrity,
   SeamOverlayEdge,
@@ -96,6 +97,12 @@ export function UvGenerateWorkspace(props: {
     ...MODE_GENERATE_OPTIONS[DEFAULT_UV_GENERATE_MODE],
   });
   const [selectedEdgeId, setSelectedEdgeId] = useState<number | null>(null);
+  // Gate G2/G9: a project imported straight from a UV-less low-poly has no
+  // `selected_object` yet (that is only written by the low-poly / UV review
+  // paths), so the object is picked here and sent with the start request.
+  const [objectName, setObjectName] = useState<string>(project?.selected_object ?? '');
+  const [objectChoices, setObjectChoices] = useState<MeshObjectSummary[]>([]);
+  const [objectListFailed, setObjectListFailed] = useState(false);
   const [feedbackForm, setFeedbackForm] = useState<FeedbackForm>(EMPTY_FEEDBACK);
   const [savedFeedback, setSavedFeedback] = useState<UvFeedback | null>(null);
   const [reviewer, setReviewer] = useState('');
@@ -113,7 +120,40 @@ export function UvGenerateWorkspace(props: {
     setOptions({ ...MODE_GENERATE_OPTIONS[m] });
     setSelectedEdgeId(null);
     setRejectReason('');
+    setObjectName(project?.selected_object ?? '');
+    setObjectChoices([]);
+    setObjectListFailed(false);
   }, [project?.id]);
+
+  // Gate G2/G9: with no `selected_object` recorded, ask the worker for the mesh
+  // object list so the left panel can offer a choice (default: the first one)
+  // instead of showing "—" and blocking Generate. A failure is a short panel
+  // hint, not a banner — the project is still usable.
+  useEffect(() => {
+    let cancelled = false;
+    if (!project) return;
+    if (project.selected_object) {
+      setObjectName(project.selected_object);
+      return;
+    }
+    window.api
+      .modelInspect({ projectId: project.id })
+      .then((res) => {
+        if (cancelled) return;
+        const objects = res.status === 'accepted' ? res.objects ?? [] : [];
+        setObjectChoices(objects);
+        setObjectListFailed(objects.length === 0);
+        if (objects.length) setObjectName((cur) => cur || objects[0].name);
+      })
+      .catch(() => {
+        if (cancelled) return;
+        setObjectChoices([]);
+        setObjectListFailed(true);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [project?.id, project?.selected_object]);
 
   // Load the saved reviewer feedback so the form opens pre-filled (gate G7).
   useEffect(() => {
@@ -211,6 +251,7 @@ export function UvGenerateWorkspace(props: {
       if (!checkModeRequest()) return;
       const v = await window.api.uvGenerateValidateInput({ projectId: project.id, mode });
       setValidation(v);
+      if (!objectName && v.object_name) setObjectName(v.object_name);
       if (!v.ready) {
         setBanner({
           kind: 'error',
@@ -246,7 +287,9 @@ export function UvGenerateWorkspace(props: {
         // main; surface the reason verbatim instead of a generic failure.
         ({ run_id } = await window.api.uvGenerateStart({
           projectId: project.id,
-          objectName: v.object_name ?? project.selected_object ?? undefined,
+          // The locally chosen object wins: `validate` reports null for a
+          // project that has no `selected_object` recorded yet (gate G2/G9).
+          objectName: objectName || v.object_name || undefined,
           options,
           mode,
         }));
@@ -348,7 +391,7 @@ export function UvGenerateWorkspace(props: {
   const canGenerate =
     !!project &&
     hasModel &&
-    !!project.selected_object &&
+    !!objectName &&
     (mode === UvGenerateModeValues.AutoGenerate || hasSeamSource);
 
   return (
@@ -368,7 +411,16 @@ export function UvGenerateWorkspace(props: {
       <VerdictBanner summary={summary} status={status} project={project} runId={runId} />
 
       <div className="body">
-        <GenerateLeftPanel project={project} validation={validation} activeRunId={runId} onSelectRun={setRunId} />
+        <GenerateLeftPanel
+          project={project}
+          validation={validation}
+          activeRunId={runId}
+          onSelectRun={setRunId}
+          objectName={objectName}
+          objectChoices={objectChoices}
+          objectListFailed={objectListFailed}
+          onSelectObject={setObjectName}
+        />
 
         <main className="center uv-center">
           <GenerateCenter
@@ -502,10 +554,18 @@ function GenerateLeftPanel(props: {
   validation: ValidateGenerateInput | null;
   activeRunId: string | null;
   onSelectRun: (id: string) => void;
+  objectName: string;
+  objectChoices: MeshObjectSummary[];
+  objectListFailed: boolean;
+  onSelectObject: (name: string) => void;
 }): JSX.Element {
   const t = useT();
   const { project, validation } = props;
   const runs = project?.uv_generate_runs ?? [];
+  // The working model falls back to `source_model` in main (resolveWorkingModel),
+  // so the panel must show that same fact instead of "—" (gate G2/G9).
+  const workingModel = project?.working_model ?? project?.working_model_fbx ?? null;
+  const shownModel = workingModel ?? project?.source_model ?? null;
   return (
     <aside className="left">
       <section>
@@ -513,7 +573,26 @@ function GenerateLeftPanel(props: {
         {project ? (
           <div className="kv">
             <div>{project.name}</div>
-            <div className="small">{t('common.objectRow')}: <code>{project.selected_object ?? '—'}</code></div>
+            <div className="small">
+              {t('common.objectRow')}:{' '}
+              {props.objectChoices.length ? (
+                <select
+                  value={props.objectName}
+                  onChange={(e) => props.onSelectObject(e.target.value)}
+                >
+                  {props.objectChoices.map((o) => (
+                    <option key={o.name} value={o.name}>
+                      {o.name}
+                    </option>
+                  ))}
+                </select>
+              ) : (
+                <code>{props.objectName || '—'}</code>
+              )}
+            </div>
+            {!props.objectName && props.objectListFailed && (
+              <div className="muted small">{t('generate.objectListFailed')}</div>
+            )}
           </div>
         ) : (
           <div className="muted">{t('common.noProjectOpen')}</div>
@@ -523,7 +602,8 @@ function GenerateLeftPanel(props: {
       <section>
         <h3>{t('generate.workingModel')}</h3>
         <div className="small">
-          <code>{project?.working_model ?? project?.working_model_fbx ?? '—'}</code>
+          <code>{shownModel ?? '—'}</code>
+          {!workingModel && shownModel && <span className="tag">{t('generate.tag.source')}</span>}
         </div>
       </section>
 

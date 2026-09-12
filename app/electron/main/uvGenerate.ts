@@ -52,6 +52,7 @@ import {
   resolveProjectMode,
   resolveWorkingModel,
   setUvGenerateMode,
+  writeProject,
   uvFeedbackPath,
   uvWorkDir,
   DERIVED_SEAM_SPEC_REL,
@@ -212,6 +213,13 @@ export class UvGenerateRunner {
     const mode = validation.mode as UvGenerateMode;
     const { abs: modelAbs, rel: modelRel } = resolveWorkingModel(project);
     const objectName = input.objectName ?? project.selected_object ?? '';
+    // Gate G2/G9: a project imported straight from a UV-less low-poly has no
+    // `selected_object` yet. An explicit object travels with the run, so record
+    // it on the project too — the run + manifest must agree.
+    if (input.objectName && project.selected_object !== input.objectName) {
+      project.selected_object = input.objectName;
+      writeProject(projectDir, project);
+    }
     // Seam source: an explicit spec FILE wins; else the worker derives one from
     // the selected UV layer boundary (revision plan §1, §4.4). `seam_spec` is null
     // when no usable spec file exists so the worker falls back to `uv_layer`.
