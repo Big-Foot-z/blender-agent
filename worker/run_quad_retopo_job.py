@@ -29,9 +29,13 @@ from __future__ import annotations
 
 import json
 import os
-import resource
 import sys
 import time
+
+try:
+    import resource  # noqa: F401
+except ImportError:  # Windows has no resource module
+    resource = None
 
 PHASES = ["P1", "P2", "P3", "P4", "P5", "P6"]
 
@@ -65,6 +69,8 @@ def _ensure_importable() -> None:
 
 
 def _peak_rss_gb() -> float:
+    if resource is None:  # Windows: no getrusage, report 0.0
+        return 0.0
     rss = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
     if sys.platform == "darwin" or rss > (1 << 40):
         return round(rss / (1024 ** 3), 2)
