@@ -367,12 +367,18 @@ export interface RendererApi {
     edgeCount?: number | null;
   }): Promise<{ status: string; path: string; validation: SeamValidation }>;
   // --- MVP 3 generate + optimize (plan §11 Session E IPC API) ---
-  uvGenerateValidateInput(input: { projectId: string }): Promise<ValidateGenerateInput>;
+  uvGenerateValidateInput(input: {
+    projectId: string;
+    mode?: UvGenerateMode;
+  }): Promise<ValidateGenerateInput>;
+  /** Persist the project's execution mode (work plan §3; gate G2). */
+  uvGenerateSetMode(input: { projectId: string; mode: UvGenerateMode }): Promise<Project>;
   uvGenerateStart(input: {
     projectId: string;
     objectName?: string;
     options?: GenerateUvOptions;
-  }): Promise<{ run_id: string }>;
+    mode?: UvGenerateMode;
+  }): Promise<{ run_id: string; mode: UvGenerateMode }>;
   uvGenerateCancel(input: { projectId: string; runId: string }): Promise<{ status: string }>;
   uvGenerateGetRun(input: { projectId: string; runId: string }): Promise<UvGenerateRunView>;
   uvGenerateGetCandidateSummary(input: {

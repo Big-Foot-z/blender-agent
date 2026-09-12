@@ -28,6 +28,7 @@ const api: RendererApi = {
   seamValidateSpec: (input) => ipcRenderer.invoke(SeamIpc.ValidateSpec, input),
   seamSaveSpec: (input) => ipcRenderer.invoke(SeamIpc.SaveSpec, input),
   uvGenerateValidateInput: (input) => ipcRenderer.invoke(UvGenerateIpc.ValidateInput, input),
+  uvGenerateSetMode: (input) => ipcRenderer.invoke(UvGenerateIpc.SetMode, input),
   uvGenerateStart: (input) => ipcRenderer.invoke(UvGenerateIpc.Start, input),
   uvGenerateCancel: (input) => ipcRenderer.invoke(UvGenerateIpc.Cancel, input),
   uvGenerateGetRun: (input) => ipcRenderer.invoke(UvGenerateIpc.GetRun, input),

@@ -131,6 +131,8 @@ export interface GenerateUvOptions {
   max_candidates_per_round?: number | null;
   time_budget_s?: number | null;
   island_cap?: number | null;
+  /** Tests only: force the mock runner into a terminal status (gate G6). */
+  mock_status?: string;
 }
 
 export const DEFAULT_QUALITY_PROFILE = 'engineering_v0';
@@ -297,6 +299,8 @@ export const UvGenerateIpc = {
   Cancel: 'uvGenerate:cancel',
   GetRun: 'uvGenerate:getRun',
   GetCandidateSummary: 'uvGenerate:getCandidateSummary',
+  /** Persist the project's execution mode (work plan §3; gate G2). */
+  SetMode: 'uvGenerate:setMode',
 } as const;
 
 // --- Summary shapes (plan §4.1) -------------------------------------------
@@ -659,6 +663,8 @@ export interface ValidateGenerateInput {
   seam_source: SeamSourceKind;
   /** The selected/active UV layer used for the derived fallback (revision plan §4.4). */
   selected_uv_layer: string | null;
+  /** The mode the readiness was evaluated for (work plan §3; gate G2). */
+  mode?: UvGenerateMode;
   issues: ValidateGenerateIssue[];
 }
 

@@ -21,6 +21,7 @@ import {
   type ReviewOptions,
   type RollbackTargetType,
   type SeamSpec,
+  type UvGenerateMode,
 } from '@shared/contracts';
 import {
   approveLowpoly,
@@ -40,6 +41,7 @@ import {
   resolveWorkingModel,
   rollbackProjectState,
   setSelectedUvLayer,
+  setUvGenerateMode,
   writeProject,
 } from './project-service';
 import { WorkerRunner } from './worker-runner';
@@ -381,13 +383,30 @@ export function registerIpc(): void {
   );
 
   // --- MVP 3 generate + optimize (plan §11 Session E IPC API) -----------
-  ipcMain.handle(UvGenerateIpc.ValidateInput, (_e, input: { projectId: string }) =>
-    makeUvGenerateRunner().validateInput(dirForProject(input.projectId)),
+  ipcMain.handle(
+    UvGenerateIpc.ValidateInput,
+    (_e, input: { projectId: string; mode?: UvGenerateMode }) =>
+      makeUvGenerateRunner().validateInput(dirForProject(input.projectId), input.mode),
+  );
+
+  // Gate G2: the user's explicit mode choice is persisted on the project.
+  ipcMain.handle(
+    UvGenerateIpc.SetMode,
+    (_e, input: { projectId: string; mode: UvGenerateMode }) =>
+      setUvGenerateMode(dirForProject(input.projectId), input.mode),
   );
 
   ipcMain.handle(
     UvGenerateIpc.Start,
-    (_e, input: { projectId: string; objectName?: string; options?: GenerateUvOptions }) => {
+    (
+      _e,
+      input: {
+        projectId: string;
+        objectName?: string;
+        options?: GenerateUvOptions;
+        mode?: UvGenerateMode;
+      },
+    ) => {
       const dir = dirForProject(input.projectId);
       // Persist the chosen object so the run + manifest agree (plan §9).
       if (input.objectName) {
@@ -400,6 +419,7 @@ export function registerIpc(): void {
       return makeUvGenerateRunner().start(input.projectId, dir, {
         objectName: input.objectName,
         options: input.options,
+        mode: input.mode,
       });
     },
   );

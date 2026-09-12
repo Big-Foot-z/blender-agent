@@ -10,7 +10,8 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, writeFileSync, existsSync, readFileSync } from 'node:fs';
+import { mkdtempSync, writeFileSync, existsSync, readFileSync, readdirSync } from 'node:fs';
+import { createHash } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
@@ -29,6 +30,7 @@ import {
   resolveWorkingModel,
   setActiveUserSeamSpec,
   setSelectedUvLayer,
+  setUvGenerateMode,
   seamsDir,
   absSourcePath,
 } from '../electron/main/project-service';
@@ -447,6 +449,172 @@ test('uv generate: UV-boundary fallback derives a seam source when no spec exist
   const reopened = openProject(project.dir!);
   assert.equal(reopened.active_user_seam_spec ?? null, null, 'derived run never sets active_user_seam_spec');
   assert.equal(reopened.latest_derived_seam_spec, join('work', 'seams', 'derived_from_uv_boundary.json'));
+});
+
+// --- UV automation: execution modes (work plan section 3; gates G2/G6) -----
+function sha256File(path: string): string {
+  return createHash('sha256').update(readFileSync(path)).digest('hex');
+}
+
+async function waitForTerminal(dir: string, runId: string) {
+  let view = getUvGenerateRunView(dir, runId);
+  const terminal = ['accepted', 'needs_user_review', 'needs_input', 'failed', 'cancelled'];
+  for (let i = 0; i < 50 && !terminal.includes(view.status?.status ?? ''); i++) {
+    await sleep(20);
+    view = getUvGenerateRunView(dir, runId);
+  }
+  return view;
+}
+
+test('uv generate mode: legacy project without mode resolves to preserve_existing and job carries it', async () => {
+  const { project, objectName } = seedSeamSpecProject('uv_generate_mode_legacy');
+  // The seeded project has NO uv_generate_mode - a legacy manifest (gate G2).
+  assert.equal(openProject(project.dir!).uv_generate_mode ?? null, null);
+  const runner = new UvGenerateRunner({ blenderPath: null, workerRoot: workerRoot(), mock: true });
+
+  const started = runner.start(project.id, project.dir!, { objectName });
+  assert.equal(started.mode, 'preserve_existing');
+  const view = await waitForTerminal(project.dir!, started.run_id);
+  assert.equal(view.status?.status, 'accepted');
+
+  const job = JSON.parse(
+    readFileSync(join(project.dir!, 'runs', started.run_id, 'job.json'), 'utf-8'),
+  );
+  assert.equal(job.mode, 'preserve_existing');
+  assert.equal(job.options.mode, 'preserve_existing');
+  assert.equal(job.options.auto_refine_user_seams, false);
+  assert.equal(view.status?.input.mode, 'preserve_existing');
+  assert.equal(view.summary!.mode, 'preserve_existing');
+  assert.equal(view.summary!.solver_accepted, true);
+  assert.equal(view.summary!.artist_approved, false);
+  assert.equal(view.summary!.mandatory_audit?.reported_only, true);
+  assert.equal(openProject(project.dir!).uv_generate_mode, 'preserve_existing');
+});
+
+test('uv generate mode: auto_generate runs without a seam source and records the mode end to end', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'uvproj-'));
+  const sourcePath = makeFakeSource();
+  const project = createProject({ root, name: 'uv_generate_auto', sourcePath, role: 'lowpoly' });
+  const objectName = 'SM_Test_Pottery_a_02';
+  setUvGenerateMode(project.dir!, 'auto_generate');
+  const runner = new UvGenerateRunner({ blenderPath: null, workerRoot: workerRoot(), mock: true });
+
+  // 1. validate: no spec and no UV layer is READY in auto mode (gate G2).
+  const v = runner.validateInput(project.dir!);
+  assert.equal(v.mode, 'auto_generate');
+  assert.equal(v.ready, true, 'auto_generate needs no seam source');
+  assert.equal(v.seam_source, 'missing');
+  assert.equal(
+    v.issues.some((i) => i.code === 'missing_seam_source'),
+    false,
+  );
+
+  // 2. start: no needs_input, an accepted automatic run instead.
+  const started = runner.start(project.id, project.dir!, { objectName });
+  assert.equal(started.mode, 'auto_generate');
+  const view = await waitForTerminal(project.dir!, started.run_id);
+  assert.equal(view.status?.status, 'accepted');
+  const job = JSON.parse(
+    readFileSync(join(project.dir!, 'runs', started.run_id, 'job.json'), 'utf-8'),
+  );
+  assert.equal(job.mode, 'auto_generate');
+  assert.equal(job.options.mode, 'auto_generate');
+  assert.equal(job.options.auto_refine_user_seams, true);
+
+  const summary = view.summary!;
+  assert.equal(summary.mode, 'auto_generate');
+  assert.equal(summary.auto_gate?.passed, true);
+  assert.equal(summary.auto_gate?.valid, true);
+  assert.equal(summary.solver_accepted, true);
+  assert.equal(summary.artist_approved, false, 'solver accepted is not artist approval');
+  assert.equal(summary.quality_profile?.profile_id, 'engineering_v0');
+  assert.equal(summary.distortion_v2?.metric_version, 2);
+  assert.equal(summary.correctness?.passed, true);
+  assert.equal(summary.termination?.reason, 'quality_passed');
+  assert.equal(summary.mesh_identity?.unchanged, true);
+  assert.ok(existsSync(join(project.dir!, 'work', 'uv', 'selected_uv.blend')));
+  assert.equal(openProject(project.dir!).uv_generate_mode, 'auto_generate');
+});
+
+test('uv generate mode: contradictory raw flags are rejected before a run directory exists', async () => {
+  const { project, objectName } = seedSeamSpecProject('uv_generate_mode_conflict');
+  const runner = new UvGenerateRunner({ blenderPath: null, workerRoot: workerRoot(), mock: true });
+  const runsRoot = join(project.dir!, 'runs');
+  const before = existsSync(runsRoot) ? readdirSync(runsRoot).length : 0;
+
+  assert.throws(
+    () =>
+      runner.start(project.id, project.dir!, {
+        objectName,
+        mode: 'auto_generate',
+        options: { enforce_user_mandatory: false },
+      }),
+    (err: unknown) => (err as { code?: string }).code === 'strict_flag_contradicts_auto',
+  );
+  assert.throws(
+    () =>
+      runner.start(project.id, project.dir!, {
+        objectName,
+        mode: 'preserve_existing',
+        options: { auto_refine_user_seams: true },
+      }),
+    (err: unknown) => (err as { code?: string }).code === 'strict_flag_contradicts_preserve',
+  );
+
+  const after = existsSync(runsRoot) ? readdirSync(runsRoot).length : 0;
+  assert.equal(after, before, 'a rejected request creates no run directory');
+});
+
+test('uv generate G6: needs_user_review / failed / cancel never replace the prior approved selected UV', async () => {
+  const { project, objectName } = seedSeamSpecProject('uv_generate_g6');
+  const runner = new UvGenerateRunner({ blenderPath: null, workerRoot: workerRoot(), mock: true });
+
+  // 1. an accepted run ships the approved selected UV.
+  const first = runner.start(project.id, project.dir!, { objectName });
+  const firstView = await waitForTerminal(project.dir!, first.run_id);
+  assert.equal(firstView.status?.status, 'accepted');
+  const approvedPath = join(project.dir!, 'work', 'uv', 'selected_uv.blend');
+  const approvedHash = sha256File(approvedPath);
+  const approvedPointer = openProject(project.dir!).selected_uv_model;
+
+  // 2. needs_user_review: no handoff, no pointer change (gate G6).
+  const review = runner.start(project.id, project.dir!, {
+    objectName,
+    options: { mock_status: 'needs_user_review' },
+  });
+  const reviewView = await waitForTerminal(project.dir!, review.run_id);
+  assert.equal(reviewView.status?.status, 'needs_user_review');
+  assert.equal(reviewView.summary!.selected_uv_model, null);
+  assert.equal(sha256File(approvedPath), approvedHash, 'approved file untouched');
+  let reopened = openProject(project.dir!);
+  assert.equal(reopened.selected_uv_model, approvedPointer);
+  assert.equal(reopened.latest_uv_generate_run_id, review.run_id);
+
+  // 3. failed: same guarantee.
+  const failed = runner.start(project.id, project.dir!, {
+    objectName,
+    options: { mock_status: 'failed' },
+  });
+  const failedView = await waitForTerminal(project.dir!, failed.run_id);
+  assert.equal(failedView.status?.status, 'failed');
+  assert.equal(failedView.summary!.selected_uv_model, null);
+  assert.equal(sha256File(approvedPath), approvedHash, 'approved file untouched');
+  reopened = openProject(project.dir!);
+  assert.equal(reopened.selected_uv_model, approvedPointer);
+  assert.equal(reopened.latest_uv_generate_run_id, failed.run_id);
+
+  // 4. cancel: the prior approved file survives regardless of the race with the
+  //    10ms mock; only the file hash is asserted unconditionally.
+  const cancelled = runner.start(project.id, project.dir!, { objectName });
+  runner.cancel(project.dir!, cancelled.run_id);
+  await sleep(40);
+  const cancelView = getUvGenerateRunView(project.dir!, cancelled.run_id);
+  assert.equal(sha256File(approvedPath), approvedHash, 'approved file untouched after cancel');
+  if (cancelView.status?.status === 'cancelled') {
+    assert.ok(cancelView.status.finished_at, 'a cancelled run records finished_at');
+  } else {
+    assert.equal(cancelView.status?.status, 'accepted');
+  }
 });
 
 // --- MVP 5: production export main-process flow (Session E/G acceptance) ----

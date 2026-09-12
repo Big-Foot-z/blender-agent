@@ -7,7 +7,7 @@
 
 import { randomUUID } from 'crypto';
 import { existsSync, mkdirSync, copyFileSync, readFileSync, writeFileSync, readdirSync } from 'fs';
-import { extname, join } from 'path';
+import { extname, isAbsolute, join } from 'path';
 import {
   SCHEMA_VERSION,
   type MeshRole,
@@ -40,6 +40,8 @@ import {
   type ListRollbackTargetsResult,
   type RollbackResult,
   SUPPORTED_EXPORT_FORMATS,
+  resolveGenerateMode,
+  type UvGenerateMode,
 } from '@shared/contracts';
 
 function nowIso(): string {
@@ -388,6 +390,22 @@ export function uvWorkDir(projectDir: string): string {
   return dir;
 }
 
+/**
+ * The project's execution mode (work plan §3; gate G2). A legacy project with no
+ * `uv_generate_mode` resolves to `preserve_existing`, so opening an old project
+ * never switches it to automatic cutting.
+ */
+export function resolveProjectMode(project: Project): UvGenerateMode {
+  return resolveGenerateMode(project.uv_generate_mode ?? null);
+}
+
+/** Persist the user's explicit execution-mode choice (work plan §3; gate G2). */
+export function setUvGenerateMode(projectDir: string, mode: UvGenerateMode): Project {
+  const project = readProject(projectDir);
+  project.uv_generate_mode = resolveGenerateMode(mode);
+  return writeProject(projectDir, project);
+}
+
 /** Append a generate run and point `latest_uv_generate_run_id` at it (plan §9). */
 export function registerUvGenerateRun(projectDir: string, runId: string): Project {
   const project = readProject(projectDir);
@@ -433,13 +451,23 @@ export function recordUvGenerateOutcome(projectDir: string, runId: string): stri
   const dir = runDir(projectDir, runId);
   const status = readJsonIfExists<UvGenerateStatusDoc>(join(dir, 'status.json'));
   if (!status) return null;
+  // Gate G6: ONLY an accepted run may move the approved pointers. A
+  // `needs_user_review` / `failed` / `cancelled` / `needs_input` run touches
+  // nothing, so the previously approved selected UV survives.
   if (status.status === 'accepted') {
     const summary = readJsonIfExists<UvGenerateSummary>(join(dir, 'uv_generate_summary.json'));
+    // Gate G6: the pointer is only swapped once the file it names actually
+    // exists on disk — a failed/partial save keeps the prior approved file.
     if (summary?.selected_uv_model) {
-      setSelectedUvModel(projectDir, {
-        selectedUvModel: summary.selected_uv_model,
-        selectedUvSummary: SELECTED_UV_SUMMARY_REL,
-      });
+      const selectedAbs = isAbsolute(summary.selected_uv_model)
+        ? summary.selected_uv_model
+        : join(projectDir, summary.selected_uv_model);
+      if (existsSync(selectedAbs)) {
+        setSelectedUvModel(projectDir, {
+          selectedUvModel: summary.selected_uv_model,
+          selectedUvSummary: SELECTED_UV_SUMMARY_REL,
+        });
+      }
     }
     // A derived run records its derived-spec pointer, but never replaces the
     // explicit `active_user_seam_spec` (revision plan §4.4).

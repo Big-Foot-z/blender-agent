@@ -27,8 +27,10 @@ import {
 import { dirname, isAbsolute, join } from 'path';
 import {
   UvGenerateCommand,
+  UvGenerateMode,
   UvGenerateRunStatus,
   mergeGenerateOptions,
+  validateModeRequest,
   DEFAULT_SEAM_SOURCE_POLICY,
   MISSING_SEAM_SOURCE_CODE,
   MISSING_SEAM_SOURCE_MESSAGE,
@@ -45,7 +47,9 @@ import {
   readProject,
   recordUvGenerateOutcome,
   registerUvGenerateRun,
+  resolveProjectMode,
   resolveWorkingModel,
+  setUvGenerateMode,
   uvWorkDir,
   DERIVED_SEAM_SPEC_REL,
   SELECTED_UV_BLEND_REL,
@@ -79,8 +83,10 @@ export class UvGenerateRunner {
 
   // --- validateInput (plan §8 "Validate Seam Spec") ----------------------
   /** Cheap pure-Node readiness check for a Generate run (plan §6 pre-flight). */
-  validateInput(projectDir: string): ValidateGenerateInput {
+  validateInput(projectDir: string, mode?: UvGenerateMode): ValidateGenerateInput {
     const project = readProject(projectDir);
+    // Gate G2: readiness is mode-dependent — `auto_generate` needs no seam source.
+    const resolvedMode = mode ?? resolveProjectMode(project);
     const issues: ValidateGenerateIssue[] = [];
 
     let modelRel: string | null = null;
@@ -140,7 +146,11 @@ export class UvGenerateRunner {
         seamSource = 'derived';
       } else {
         seamSource = 'missing';
-        issues.push({ code: MISSING_SEAM_SOURCE_CODE, message: MISSING_SEAM_SOURCE_MESSAGE });
+        // Gate G2: in `auto_generate` a missing seam source is NOT an issue — the
+        // solver cuts from scratch. The kind is still reported as `missing`.
+        if (resolvedMode !== UvGenerateMode.AutoGenerate) {
+          issues.push({ code: MISSING_SEAM_SOURCE_CODE, message: MISSING_SEAM_SOURCE_MESSAGE });
+        }
       }
     }
 
@@ -160,6 +170,7 @@ export class UvGenerateRunner {
       object_mismatch: objectMismatch,
       seam_source: seamSource,
       selected_uv_layer: selectedUvLayer,
+      mode: resolvedMode,
       issues,
     };
   }
@@ -169,9 +180,22 @@ export class UvGenerateRunner {
   start(
     projectId: string,
     projectDir: string,
-    input: { objectName?: string; options?: GenerateUvOptions },
-  ): { run_id: string } {
+    input: { objectName?: string; options?: GenerateUvOptions; mode?: UvGenerateMode },
+  ): { run_id: string; mode: UvGenerateMode } {
     const project = readProject(projectDir);
+    // Gate G2: the mode is decided (explicit argument > options.mode > project)
+    // and a self-contradicting flag combination is rejected BEFORE any run
+    // directory exists, so a rejected request leaves no run behind.
+    const requestedMode = input.mode ?? input.options?.mode ?? resolveProjectMode(project);
+    const validation = validateModeRequest(requestedMode, input.options);
+    if (!validation.ok) {
+      const first = validation.errors[0];
+      throw Object.assign(new Error(first.message), {
+        code: first.code,
+        errors: validation.errors,
+      });
+    }
+    const mode = validation.mode as UvGenerateMode;
     const { abs: modelAbs, rel: modelRel } = resolveWorkingModel(project);
     const objectName = input.objectName ?? project.selected_object ?? '';
     // Seam source: an explicit spec FILE wins; else the worker derives one from
@@ -185,6 +209,9 @@ export class UvGenerateRunner {
     const runId = newUvGenerateRunId();
     const dir = ensureRunDir(projectDir, runId);
     registerUvGenerateRun(projectDir, runId);
+    // The chosen mode is persisted on the project so UI -> IPC -> worker ->
+    // report all agree on one mode (gate G2).
+    setUvGenerateMode(projectDir, mode);
     uvWorkDir(projectDir); // ensure work/uv exists for the handoff copy
 
     const job = {
@@ -199,7 +226,8 @@ export class UvGenerateRunner {
       uv_layer: uvLayer,
       selected_uv_layer: uvLayer,
       seam_source_policy: DEFAULT_SEAM_SOURCE_POLICY,
-      options: mergeGenerateOptions(input.options),
+      mode,
+      options: mergeGenerateOptions(input.options, mode),
       out_dir: dir,
       selected_blend_out: join(projectDir, SELECTED_UV_BLEND_REL),
       selected_blend_out_rel: SELECTED_UV_BLEND_REL,
@@ -208,7 +236,7 @@ export class UvGenerateRunner {
       derived_seam_spec_out_rel: DERIVED_SEAM_SPEC_REL,
     };
     writeFileSync(join(dir, 'job.json'), JSON.stringify(job, null, 2));
-    writeQueuedStatus(dir, runId, modelRel, objectName, hasSpec ? specRel ?? '' : '');
+    writeQueuedStatus(dir, runId, modelRel, objectName, hasSpec ? specRel ?? '' : '', mode);
 
     const finish = () => {
       this.running.delete(runId);
@@ -225,22 +253,22 @@ export class UvGenerateRunner {
         try {
           mockGenerate(dir, runId, projectDir, job);
         } catch (err) {
-          writeFailedStatus(dir, runId, modelRel, objectName, specRel ?? '', String(err));
+          writeFailedStatus(dir, runId, modelRel, objectName, specRel ?? '', String(err), mode);
         }
         finish();
       }, 10);
-      return { run_id: runId };
+      return { run_id: runId, mode };
     }
 
     const child = this.run(
       this.cfg.blenderPath as string,
       this.blenderArgs(['--job', join(dir, 'job.json')]),
       dir,
-      (err) => writeFailedStatus(dir, runId, modelRel, objectName, specRel ?? '', String(err)),
+      (err) => writeFailedStatus(dir, runId, modelRel, objectName, specRel ?? '', String(err), mode),
       finish,
     );
     if (child) this.running.set(runId, child);
-    return { run_id: runId };
+    return { run_id: runId, mode };
   }
 
   /** Cancel a running generate job (plan §8 "cancel running job"). */
@@ -254,7 +282,14 @@ export class UvGenerateRunner {
     if (existsSync(join(dir, 'status.json'))) {
       try {
         const status = JSON.parse(readFileSync(join(dir, 'status.json'), 'utf-8'));
-        if (!['accepted', 'needs_user_review', 'failed'].includes(status.status)) {
+        // Gate G6: never overwrite a terminal status — a run that already
+        // finished (or already ended as needs_input/cancelled) keeps its verdict
+        // and the previously approved selected UV stays untouched.
+        if (
+          !['accepted', 'needs_user_review', 'failed', 'needs_input', 'cancelled'].includes(
+            status.status,
+          )
+        ) {
           status.status = UvGenerateRunStatus.Cancelled;
           status.finished_at = new Date().toISOString();
           writeFileSync(join(dir, 'status.json'), JSON.stringify(status, null, 2));
@@ -304,8 +339,14 @@ export class UvGenerateRunner {
 // ---------------------------------------------------------------------------
 // status.json helpers (plan §9)
 // ---------------------------------------------------------------------------
-function statusInput(modelRel: string, objectName: string, specRel: string): Record<string, unknown> {
-  return { model: modelRel, object_name: objectName, seam_spec: specRel };
+function statusInput(
+  modelRel: string,
+  objectName: string,
+  specRel: string,
+  mode?: UvGenerateMode,
+): Record<string, unknown> {
+  // Gate G2: the mode travels with the run record, not just the job.
+  return { model: modelRel, object_name: objectName, seam_spec: specRel, mode: mode ?? null };
 }
 
 function writeQueuedStatus(
@@ -314,6 +355,7 @@ function writeQueuedStatus(
   modelRel: string,
   objectName: string,
   specRel: string,
+  mode?: UvGenerateMode,
 ): void {
   writeFileSync(
     join(dir, 'status.json'),
@@ -325,7 +367,7 @@ function writeQueuedStatus(
         status: UvGenerateRunStatus.Queued,
         started_at: new Date().toISOString(),
         finished_at: null,
-        input: statusInput(modelRel, objectName, specRel),
+        input: statusInput(modelRel, objectName, specRel, mode),
         artifacts: {},
         error: null,
       },
@@ -342,6 +384,7 @@ function writeFailedStatus(
   objectName: string,
   specRel: string,
   message: string,
+  mode?: UvGenerateMode,
 ): void {
   writeFileSync(
     join(dir, 'status.json'),
@@ -353,7 +396,7 @@ function writeFailedStatus(
         status: UvGenerateRunStatus.Failed,
         started_at: new Date().toISOString(),
         finished_at: new Date().toISOString(),
-        input: statusInput(modelRel, objectName, specRel),
+        input: statusInput(modelRel, objectName, specRel, mode),
         artifacts: {},
         error: { code: 'spawn_failed', message },
       },
@@ -373,9 +416,17 @@ function mockGenerate(dir: string, runId: string, projectDir: string, job: any):
   const hasSpec = !!job.seam_spec;
   const uvLayer = job.uv_layer ?? job.selected_uv_layer ?? null;
   const policy = job.seam_source_policy ?? DEFAULT_SEAM_SOURCE_POLICY;
+  // Execution mode (work plan §3; gate G2). `auto_generate` cuts from scratch,
+  // so it never stops at `needs_input` for a missing seam source.
+  const mode: UvGenerateMode =
+    job.mode ?? job.options?.mode ?? UvGenerateMode.PreserveExisting;
+  const auto = mode === UvGenerateMode.AutoGenerate;
+  // Tests only (gate G6): force a non-accepted terminal status.
+  const mockStatus: string | null = job.options?.mock_status ?? null;
 
-  // No seam source at all -> needs_input (revision plan §1 case 3, §4.2).
-  if (!hasSpec && !uvLayer) {
+  // No seam source at all -> needs_input in preserve mode only
+  // (revision plan §1 case 3, §4.2; gate G2 auto exemption).
+  if (!auto && !hasSpec && !uvLayer) {
     writeFileSync(
       join(dir, 'seam_source_resolution.json'),
       JSON.stringify({ policy, kind: 'needs_input', seam_spec: null, uv_layer: null }, null, 2),
@@ -390,7 +441,7 @@ function mockGenerate(dir: string, runId: string, projectDir: string, job: any):
           status: UvGenerateRunStatus.NeedsInput,
           started_at: new Date().toISOString(),
           finished_at: new Date().toISOString(),
-          input: statusInput(job.model_rel ?? '', objectName, ''),
+          input: statusInput(job.model_rel ?? '', objectName, '', mode),
           artifacts: { seam_source_resolution: 'seam_source_resolution.json' },
           error: { code: MISSING_SEAM_SOURCE_CODE, message: MISSING_SEAM_SOURCE_MESSAGE },
         },
@@ -402,8 +453,12 @@ function mockGenerate(dir: string, runId: string, projectDir: string, job: any):
   }
 
   // Derived when there is no explicit spec file but a selected UV layer exists.
+  // In `auto_generate` with neither, the summary reports a null seam source.
   const derived = !hasSpec && !!uvLayer;
-  const seamSource = derived
+  const noSource = !hasSpec && !uvLayer;
+  const seamSource: Record<string, unknown> | null = noSource
+    ? null
+    : derived
     ? {
         type: SeamSourceType.UvBoundaryDerived,
         path: job.derived_seam_spec_out_rel ?? DERIVED_SEAM_SPEC_REL,
@@ -418,6 +473,7 @@ function mockGenerate(dir: string, runId: string, projectDir: string, job: any):
         user_confirmed: true,
         derived: false,
       };
+  const specSeamCount = readMockSeamCount(job.seam_spec) ?? 0;
   const userSeamCount = (derived ? null : readMockSeamCount(job.seam_spec)) ?? 1230;
 
   // A derived run writes its spec separately (revision plan §4.1) — canonical
@@ -444,9 +500,9 @@ function mockGenerate(dir: string, runId: string, projectDir: string, job: any):
     JSON.stringify(
       {
         policy,
-        kind: seamSource.type,
+        kind: seamSource ? seamSource.type : 'auto_generate_no_source',
         uv_layer: derived ? uvLayer : null,
-        seam_spec: derived ? null : seamSource.path,
+        seam_spec: derived || !seamSource ? null : seamSource.path,
       },
       null,
       2,
@@ -579,17 +635,26 @@ function mockGenerate(dir: string, runId: string, projectDir: string, job: any):
   };
   if (derived) artifacts.derived_seam_spec = 'derived_from_uv_boundary.json';
 
+  // Gate G6: a forced non-accepted mock run produces NO handoff and no pointer.
+  const runStatus: string =
+    mockStatus === 'needs_user_review'
+      ? UvGenerateRunStatus.NeedsUserReview
+      : mockStatus === 'failed'
+      ? UvGenerateRunStatus.Failed
+      : UvGenerateRunStatus.Accepted;
+  const shipped = runStatus === UvGenerateRunStatus.Accepted;
+
   const summary = {
     schema_version: 1,
     run_id: runId,
     command: UvGenerateCommand.GenerateUvFromSeams,
-    status: UvGenerateRunStatus.Accepted,
+    status: runStatus,
     model: job.model_rel ?? null,
     object_name: objectName,
-    seam_spec: derived ? seamSource.path : (job.seam_spec_rel ?? null),
+    seam_spec: derived ? seamSource!.path : (job.seam_spec_rel ?? null),
     seam_source: seamSource,
     selected_candidate_id: 'slim_concave_m002',
-    selected_uv_model: SELECTED_UV_BLEND_REL,
+    selected_uv_model: shipped ? SELECTED_UV_BLEND_REL : null,
     metrics: selectedMetrics,
     seam_integrity: {
       user_seam_count: userSeamCount,
@@ -614,16 +679,25 @@ function mockGenerate(dir: string, runId: string, projectDir: string, job: any):
     },
     artifacts,
     warnings: ['mock generate: not a real Blender run'],
+    // --- Automation report blocks (work plan §3; gates G2/G6) --------------
+    mode,
+    solver_accepted: shipped,
+    artist_approved: false,
+    ...(auto ? autoReportBlocks(specSeamCount) : preserveReportBlocks()),
   };
   writeFileSync(join(dir, 'uv_generate_summary.json'), JSON.stringify(summary, null, 2));
 
-  // Handoff copies (an accepted run ships to work/uv, plan §6, §9).
-  const uvDir = uvWorkDir(projectDir);
-  writeFileSync(join(uvDir, 'selected_uv.blend'), 'MOCK-BLEND');
-  writeFileSync(
-    join(projectDir, SELECTED_UV_SUMMARY_REL),
-    JSON.stringify({ ...summary, source_run_id: runId }, null, 2),
-  );
+  // Handoff copies (an accepted run ships to work/uv, plan §6, §9). Gate G6: a
+  // needs_user_review / failed run copies NOTHING, so the prior approved file
+  // stays byte-identical.
+  if (shipped) {
+    const uvDir = uvWorkDir(projectDir);
+    writeFileSync(join(uvDir, 'selected_uv.blend'), 'MOCK-BLEND');
+    writeFileSync(
+      join(projectDir, SELECTED_UV_SUMMARY_REL),
+      JSON.stringify({ ...summary, source_run_id: runId }, null, 2),
+    );
+  }
 
   writeFileSync(
     join(dir, 'status.json'),
@@ -632,17 +706,102 @@ function mockGenerate(dir: string, runId: string, projectDir: string, job: any):
         schema_version: 1,
         run_id: runId,
         command: UvGenerateCommand.GenerateUvFromSeams,
-        status: UvGenerateRunStatus.Accepted,
+        status: runStatus,
         started_at: new Date().toISOString(),
         finished_at: new Date().toISOString(),
-        input: statusInput(job.model_rel ?? '', objectName, job.seam_spec_rel ?? ''),
+        input: statusInput(job.model_rel ?? '', objectName, job.seam_spec_rel ?? '', mode),
         artifacts,
-        error: null,
+        error: shipped ? null : { code: `mock_${runStatus}`, message: `mock generate: forced ${runStatus}` },
       },
       null,
       2,
     ),
   );
+}
+
+/**
+ * `preserve_existing` report blocks (work plan §3; gate G2): the 90-degree audit
+ * is REPORTED ONLY — this mode never cuts, so a violation is not a failure.
+ */
+function preserveReportBlocks(): Record<string, unknown> {
+  return {
+    mandatory_audit: {
+      mandatory_90_edges: 0,
+      mandatory_90_missing: 0,
+      mandatory_90_uv_unsplit: 0,
+      reported_only: true,
+    },
+  };
+}
+
+/** `auto_generate` report blocks (work plan §3-§5; gates G1/G3/G5/G6). */
+function autoReportBlocks(lockedSeamCount: number): Record<string, unknown> {
+  return {
+    quality_profile: { profile_id: 'engineering_v0', metric_version: 2, calibrated: false },
+    auto_gate: { valid: true, passed: true, failures: [], invalid_reasons: [] },
+    auto_constraints: {
+      valid: true,
+      locked_seam_count: lockedSeamCount,
+      protected_cut_count: 0,
+      conflict_count: 0,
+      conflicts_unresolved: false,
+    },
+    distortion_v2: {
+      metric_version: 2,
+      valid: true,
+      global: {
+        anisotropy_mean: 1.05,
+        anisotropy_p95: 1.2,
+        anisotropy_max: 1.6,
+        area_stretch_mean: 0.05,
+        area_stretch_p95: 0.1,
+        area_stretch_max: 0.2,
+        exceed_area_fraction: 0.0,
+      },
+      islands: [
+        {
+          island_id: 0,
+          face_count: 100,
+          anisotropy_p95: 1.2,
+          anisotropy_max: 1.6,
+          area_stretch_mean: 0.05,
+          exceed_area_fraction: 0.0,
+        },
+      ],
+      degenerate_triangles: { input_defect_count: 0, uv_degenerate_count: 0 },
+    },
+    correctness: {
+      passed: true,
+      checks: [],
+      overlap_area_total: 0,
+      local_flip_count: 0,
+      mirrored_island_count: 0,
+      uv_degenerate_count: 0,
+      min_island_gap_px: 6,
+      bounds_ok: true,
+    },
+    termination: {
+      reason: 'quality_passed',
+      iterations: 2,
+      candidates_evaluated: 3,
+      elapsed_s: 1.5,
+    },
+    seam_length: {
+      mandatory: 1,
+      user: 0,
+      auxiliary: 0.5,
+      total: 1.5,
+      bbox_diagonal: 3,
+      auxiliary_normalized: 0.1667,
+    },
+    mesh_identity: { unchanged: true },
+    mandatory_audit: {
+      mandatory_90_edges: 0,
+      mandatory_90_missing: 0,
+      mandatory_90_uv_unsplit: 0,
+      reported_only: false,
+    },
+  };
 }
 
 function readMockSeamCount(specAbs?: string): number | null {
