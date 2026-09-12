@@ -1,7 +1,7 @@
 # 자동 UV Acceptance Gate 실행 결과
 
 - 대응 문서: [Acceptance Gate](UV_AUTOMATION_ACCEPTANCE_GATES.ko.md), [작업 계획서](UV_AUTOMATION_WORK_PLAN.ko.md)
-- 판정 기준 코드: `082f70e` (main)
+- 판정 기준 코드: `c920190` (main). 표의 수치는 082f70e 실행값이며, 이후 커밋 2건(794e54d 오브젝트 선택기 UI, c920190 island_cap 종료 이유) 반영 후 c920190 에서 e2e 15건·app 명령 세트를 재실행해 동일 결과(installer SHA256 F84012DA…D98E4)를 확인했다.
 - 실행 환경: Windows 10 Home 10.0.19045 x64, Python 3.14.4 (uv), Node/npm 11, Blender 5.1.2 (build hash ec6e62d40fa9, 2026-05-19), electron-builder 24.13.3
 - 증거 경로: `tests/e2e/*` 실행 결과 JSON(저장소 `docs/evidence/uv_automation_082f70e/`), 본 문서의 표. 실모델(human statue 등)과 리뷰어는 이 세션에 없다.
 - 판정은 메인이 최종 코드 기준 raw 출력을 직접 대조해 내렸다. 구현 완료와 실행 검증, solver accepted 와 아티스트 승인을 구분한다.
@@ -19,7 +19,7 @@
 | G6 | PASS | 082f70e | `app/test/integration.test.ts`(G6 테스트), worker staging/handoff, e2e degenerate_input/suzanne | — |
 | G7 | PASS (데이터·IPC·UI 구현) / BLOCKED (GUI walkthrough) | 082f70e | `app/test/integration.test.ts`(approval/feedback/run view), e2e feedback fingerprint 테스트, `seam_overlay.json`, heatmap PNG | 렌더러 GUI 수동 walkthrough 자동화 불가 → 사용자 확인 필요 |
 | G8 | BLOCKED | engineering_v0 (calibrated=false) | `uv_performance.json` (성능 3회) | 실모델·승인/거절 UV 쌍·리뷰어 부재. calibration 전 자동 품질 출시 BLOCKED |
-| G9 | PASS (명령 세트·installer·Blender 실행·export 재읽기·한글 경로) / BLOCKED (packaged GUI E2E, sample FBX 기반 기존 e2e) | 082f70e | `npm run typecheck/test:integration/build/dist:win`, `tests/e2e/test_uv_auto_export_perf.py`, `tests/e2e/test_uv_auto_gates.py::test_korean_space_path` | packaged 앱 GUI 시나리오는 수동 확인 필요; sample/*.fbx 기반 MVP e2e 는 자산 부재로 skip |
+| G9 | PASS (명령 세트·installer·Blender 실행·export 재읽기·한글 경로) / BLOCKED (packaged GUI E2E, sample FBX 기반 기존 e2e) | c920190 | `npm run typecheck/test:integration/build/dist:win`, `tests/e2e/test_uv_auto_export_perf.py`, `tests/e2e/test_uv_auto_gates.py::test_korean_space_path` | packaged 앱 GUI 시나리오는 수동 확인 필요; sample/*.fbx 기반 MVP e2e 는 자산 부재로 skip |
 
 ## G0 — 재현 가능한 기준선
 
@@ -134,3 +134,19 @@
 실패 사례를 제외하지 않는다: suzanne 은 자동 규칙(미보정 profile 기준)을 통과하지 못해 needs_user_review 로 정직하게 종료되며, 이는 G6 의 요구 동작이다. degenerate_input 은 입력 결함 진단으로 accepted 가 금지된다.
 
 export 재읽기(suzanne, needs_user_review 결과의 run 디렉터리 selected_uv.blend 를 입력): fbx UV layer ["AI_UV"], 원본 topology edge 기준 unsplit 0/76, bounds OK; glb UV layer 1개, 삼각화 대각선 2개 제외 후 unsplit 0, bounds OK; export status accepted.
+
+## 실모델 첫 실행 관찰 (G8 참고, 판정 대상 아님)
+
+humanstatue 프로젝트의 승인된 low-poly(`work/working_lowpoly.blend`, 5,996 정점 / 11,776 면) 를 auto_generate 기본 옵션으로 headless 실행(HEAD 794e54d, Blender 5.1.2):
+
+| 항목 | 값 |
+|---|---|
+| 상태 | needs_user_review (quality_profile_failed, correctness_failed, reread_audit_failed) |
+| 필수 seam | 90도 fold 321, missing 0, uv_unsplit 0 (재읽기 후 0) |
+| island | 27 (초기 분할) → 73 (welded fold 보조 절개) → 80 (island cap) |
+| 왜곡 v2 global | anisotropy p95 1.95 / max 131, area_stretch_mean 0.205, 초과면적 7.4% |
+| correctness | 정확 겹침 면적 0.0027(raster 기준 통과), 뒤집힘 0, gap 4.9px |
+| refinement | 0회 — island cap 에 먼저 도달 (이 관찰로 termination reason 을 island_cap 으로 고침, c920190) |
+| 성능 | 82초, peak 688MB, mesh identity 불변, 입력 결함 없음 |
+
+해석: 데시메이트된 statue 는 90도 이상 fold 가 많아(321) 필수 seam 과 그 fold 를 UV 에서 실제 분리하는 보조 절개가 island 를 크게 늘리고, cap 때문에 왜곡 refinement 가 시작되지 못한다. 자동 규칙 자체는 계획서대로 동작했고 결과는 정직하게 needs_user_review 다. calibration 단계에서 (1) 저폴리 근사 fold 의 취급, (2) island cap 과 welded-fold 보조 절개의 예산 배분을 리뷰어와 함께 정해야 한다.
