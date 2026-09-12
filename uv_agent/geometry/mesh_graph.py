@@ -19,6 +19,23 @@ import numpy as np
 
 Vec3 = tuple[float, float, float]
 
+#: Numeric tolerance (degrees) for snapping a dihedral angle onto the fold angle.
+#: Gate G1: only |angle - 90| <= 1e-5 is treated as exactly 90 degrees.
+FOLD_SNAP_EPS_DEG = 1e-5
+
+
+def snap_fold_angle(angle_deg: float, fold_angle: float = 90.0) -> float:
+    """Snap ``angle_deg`` to ``fold_angle`` when within :data:`FOLD_SNAP_EPS_DEG`.
+
+    Floating point normals make an exact 90 degree fold come out as e.g.
+    89.99999999999999, which would silently miss the ">= 90 degrees is a
+    mandatory seam" rule. Anything further away than the epsilon is returned
+    untouched (89.9 stays 89.9, 90.1 stays 90.1)."""
+    a = float(angle_deg)
+    if abs(a - fold_angle) <= FOLD_SNAP_EPS_DEG:
+        return float(fold_angle)
+    return a
+
 
 @dataclass
 class Vertex:
@@ -45,6 +62,10 @@ class Face:
     normal: Vec3
     area_3d: float
     material_index: int = 0
+    #: Real triangulation of this face as loop-index triples. Empty means "not
+    #: computed yet"; use :meth:`MeshGraph.face_triangles` which fills it lazily.
+    #: Kept last with a default so existing positional construction still works.
+    triangles: list[tuple[int, int, int]] = field(default_factory=list)
 
 
 @dataclass
@@ -78,6 +99,94 @@ def _newell_normal_and_area(coords: np.ndarray) -> tuple[np.ndarray, float]:
 def _angle_between(n1: np.ndarray, n2: np.ndarray) -> float:
     d = float(np.clip(np.dot(n1, n2), -1.0, 1.0))
     return math.degrees(math.acos(d))
+
+
+def _fan_triangulate(n: int) -> list[tuple[int, int, int]]:
+    return [(0, i, i + 1) for i in range(1, n - 1)]
+
+
+def _signed_area_2d(points2d: np.ndarray) -> float:
+    x = points2d[:, 0]
+    y = points2d[:, 1]
+    return 0.5 * float(np.dot(x, np.roll(y, -1)) - np.dot(y, np.roll(x, -1)))
+
+
+def _point_in_triangle(p, a, b, c, eps: float) -> bool:
+    """Inclusive point-in-triangle test used to reject non-ears."""
+    d1 = (b[0] - a[0]) * (p[1] - a[1]) - (b[1] - a[1]) * (p[0] - a[0])
+    d2 = (c[0] - b[0]) * (p[1] - b[1]) - (c[1] - b[1]) * (p[0] - b[0])
+    d3 = (a[0] - c[0]) * (p[1] - c[1]) - (a[1] - c[1]) * (p[0] - c[0])
+    has_neg = (d1 < -eps) or (d2 < -eps) or (d3 < -eps)
+    has_pos = (d1 > eps) or (d2 > eps) or (d3 > eps)
+    return not (has_neg and has_pos)
+
+
+def ear_clip_triangulate(points2d: np.ndarray) -> list[tuple[int, int, int]]:
+    """Ear-clipping triangulation of a simple 2D polygon.
+
+    Returns ``n - 2`` triangles as triples of *local* vertex indices into
+    ``points2d`` (polygon order). Unlike a naive fan this never emits a triangle
+    that lies outside a concave polygon (plan §4 / Gate G3). Degenerate
+    (zero area) polygons fall back to a fan instead of raising."""
+    pts = np.asarray(points2d, dtype=float)
+    n = int(pts.shape[0])
+    if n < 3:
+        return []
+    if n == 3:
+        return [(0, 1, 2)]
+
+    area = _signed_area_2d(pts)
+    scale = float(np.max(np.abs(pts))) if pts.size else 1.0
+    scale = scale if scale > 0.0 else 1.0
+    if abs(area) <= 1e-14 * scale * scale:
+        return _fan_triangulate(n)
+
+    ccw = area > 0.0
+    eps = 1e-12 * scale * scale
+    remaining = list(range(n))
+    tris: list[tuple[int, int, int]] = []
+
+    guard = 0
+    max_guard = n * n + 16
+    while len(remaining) > 3 and guard < max_guard:
+        guard += 1
+        m = len(remaining)
+        clipped = False
+        for i in range(m):
+            ia = remaining[(i - 1) % m]
+            ib = remaining[i]
+            ic = remaining[(i + 1) % m]
+            a, b, c = pts[ia], pts[ib], pts[ic]
+            cross = (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0])
+            if ccw:
+                if cross <= eps:
+                    continue
+            else:
+                if cross >= -eps:
+                    continue
+            contains = False
+            for j in remaining:
+                if j in (ia, ib, ic):
+                    continue
+                if _point_in_triangle(pts[j], a, b, c, eps):
+                    contains = True
+                    break
+            if contains:
+                continue
+            tris.append((ia, ib, ic))
+            remaining.pop(i)
+            clipped = True
+            break
+        if not clipped:
+            break
+
+    if len(remaining) == 3:
+        tris.append((remaining[0], remaining[1], remaining[2]))
+    elif len(remaining) > 3:
+        # Could not find an ear (self-intersecting / degenerate input): fan the rest.
+        for k in range(1, len(remaining) - 1):
+            tris.append((remaining[0], remaining[k], remaining[k + 1]))
+    return tris
 
 
 @dataclass
@@ -136,6 +245,50 @@ class MeshGraph:
                     adj[b].append((a, e.id))
             self._face_adjacency_cache = adj
         return self._face_adjacency_cache
+
+    def face_triangles(self, face_id: int) -> list[tuple[int, int, int]]:
+        """Real triangulation of a face as loop-index triples (plan §4, Gate G3).
+
+        Triangles come from Blender's ``calc_loop_triangles`` when the graph was
+        extracted from Blender; otherwise they are computed lazily here by ear
+        clipping the polygon projected onto its Newell normal plane, so concave
+        n-gons never produce phantom triangles outside the polygon. The result is
+        cached on the ``Face``."""
+        f = self.faces[face_id]
+        if f.triangles:
+            return f.triangles
+
+        loop_indices = f.loop_indices
+        n = len(loop_indices)
+        if n < 3:
+            f.triangles = []
+            return f.triangles
+        if n == 3:
+            f.triangles = [(loop_indices[0], loop_indices[1], loop_indices[2])]
+            return f.triangles
+
+        coords = np.asarray(
+            [self.vertex_co(self.loops[li].vertex_id) for li in loop_indices], dtype=float
+        )
+        normal, area = _newell_normal_and_area(coords)
+        if area <= 0.0:
+            local = _fan_triangulate(n)
+        else:
+            # Orthonormal basis on the polygon plane.
+            ref = np.array([1.0, 0.0, 0.0])
+            if abs(float(np.dot(normal, ref))) > 0.9:
+                ref = np.array([0.0, 1.0, 0.0])
+            u = np.cross(normal, ref)
+            u /= float(np.linalg.norm(u))
+            v = np.cross(normal, u)
+            rel = coords - coords[0]
+            points2d = np.column_stack((rel @ u, rel @ v))
+            local = ear_clip_triangulate(points2d)
+
+        f.triangles = [
+            (loop_indices[a], loop_indices[b], loop_indices[c]) for a, b, c in local
+        ]
+        return f.triangles
 
     # -- construction ------------------------------------------------------
     @classmethod
@@ -206,7 +359,7 @@ class MeshGraph:
             if len(fids) == 2:
                 n1 = np.asarray(face_objs[fids[0]].normal)
                 n2 = np.asarray(face_objs[fids[1]].normal)
-                dihedral = _angle_between(n1, n2)
+                dihedral = snap_fold_angle(_angle_between(n1, n2))
             else:
                 dihedral = 0.0
             edge_objs.append(

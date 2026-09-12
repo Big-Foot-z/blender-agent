@@ -9,7 +9,14 @@ from __future__ import annotations
 
 import math
 
-from uv_agent.geometry.mesh_graph import Edge, Face, Loop, MeshGraph, Vertex
+from uv_agent.geometry.mesh_graph import (
+    Edge,
+    Face,
+    Loop,
+    MeshGraph,
+    Vertex,
+    snap_fold_angle,
+)
 
 
 def extract_mesh_graph(obj, *, apply_modifiers: bool = False) -> MeshGraph:
@@ -40,11 +47,15 @@ def extract_mesh_graph(obj, *, apply_modifiers: bool = False) -> MeshGraph:
 
         loops: list[Loop] = []
         faces: list[Face] = []
+        # (face index, vertex index) -> our loop index, so Blender's loop triangles
+        # can be re-expressed in our loop indexing (plan §4, Gate G3).
+        loop_lookup: dict[tuple[int, int], int] = {}
         for f in bm.faces:
             loop_indices = []
             for loop in f.loops:
                 loops.append(Loop(index=len(loops), vertex_id=loop.vert.index, face_id=f.index))
                 loop_indices.append(len(loops) - 1)
+                loop_lookup[(f.index, loop.vert.index)] = len(loops) - 1
             faces.append(
                 Face(
                     id=f.index,
@@ -57,6 +68,8 @@ def extract_mesh_graph(obj, *, apply_modifiers: bool = False) -> MeshGraph:
                 )
             )
 
+        _fill_face_triangles(bm, faces, loop_lookup)
+
         edges: list[Edge] = []
         edge_index: dict[tuple[int, int], int] = {}
         for e in bm.edges:
@@ -67,7 +80,7 @@ def extract_mesh_graph(obj, *, apply_modifiers: bool = False) -> MeshGraph:
             is_non_manifold = not e.is_manifold and not is_boundary
             # bmesh edge angle is in radians; 0 means flat (coplanar faces).
             try:
-                dihedral = math.degrees(e.calc_face_angle(0.0))
+                dihedral = snap_fold_angle(math.degrees(e.calc_face_angle(0.0)))
             except (ValueError, RuntimeError):
                 dihedral = 0.0
             edges.append(
@@ -94,6 +107,33 @@ def extract_mesh_graph(obj, *, apply_modifiers: bool = False) -> MeshGraph:
         )
     finally:
         bm.free()
+
+
+def _fill_face_triangles(bm, faces: list[Face], loop_lookup: dict[tuple[int, int], int]) -> None:
+    """Populate ``Face.triangles`` from Blender's own loop triangulation.
+
+    Using ``bm.calc_loop_triangles()`` keeps our evaluation consistent with what
+    Blender actually renders/unwraps, and avoids phantom triangles on concave
+    n-gons. On failure the faces are left empty so ``MeshGraph.face_triangles``
+    falls back to its own ear clipping."""
+    try:
+        loop_tris = bm.calc_loop_triangles()
+    except (AttributeError, ValueError, RuntimeError):
+        return
+
+    by_face: dict[int, list[tuple[int, int, int]]] = {}
+    for tri in loop_tris:
+        try:
+            fidx = tri[0].face.index
+            triple = tuple(loop_lookup[(fidx, lp.vert.index)] for lp in tri)
+        except (KeyError, AttributeError, IndexError):
+            continue
+        by_face.setdefault(fidx, []).append(triple)
+
+    for f in faces:
+        tris = by_face.get(f.id)
+        if tris:
+            f.triangles = tris
 
 
 def _get_depsgraph():
