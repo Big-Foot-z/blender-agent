@@ -140,6 +140,9 @@ def build_seam_report(result: dict, *,
         "verdict": result.get("gate").verdict if hasattr(result.get("gate"), "verdict")
         else result.get("verdict"),
     }
+    for _key in ("constraints", "termination", "seam_length"):   # G4/G5 evidence blocks
+        if _key in result:
+            report[_key] = result[_key]
     if decisions is not None:
         counts: dict[str, int] = {}
         for d in decisions:

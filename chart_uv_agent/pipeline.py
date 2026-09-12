@@ -13,14 +13,23 @@ helpers are import-safe so they can be unit-tested without ``bpy``.
 
 from __future__ import annotations
 
+import dataclasses
+import time
+
 from chart_uv_agent.gate import ChartGateConfig, ChartGateResult, evaluate_chart_gate
-from chart_uv_agent.segmentation import flood_charts, segment, split_chart
+from chart_uv_agent.segmentation import (
+    constrained_split_chart, flood_charts, segment, split_chart,
+)
 from uv_agent.geometry.evaluation import (
     estimate_vt_count, evaluate_uv_solution, per_face_stretch,
     raster_overlap_diagnosis, relative_small_island_ratio, uv_bounds_ok,
 )
 from uv_agent.geometry.mesh_graph import MeshGraph
 from uv_agent.geometry.solution import UVMap
+
+#: The five loop-termination reasons the automatic path may report (G5).
+TERMINATION_REASONS = ("quality_passed", "max_rounds", "no_improving_candidate",
+                       "island_cap", "time_budget")
 
 
 def _chart_metrics(mesh: MeshGraph, uvmap: UVMap, evaluation, *, fallback_used: bool = False) -> dict:
@@ -40,18 +49,189 @@ def _chart_metrics(mesh: MeshGraph, uvmap: UVMap, evaluation, *, fallback_used: 
     }
 
 
+def _jsonable(value):
+    """Recursively coerce numpy scalars/arrays and sets to plain JSON types (G5 evidence:
+    ``candidate_history`` must survive ``json.dumps`` without a custom encoder)."""
+    import numpy as np
+
+    if isinstance(value, dict):
+        return {str(k): _jsonable(v) for k, v in value.items()}
+    if isinstance(value, (set, frozenset)):
+        try:
+            return [_jsonable(v) for v in sorted(value)]
+        except TypeError:
+            return [_jsonable(v) for v in sorted(value, key=repr)]
+    if isinstance(value, (list, tuple)):
+        return [_jsonable(v) for v in value]
+    if isinstance(value, np.ndarray):
+        return [_jsonable(v) for v in value.tolist()]
+    if isinstance(value, np.generic):
+        return value.item()
+    if isinstance(value, bool) or value is None or isinstance(value, (int, float, str)):
+        return value
+    return str(value)
+
+
+def _serialize_candidate_history(candidate_history) -> list:
+    """JSON-serialisable candidate trial log: the heavyweight ``after_measurement`` (it
+    carries a UVMap and numpy arrays) is dropped, everything else is coerced."""
+    out: list[dict] = []
+    for rec in candidate_history or ():
+        row = {k: v for k, v in dict(rec).items() if k != "after_measurement"}
+        out.append(_jsonable(row))
+    return out
+
+
+def _resolve_profile(quality_profile=None, *, texture_size_px=None, margin_px=None):
+    """Frozen quality profile for this run, with the caller's texture context folded in."""
+    from chart_uv_agent.quality_profile import load_quality_profile
+
+    profile = load_quality_profile(quality_profile)
+    replace: dict = {}
+    if texture_size_px is not None:
+        replace["texture_size_px"] = int(texture_size_px)
+    if margin_px is not None:
+        replace["margin_px"] = int(margin_px)
+    if replace:
+        profile = dataclasses.replace(profile, **replace)
+    return profile
+
+
+def _resolve_budget(profile, budget=None, *, seed=None) -> dict:
+    from chart_uv_agent.refinement_loop import resolve_budget
+
+    overrides = dict(budget or {})
+    if seed is not None:
+        overrides["seed"] = int(seed)
+    return resolve_budget(profile, overrides)
+
+
+def _termination_block(records, *, budget: dict, elapsed: float, passed: bool,
+                       exhausted_rounds: bool) -> dict:
+    """Roll the per-round :func:`run_refinement` terminations up into ONE explicit
+    termination for the whole pipeline (G5: 종료 이유 + 실제 사용량 기록)."""
+    reasons = [str(r.get("reason", "")) for r in records]
+    if passed:
+        reason = "quality_passed"
+    elif "time_budget" in reasons:
+        reason = "time_budget"
+    elif "island_cap" in reasons:
+        reason = "island_cap"
+    elif exhausted_rounds:
+        reason = "max_rounds"
+    else:
+        reason = "no_improving_candidate"
+    return {
+        "reason": reason,
+        "iterations": int(sum(int(r.get("iterations", 0)) for r in records)),
+        "candidates_evaluated": int(sum(int(r.get("candidates_evaluated", 0))
+                                        for r in records)),
+        "elapsed_s": float(elapsed),
+        "budget": dict(budget),
+        "round_reasons": reasons,
+    }
+
+
+def _auto_constraints_block(constraints, final_seams: set[int], forbidden: set[int]) -> dict:
+    """G4 evidence block: what the run was told to protect and what actually shipped."""
+    locked = set(constraints.locked)
+    protected = set(constraints.protected)
+    protected_cut = sorted(set(final_seams) & set(forbidden))
+    mandatory_cut = sorted(protected & set(constraints.mandatory) & set(final_seams))
+    conflicts = [dict(c) for c in constraints.conflicts]
+    return {
+        "locked_seam_edges": sorted(locked),
+        "locked_missing": sorted(locked - set(final_seams)),
+        "protected_edges": sorted(protected),
+        "protected_cut": protected_cut,
+        "conflicts": conflicts,
+        "conflicts_unresolved": bool(conflicts and mandatory_cut),
+    }
+
+
+_MANDATORY_GATE_CHECKS = ("mandatory_90_missing", "mandatory_90_uv_unsplit")
+
+
+def _mandatory_gate_ok(gate) -> bool:
+    """True when no MANDATORY hard-gate check failed (other failures don't count here)."""
+    return not any(c.name in _MANDATORY_GATE_CHECKS for c in getattr(gate, "failures", ()))
+
+
+def _v2_result_block(obj, mesh: MeshGraph, final_seams: set[int], *, profile, regions,
+                     constraints, forbidden: set[int], mandatory: set[int],
+                     distortion_seams: set[int], candidate_history, termination_records,
+                     budget: dict, elapsed: float, gate,
+                     exhausted_rounds: bool) -> tuple[dict, dict]:
+    """Final v2 measurement of the SHIPPED UV plus the G1/G2/G4/G5 report blocks.
+
+    Measures the layout already on ``obj`` (never unwraps), so the numbers describe exactly
+    what the run shipped."""
+    from chart_uv_agent.refinement_loop import measure_layout, seam_length_report
+
+    measurement = measure_layout(obj, mesh, final_seams, profile=profile, stage="final",
+                                 regions=regions)
+    # The whole v2 report (not the compact view); the two non-serialisable measurement
+    # entries (``uvmap`` / ``face_anisotropy``) never enter the result.
+    reportable = {k: v for k, v in measurement.items()
+                  if k not in ("uvmap", "face_anisotropy")}
+    distortion_v2 = reportable["distortion_v2"]
+    passed = bool(measurement["passed"])
+    block = {
+        "distortion_v2": distortion_v2,
+        "correctness": measurement["correctness"],
+        "quality": measurement["quality"],
+        "mandatory_audit": measurement["mandatory_audit"],
+        "uv_island_count": int(measurement["uv_island_count"]),
+        "islands_disagree": bool(measurement["islands_disagree"]),
+        "quality_profile": profile.to_dict(),
+        "constraints": constraints.to_report(),
+        "auto_constraints": _auto_constraints_block(constraints, final_seams, forbidden),
+        "candidate_history": _serialize_candidate_history(candidate_history),
+        "termination": _termination_block(termination_records, budget=budget,
+                                          elapsed=elapsed, passed=passed,
+                                          exhausted_rounds=exhausted_rounds),
+        "seam_length": seam_length_report(mesh, final_seams, mandatory=mandatory,
+                                          user=constraints.locked,
+                                          distortion_seams=distortion_seams),
+        "auto_passed": bool(passed and _mandatory_gate_ok(gate)),
+    }
+    return block, measurement
+
+
+def _apply_v2_metrics(metrics: dict, measurement: dict) -> None:
+    """Add the v2 SUMMARY keys to the existing metric dict; v1 key meanings are untouched."""
+    glob = (measurement.get("distortion_v2") or {}).get("global") or {}
+    corr = measurement.get("correctness") or {}
+    metrics["anisotropy_p95"] = float(glob.get("anisotropy_p95", float("nan")))
+    metrics["anisotropy_max"] = float(glob.get("anisotropy_max", float("nan")))
+    metrics["area_stretch_mean_v2"] = float(glob.get("area_stretch_mean", float("nan")))
+    metrics["exceed_area_fraction"] = float(glob.get("exceed_area_fraction", float("nan")))
+    metrics["overlap_area_total"] = float((corr.get("overlap") or {})
+                                          .get("overlap_area_total", 0.0))
+    metrics["local_flip_count"] = int((corr.get("orientation") or {})
+                                      .get("local_flip_count", 0))
+    metrics["metric_version"] = 2
+
+
 def _charts(mesh: MeshGraph, seams: set[int]) -> tuple[list[list[int]], dict[int, int]]:
     charts = flood_charts(mesh, seams)
     face_chart = {f: cid for cid, fs in enumerate(charts) for f in fs}
     return charts, face_chart
 
 
-def _split_flipped_charts(mesh, seams, face_chart, charts, flipped) -> set[int]:
-    """Split every chart that contains a flipped face (U2.2)."""
+def _split_flipped_charts(mesh, seams, face_chart, charts, flipped, forbidden=frozenset(),
+                          rejected=None) -> set[int]:
+    """Split every chart that contains a flipped face (U2.2).
+
+    The split runs under the shared protected-edge law (G4): a cut that would traverse a
+    protected edge is REJECTED whole, and the offending edge ids are appended to
+    ``rejected`` (never silently filtered)."""
     new: set[int] = set()
-    for cid in {face_chart[f] for f in flipped if f in face_chart}:
-        _, _, ns = split_chart(mesh, charts[cid], seams)
+    for cid in sorted({face_chart[f] for f in flipped if f in face_chart}):
+        _, _, ns, rej = constrained_split_chart(mesh, charts[cid], seams, forbidden)
         new.update(ns)
+        if rej and rejected is not None:
+            rejected.extend(rej)
     return new
 
 
@@ -113,7 +293,10 @@ def run_chart_uv(obj, mesh: MeshGraph, *, config: ChartGateConfig | None = None,
                  user_seam_spec=None, auto_refine_user_seams: bool = False,
                  repair_user_seams: bool = True, enforce_user_mandatory: bool = True,
                  gate_user_mandatory: bool = True, optimize_layout: bool = False,
-                 layout_optimization_config=None) -> dict:
+                 layout_optimization_config=None, constraints=None, quality_profile=None,
+                 budget=None, locked_seam_edges=None, preferred_edges=None,
+                 front_axis: str = "", regions=None, texture_size_px=None, margin_px=None,
+                 seed=None, use_refinement_loop: bool = True) -> dict:
     """Run U1→U4 on ``obj`` (in Blender). Returns the gate, metrics, seam set, chart
     count, and per-round history; leaves the object holding the best layout.
 
@@ -158,8 +341,16 @@ def run_chart_uv(obj, mesh: MeshGraph, *, config: ChartGateConfig | None = None,
     from chart_uv_agent.shape import measure_charts
     from chart_uv_agent.shape_repair import repair_shapes, tail_round
 
+    from chart_uv_agent import refinement_loop
+    from chart_uv_agent.constraints import SeamConstraints
+
     config = config or ChartGateConfig()
-    forbidden = set(forbidden_edges or ())
+    started_at = time.monotonic()
+    profile = _resolve_profile(quality_profile, texture_size_px=texture_size_px,
+                               margin_px=margin_px)
+    budget = _resolve_budget(profile, budget, seed=seed)
+    candidate_history: list[dict] = []
+    termination_records: list[dict] = []
 
     # USER-GUIDED SEAM mode (USER_GUIDED_SEAM_UV_PIPELINE_PLAN §8.2). When the caller supplies a
     # user seam spec, the user's seams are the authoritative source of truth: the auto chart
@@ -167,18 +358,33 @@ def run_chart_uv(obj, mesh: MeshGraph, *, config: ChartGateConfig | None = None,
     # §12 success criterion #1) and a dedicated report-only path runs instead.
     if user_seam_spec is not None:
         return _run_user_seam_uv(obj, mesh, user_seam_spec, config=config,
-                                 base_forbidden=forbidden, margin=margin,
+                                 base_forbidden=set(forbidden_edges or ()), margin=margin,
                                  auto_refine=auto_refine_user_seams,
                                  repair_user_seams=repair_user_seams,
                                  enforce_mandatory=enforce_user_mandatory,
                                  gate_mandatory=gate_user_mandatory,
                                  optimize_layout=optimize_layout,
-                                 layout_optimization_config=layout_optimization_config)
+                                 layout_optimization_config=layout_optimization_config,
+                                 constraints=constraints, quality_profile=profile,
+                                 budget=budget, regions=regions, front_axis=front_axis,
+                                 preferred_edges=preferred_edges,
+                                 texture_size_px=texture_size_px, margin_px=margin_px,
+                                 started_at=started_at)
+
+    # G4: ONE constraint object governs every cut path of this run (initial segmentation,
+    # distortion refinement, overlap repair, welded-fold repair, prune).
+    if constraints is None:
+        constraints = SeamConstraints.build(
+            mesh, locked=locked_seam_edges or (), protected=forbidden_edges or (),
+            preferred=preferred_edges or (), region_policy=region_policy,
+            front_axis=front_axis)
+    forbidden = set(constraints.forbidden)
 
     aux_seams: set[int] = set()       # welded-fold-auxiliary seams (prune candidates)
     overlap_seams: set[int] = set()   # added by flip / raster overlap repair
     distortion_seams: set[int] = set()  # added by the checker-distortion split
-    seg = segment(mesh, cone_limit=cone_limit, max_charts=config.island_count_max)
+    seg = segment(mesh, cone_limit=cone_limit, max_charts=config.island_count_max,
+                  locked_seams=constraints.locked, forbidden=forbidden)
     seams = set(seg.seams)
     # Region-aware FACE RECOVERY (REGION_AWARE_FACE_UV_RECOVERY_PLAN §6.3): the FRONT-stage
     # lever — dissolve face_front_core interior smooth boundaries the segmentation created, so
@@ -217,6 +423,7 @@ def run_chart_uv(obj, mesh: MeshGraph, *, config: ChartGateConfig | None = None,
     bbox_packed = False
     pending_split = None              # provisional distortion split awaiting an accept/revert
     rejected_regions: set[frozenset] = set()  # face sets a reverted split proved not worth cutting
+    rounds_exhausted = False          # the loop used every allowed round (G5 termination)
 
     for rnd in range(max_rounds):
         unwrap_and_pack(obj, seams, margin=margin)
@@ -292,11 +499,25 @@ def run_chart_uv(obj, mesh: MeshGraph, *, config: ChartGateConfig | None = None,
                 changed = True
                 rec["action"] = "split"; rec["reason"] = "welded_fold_auxiliary"
                 rec["fold_local_cuts"] = r["local_cuts"]; rec["fold_fallback"] = r["fallback"]
+            if r["blocked"]:
+                # A protected region with no legal cut path — recorded, never swallowed (G4).
+                rec["fold_blocked"] = r["blocked"]
+                rec["fold_blocked_edge_ids"] = sorted(r["blocked_edge_ids"])
+                history.append({"round": rnd, "stage": "welded_fold", "action": "reject",
+                                "reason": "protected_region_reject",
+                                "protected_edges_cut": [],
+                                "blocked_edge_ids": sorted(r["blocked_edge_ids"])})
 
         # (1) Flipped UV faces → re-split the folding charts (overlap correctness).
         flips = flipped_faces(mesh, uvmap)
         if not changed and flips:
-            ns = _split_flipped_charts(mesh, seams, face_chart, charts, flips)
+            rejected_edges: list[int] = []
+            ns = _split_flipped_charts(mesh, seams, face_chart, charts, flips, forbidden,
+                                       rejected_edges)
+            if rejected_edges:
+                history.append({"round": rnd, "stage": "flipped_faces", "action": "reject",
+                                "reason": "protected_region_reject",
+                                "protected_edges_cut": sorted(set(rejected_edges))})
             if ns:
                 seams.update(ns); overlap_seams |= set(ns); changed = True
                 rec["action"] = "split"; rec["reason"] = "flipped_faces"
@@ -316,7 +537,13 @@ def run_chart_uv(obj, mesh: MeshGraph, *, config: ChartGateConfig | None = None,
                 for cid in diag["self_charts"]:
                     if cid < len(charts) and len(charts[cid]) >= 2 * 5 \
                             and len(_charts(mesh, seams)[0]) < cap:
-                        _, _, ns = split_chart(mesh, charts[cid], seams)
+                        _, _, ns, rej = constrained_split_chart(mesh, charts[cid], seams,
+                                                                forbidden)
+                        if rej:
+                            history.append({"round": rnd, "stage": "raster_overlap_self",
+                                            "action": "reject",
+                                            "reason": "protected_region_reject",
+                                            "protected_edges_cut": sorted(rej)})
                         if ns:
                             seams.update(ns); overlap_seams |= set(ns); changed = True
                 if changed:
@@ -330,7 +557,31 @@ def run_chart_uv(obj, mesh: MeshGraph, *, config: ChartGateConfig | None = None,
         worst_over = metrics["worst_island_distortion"] > config.worst_island_distortion_max
         # Don't open a PROVISIONAL split on the last allowed round — there'd be no next round
         # to measure its improvement, so it could neither be accepted nor reverted (§5.2).
-        if not changed and (global_over or worst_over) \
+        # REFINEMENT LOOP (UV_AUTOMATION §5, G4/G5): one refinement round = one island,
+        # candidates proposed/measured/accepted-or-fully-restored by the shared decision
+        # core, so the no-spec path and the user-assisted path obey the same rules. The
+        # legacy in-place split + provisional accept/revert is kept for regression runs
+        # (``use_refinement_loop=False``).
+        if use_refinement_loop and not changed and (global_over or worst_over) \
+                and len(charts) < config.island_count_max:
+            before_seams = set(seams)
+            ref = refinement_loop.run_refinement(
+                obj, mesh, seams, constraints=constraints, profile=profile,
+                budget={**budget, "max_iterations": 1}, margin=margin, regions=regions,
+                history=history, candidate_history=candidate_history)
+            termination_records.append(ref["termination"])
+            seams = set(ref["seams"])
+            if seams != before_seams:
+                distortion_seams |= set(ref["distortion_seams"])
+                changed = True
+                rec["action"] = "split"
+                rec["reason"] = "refinement_loop"
+                rec["refinement_added_edges"] = sorted(seams - before_seams)
+                rec["refinement_reason"] = ref["termination"]["reason"]
+            else:
+                rec["refinement_reason"] = ref["termination"]["reason"]
+
+        if not use_refinement_loop and not changed and (global_over or worst_over) \
                 and len(charts) < config.island_count_max and rnd < max_rounds - 1:
             fstr = per_face_stretch(mesh, uvmap)
             # Pick the worst chart NOT already proved not-worth-splitting (a reverted region).
@@ -390,6 +641,8 @@ def run_chart_uv(obj, mesh: MeshGraph, *, config: ChartGateConfig | None = None,
         if not changed:
             rec["reason"] = "no further refinement available (best-effort)"
             break
+    else:
+        rounds_exhausted = True
 
     # A distortion split that never got a measurement round (loop exhausted) is left honestly
     # UNRESOLVED — its improvement is unproved, so the report excludes it (the guard above
@@ -407,7 +660,8 @@ def run_chart_uv(obj, mesh: MeshGraph, *, config: ChartGateConfig | None = None,
     # are captured for the before/after table.
     final_seams = set(best["seams"])
     pre = dict(best["metrics"])
-    correctness = correctness_pass(obj, mesh, final_seams, config, margin=margin)
+    correctness = correctness_pass(obj, mesh, final_seams, config, margin=margin,
+                                   forbidden=forbidden, reject_history=history)
     final_seams |= mandatory
 
     def measure():
@@ -452,7 +706,9 @@ def run_chart_uv(obj, mesh: MeshGraph, *, config: ChartGateConfig | None = None,
     # green (fewer needless cuts, lower vt/v). One at a time, flattest first; revert on fail.
     pruned: list[int] = []
     if prune_auxiliary and gate.passed:
+        # A user-LOCKED seam is never a prune candidate (G4: 사용자 seam lock 제거 0).
         cand = sorted((e for e in aux_seams if e in final_seams
+                       and e not in constraints.locked
                        and mesh.edges[e].dihedral_angle < 90.0),
                       key=lambda e: mesh.edges[e].dihedral_angle)[:_PRUNE_CAP]
         pruned = _prune_seams(final_seams, cand, lambda: measure()[1].passed)
@@ -484,6 +740,18 @@ def run_chart_uv(obj, mesh: MeshGraph, *, config: ChartGateConfig | None = None,
              "convexity_p10", "island_count")},
         "stuck_charts": stuck_charts, "shippable": shippable_with_stuck(gate, stuck_charts),
     }
+    # v2 FINAL measurement of the shipped UV + the G1/G4/G5 evidence blocks. Measured after
+    # every seam edit, so it describes exactly the layout the object now holds.
+    v2_block, v2_measurement = _v2_result_block(
+        obj, mesh, final_seams, profile=profile, regions=regions, constraints=constraints,
+        forbidden=forbidden, mandatory=mandatory, distortion_seams=distortion_seams,
+        candidate_history=candidate_history, termination_records=termination_records,
+        budget=budget, elapsed=time.monotonic() - started_at, gate=gate,
+        exhausted_rounds=rounds_exhausted)
+    result.update(v2_block)
+    result["correctness_rounds"] = correctness["history"]
+    _apply_v2_metrics(metrics, v2_measurement)
+    result["seam_types"] = {int(k): v for k, v in seam_types.items()}
     # Important Region Policy report (IMPORTANT_REGION_UV_POLICY_PLAN §5.5) — the mandatory-
     # vs-smooth seam split per protected region + the rejected-split records, built from the
     # SHIPPED seams. Only present when a region policy was supplied (else baseline behaviour).
@@ -505,7 +773,10 @@ def _run_user_seam_uv(obj, mesh: MeshGraph, spec, *, config: ChartGateConfig,
                       base_forbidden: set[int], margin: float, auto_refine: bool,
                       repair_user_seams: bool, enforce_mandatory: bool,
                       gate_mandatory: bool, optimize_layout: bool = False,
-                      layout_optimization_config=None) -> dict:
+                      layout_optimization_config=None, constraints=None,
+                      quality_profile=None, budget=None, regions=None,
+                      front_axis: str = "", preferred_edges=None, texture_size_px=None,
+                      margin_px=None, started_at=None) -> dict:
     """User-guided seam UV path (USER_GUIDED_SEAM_UV_PIPELINE_PLAN §8.2). The user's seam spec
     is the source of truth: the initial seam set is ``mandatory_90 ∪ user_seam_edges`` and the
     non-mandatory ``user_protected_edges`` are forwarded as forbidden (never cut). The app does
@@ -520,10 +791,25 @@ def _run_user_seam_uv(obj, mesh: MeshGraph, spec, *, config: ChartGateConfig,
     from chart_uv_agent.unwrap import (
         island_plan_from_seams, read_uvmap, unwrap_and_pack,
     )
-    from chart_uv_agent.segmentation import flood_charts, split_chart, split_welded_folds
+    from chart_uv_agent.segmentation import flood_charts, split_welded_folds
     from artist_uv_agent.user_seams import build_user_seam_set
+    from chart_uv_agent import refinement_loop
+    from chart_uv_agent.constraints import SeamConstraints
+
+    started_at = time.monotonic() if started_at is None else float(started_at)
+    profile = _resolve_profile(quality_profile, texture_size_px=texture_size_px,
+                               margin_px=margin_px)
+    budget = _resolve_budget(profile, budget)
+    candidate_history: list[dict] = []
+    termination_records: list[dict] = []
 
     usr = build_user_seam_set(mesh, spec)
+    # G5: the user-assisted automatic path uses the SAME constraint object / accept rules
+    # as the no-spec path — the user's seams are locked, their protected edges protected.
+    if constraints is None:
+        constraints = SeamConstraints.build(
+            mesh, locked=usr.user_seam_edges, protected=usr.user_protected_edges,
+            preferred=preferred_edges or (), front_axis=front_axis)
     mandatory = set(usr.mandatory_edges) if enforce_mandatory else set()
     if enforce_mandatory:
         forbidden = set(base_forbidden) | usr.forbidden_edges
@@ -596,36 +882,25 @@ def _run_user_seam_uv(obj, mesh: MeshGraph, spec, *, config: ChartGateConfig,
     # OPTIONAL auto distortion refine (plan §10, ``auto_refine_user_seams=true`` only). Split the
     # worst island while distortion exceeds the gate; never cut a protected edge (precedence:
     # protected > auto). Every added seam is tracked as an ``auto_added`` seam and reported.
+    # The refinement loop is the SHARED decision core (G5: "no-spec 와 사용자 보조 자동 경로가
+    # 같은 채택/revert 규칙"): propose → apply → measure → accept or fully restore, under the
+    # same constraints/profile/budget the no-spec path uses.
     if auto_refine:
-        rejected: set[frozenset] = set()
-        for rnd in range(config.island_count_max):
-            global_over = metrics["stretch_score"] > config.stretch_max
-            worst_over = metrics["worst_island_distortion"] > config.worst_island_distortion_max
-            charts, _fc = _charts(mesh, final_seams)
-            if not (global_over or worst_over) or len(charts) >= config.island_count_max:
-                break
-            fstr = per_face_stretch(mesh, read_uvmap(obj, mesh))
-            ranked = sorted((fs for fs in charts if frozenset(fs) not in rejected),
-                            key=lambda fs: _chart_distortion(mesh, fs, fstr), reverse=True)
-            if not ranked:
-                break
-            worst = ranked[0]
-            before = _chart_distortion(mesh, worst, fstr)
-            _, _, ns = split_chart(mesh, worst, final_seams)
-            ns = set(ns)
-            if not ns or (ns & forbidden):
-                # The only available split would cut a protected edge → reject (report-only).
-                rejected.add(frozenset(worst))
-                history.append({"stage": "auto_refine_reject", "round": rnd,
-                                "reason": "protected_edge_cut" if ns else "unsplittable"})
-                continue
-            final_seams |= ns
-            distortion_seams |= ns
-            metrics, gate, ev = measure()
-            history.append({"stage": "auto_refine_split", "round": rnd, "added_edges": sorted(ns),
-                            "before_distortion": round(float(before), 6),
-                            "after_worst_distortion": metrics["worst_island_distortion"],
-                            "auto_added": True})
+        before_seams = set(final_seams)
+        ref = refinement_loop.run_refinement(
+            obj, mesh, final_seams, constraints=constraints, profile=profile,
+            budget=budget, margin=margin, regions=regions, history=history,
+            candidate_history=candidate_history)
+        termination_records.append(ref["termination"])
+        final_seams = set(ref["seams"])
+        distortion_seams |= set(ref["distortion_seams"])
+        history.append({"stage": "auto_refine", "action": "refinement_loop",
+                        "added_edges": sorted(final_seams - before_seams),
+                        "termination": ref["termination"]["reason"],
+                        "iterations": ref["termination"]["iterations"],
+                        "candidates_evaluated": ref["termination"]["candidates_evaluated"],
+                        "auto_added": bool(final_seams - before_seams)})
+        metrics, gate, ev = measure()
 
     # UV LAYOUT OPTIMIZATION LOOP (UV_LAYOUT_OPTIMIZATION_LOOP_PLAN §9.2). The seam set is now
     # FINAL — this never adds/removes a seam. It sweeps relax/scale/rotate/pack candidates on
@@ -707,6 +982,17 @@ def _run_user_seam_uv(obj, mesh: MeshGraph, spec, *, config: ChartGateConfig,
         "shippable": shippable_with_stuck(gate, []),
         "user_seams": user_block,
     }
+    # Same v2 final measurement + evidence blocks as the no-spec path (G1/G4/G5).
+    v2_block, v2_measurement = _v2_result_block(
+        obj, mesh, final_seams, profile=profile, regions=regions, constraints=constraints,
+        forbidden=forbidden, mandatory=mandatory, distortion_seams=distortion_seams,
+        candidate_history=candidate_history, termination_records=termination_records,
+        budget=budget, elapsed=time.monotonic() - started_at, gate=gate,
+        exhausted_rounds=False)
+    result.update(v2_block)
+    result["correctness_rounds"] = []
+    _apply_v2_metrics(metrics, v2_measurement)
+    result["seam_types"] = {int(k): v for k, v in seam_types.items()}
     if layout_opt is not None:
         result["layout_optimization"] = layout_opt.report()
         result["layout_optimization_summary"] = layout_opt.summary()
@@ -857,7 +1143,8 @@ def _island_conclusion(initial: int, final: int, history, metrics, config) -> st
             f"worst-island ({worst:.3f}) checker distortion were within threshold.")
 
 
-def correctness_pass(obj, mesh, seams, config, *, max_rounds=4, margin=0.005, hard_cap=60):
+def correctness_pass(obj, mesh, seams, config, *, max_rounds=4, margin=0.005, hard_cap=60,
+                     forbidden=frozenset(), reject_history=None):
     """Correctness round (§5d, SLIM-driven). Owns the FINAL UV. The main unwrap already uses
     SLIM (``MINIMUM_STRETCH``, locally injective), so self-folds are gone up front. This
     pass is the safety net: re-SLIM the still-folding charts in isolation, and ONLY a chart
@@ -900,7 +1187,14 @@ def correctness_pass(obj, mesh, seams, config, *, max_rounds=4, margin=0.005, ha
             n = len(charts)
             for cid in d2["self_charts"]:
                 if cid < len(charts) and len(charts[cid]) >= 10 and n < hard_cap:
-                    _, _, ns = split_chart(mesh, charts[cid], seams)
+                    # G4: the same protected-edge law as every other cut path.
+                    _, _, ns, rej = constrained_split_chart(mesh, charts[cid], seams,
+                                                            forbidden)
+                    if rej:
+                        rec = {"stage": "correctness", "round": rnd, "action": "reject",
+                               "reason": "protected_region_reject",
+                               "protected_edges_cut": sorted(rej)}
+                        (reject_history if reject_history is not None else history).append(rec)
                     if ns:
                         seams.update(ns); n += 1
             unwrap_and_pack(obj, seams, margin=margin)      # SLIM
