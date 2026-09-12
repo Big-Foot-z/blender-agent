@@ -171,6 +171,14 @@ class FakeUnwrapBackend:
     def read_uvmap(self, obj, mesh: MeshGraph, *, layer_name: str = AI_UV_LAYER) -> UVMap:
         return obj.uv.copy() if obj.uv is not None else UVMap.for_mesh(mesh)
 
+    def write_uvmap(self, obj, mesh: MeshGraph, uvmap: UVMap, *,
+                    layer_name: str = AI_UV_LAYER) -> None:
+        """Write half of the snapshot pair — restore ``uvmap`` onto ``obj`` (G5)."""
+        obj.data.uv_layers.new(layer_name)
+        obj.data.uv_layers.active = layer_name
+        obj.uv = uvmap.copy()
+        self.calls.append(("write_uvmap", layer_name, len(uvmap.uv)))
+
     def reunwrap_faces(self, obj, face_ids, *, method: str = "MINIMUM_STRETCH",
                        minimize_iters: int = 0, margin: float = 0.001,
                        layer_name: str = AI_UV_LAYER) -> int:
@@ -237,6 +245,7 @@ class FakeUnwrapBackend:
         monkeypatch.setattr(unwrap_mod, "unwrap_and_pack", self.unwrap_and_pack)
         monkeypatch.setattr(unwrap_mod, "repack", self.repack)
         monkeypatch.setattr(unwrap_mod, "read_uvmap", self.read_uvmap)
+        monkeypatch.setattr(unwrap_mod, "write_uvmap", self.write_uvmap)
         monkeypatch.setattr(unwrap_mod, "reunwrap_faces", self.reunwrap_faces)
         monkeypatch.setattr(unwrap_mod, "pack_subset", self.pack_subset)
         monkeypatch.setattr(island_layout, "repack_uv_islands_custom",

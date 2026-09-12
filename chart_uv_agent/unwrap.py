@@ -74,6 +74,32 @@ def unwrap_and_pack(
     return marked
 
 
+def write_uvmap(obj, mesh: MeshGraph, uvmap: UVMap, *, layer_name: str = AI_UV_LAYER) -> None:
+    """Write ``uvmap`` back into ``layer_name`` — the inverse of :func:`read_uvmap` (G5).
+
+    Restoring a rejected candidate needs the UV coordinates put back exactly as they were,
+    so this is the write half of the snapshot pair: the layer is created and made active
+    when missing, and the per-loop UVs are pushed with one ``foreach_set`` in the same
+    loop order :func:`read_uvmap` reads (loop index i <-> ``obj.data.loops[i]``). Loops
+    beyond ``uvmap``'s length keep their current UV rather than being zeroed.
+    """
+    import numpy as np
+
+    mesh_data = obj.data
+    if layer_name not in mesh_data.uv_layers:
+        mesh_data.uv_layers.new(name=layer_name)
+    mesh_data.uv_layers.active = mesh_data.uv_layers[layer_name]
+    data = mesh_data.uv_layers[layer_name].data
+    flat = np.empty(len(data) * 2, dtype=np.float64)
+    data.foreach_get("uv", flat)
+    flat = flat.reshape(-1, 2)
+    source = np.asarray(uvmap.uv, dtype=np.float64)
+    n = min(len(flat), len(source))
+    flat[:n] = source[:n]
+    data.foreach_set("uv", flat.reshape(-1))
+    mesh_data.update()
+
+
 def repack(obj, *, margin: float = 0.02, pack_shape: str = "CONCAVE", rotate: bool = True,
            layer_name: str = AI_UV_LAYER) -> None:
     """U3.2 packing retune — re-pack the existing UVs (e.g. with a smaller margin or a
@@ -182,5 +208,5 @@ def flipped_faces(mesh: MeshGraph, uvmap: UVMap) -> list[int]:
     return out
 
 
-__all__ = ["unwrap_and_pack", "repack", "pack_subset", "flipped_faces",
+__all__ = ["unwrap_and_pack", "repack", "write_uvmap", "pack_subset", "flipped_faces",
            "island_plan_from_seams", "read_uvmap"]
