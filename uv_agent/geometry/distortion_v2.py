@@ -17,7 +17,10 @@ additive. The differences that matter for G3 are:
   and for caller-named regions, so a small bad patch cannot hide in the global mean;
 * the report records ``metric_version``, the evaluation stage and the scale policy, so
   v1 and v2 numbers are never mixed and a per-candidate island rescale can never be
-  mistaken for an area improvement.
+  mistaken for an area improvement;
+* the report carries a flat ``summary`` block (the required global / worst-island metric
+  set, ``bad_area_ratio`` with its threshold, and ``summary_valid``) derived from the
+  ``global`` / ``islands`` rows, so a gate reader needs one dict and no traversal.
 
 numpy is allowed here; ``bpy`` is not — this must be importable from a plain test
 process.
@@ -365,6 +368,47 @@ def evaluate_distortion_v2(
         and all(_finite_scope(r) for r in region_rows.values())
     )
 
+    worst_row = island_rows[worst_island_id] if worst_island_id is not None else None
+    summary = {
+        "metric_version": METRIC_VERSION,
+        "global_area_stretch_mean": float(global_metrics["area_stretch_mean"]),
+        "global_area_stretch_p95": float(global_metrics["area_stretch_p95"]),
+        "global_anisotropy_p95": float(global_metrics["anisotropy_p95"]),
+        "global_anisotropy_max": float(global_metrics["anisotropy_max"]),
+        "worst_island_id": worst_island_id,
+        "worst_island_area_stretch_p95": (
+            float(worst_row["area_stretch_p95"]) if worst_row is not None else None
+        ),
+        "worst_island_anisotropy_p95": (
+            float(worst_row["anisotropy_p95"]) if worst_row is not None else None
+        ),
+        "worst_island_anisotropy_max": (
+            float(worst_row["anisotropy_max"]) if worst_row is not None else None
+        ),
+        # Report alias of global["exceed_area_fraction"]; the threshold travels with it
+        # so a reader never has to guess which basis the ratio was measured against.
+        "bad_area_ratio": float(global_metrics["exceed_area_fraction"]),
+        "bad_area_threshold": float(exceed_basis),
+    }
+    summary["summary_valid"] = bool(
+        valid
+        and worst_row is not None
+        and all(
+            math.isfinite(summary[k])
+            for k in (
+                "global_area_stretch_mean",
+                "global_area_stretch_p95",
+                "global_anisotropy_p95",
+                "global_anisotropy_max",
+                "worst_island_area_stretch_p95",
+                "worst_island_anisotropy_p95",
+                "worst_island_anisotropy_max",
+                "bad_area_ratio",
+                "bad_area_threshold",
+            )
+        )
+    )
+
     return {
         "metric_version": METRIC_VERSION,
         "evaluation_stage": stage,
@@ -378,6 +422,7 @@ def evaluate_distortion_v2(
         "degenerate_triangles": degenerate,
         "worst_island_id": worst_island_id,
         "triangle_count": recs.count,
+        "summary": summary,
     }
 
 
@@ -400,6 +445,7 @@ def compact_distortion_v2(report: dict, *, max_islands: int = 200) -> dict:
         "island_count": len(islands),
         "degenerate_triangles": dict(report.get("degenerate_triangles") or {}),
         "worst_island_id": report.get("worst_island_id"),
+        "summary": report.get("summary"),
     }
 
 

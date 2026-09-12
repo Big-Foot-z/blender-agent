@@ -43,6 +43,21 @@ EXPOSURE_COST_WEIGHT = 1.0
 #: Candidate kinds, in the order :func:`generate_candidates` emits them.
 KIND_ORDER = ("unwrap_only", "short_cut", "preferred_path", "normal_split")
 
+#: Why a cut is being proposed at all (W2 §4.3 reason codes).
+CUT_REASONS = ("distortion_repair", "correctness_repair")
+
+#: 3D aspect ratio at/above which a predicted sub-chart counts as a sliver.
+SLIVER_ASPECT = 8.0
+
+#: Keys of the :func:`candidate_cost_breakdown` dict that are summed as penalties.
+COST_PENALTY_KEYS = ("normalized_seam_length", "visible_surface_penalty",
+                     "smooth_surface_penalty", "small_island_creation_penalty",
+                     "sliver_creation_penalty", "protected_region_penalty")
+
+#: Keys of the :func:`candidate_cost_breakdown` dict that are summed as bonuses.
+COST_BONUS_KEYS = ("hidden_back_bonus", "concave_crease_bonus",
+                   "material_boundary_bonus", "user_preferred_bonus")
+
 
 @dataclass(frozen=True)
 class SeamCandidate:
@@ -60,6 +75,11 @@ class SeamCandidate:
     seam_length: float
     exposure_cost: float
     notes: dict = field(default_factory=dict, compare=False)
+    #: WHY the cut is proposed — ``"distortion_repair"`` or ``"correctness_repair"``
+    #: (:data:`CUT_REASONS`). Independent of ``reason``, which names the *path* kind.
+    cut_reason: str = "distortion_repair"
+    #: The :func:`candidate_cost_breakdown` dict for this candidate (out-of-band).
+    cost: dict = field(default_factory=dict, compare=False)
 
     @property
     def rejected(self) -> str | None:
@@ -71,8 +91,10 @@ class SeamCandidate:
             "added_edges": sorted(self.added_edges),
             "target_island": self.target_island,
             "reason": self.reason,
+            "cut_reason": self.cut_reason,
             "seam_length": self.seam_length,
             "exposure_cost": self.exposure_cost,
+            "cost": dict(self.cost),
             "notes": dict(self.notes),
         }
 
@@ -99,10 +121,197 @@ def edges_cut_protected(mesh: MeshGraph, edges, constraints: SeamConstraints) ->
     return constraints.check_added(edges)["protected_cut"]
 
 
-def rank_key(island_count: int, auxiliary_length: float, exposure: float) -> tuple:
-    """Tie-break order for candidates of EQUAL quality (§5 / G4): fewest islands, then
-    shortest auxiliary seam, then least visible. Rounded so float noise never decides."""
-    return (int(island_count), round(float(auxiliary_length), 9), round(float(exposure), 9))
+def rank_key(island_count: int, auxiliary_length: float, exposure: float,
+             total_cost: float = 0.0) -> tuple:
+    """Tie-break order for candidates of EQUAL quality (§5 / G4, W2 §4.3).
+
+    Lexicographic: **P2** island count → **P3** auxiliary seam length → **P4** visible
+    (exposure) cost → the candidate's total cut cost
+    (:func:`candidate_cost_breakdown`'s ``total``); anything still tied is left to the
+    caller's own stable candidate order. Every float is rounded so float noise never
+    decides. ``total_cost`` defaults to ``0.0`` so pre-existing 3-argument callers keep
+    their exact previous ordering.
+    """
+    return (int(island_count), round(float(auxiliary_length), 9),
+            round(float(exposure), 9), round(float(total_cost), 9))
+
+
+# ------------------------------------------------------------- cut cost (W2 §4.3)
+
+
+def _chart_mean_normal(mesh: MeshGraph, faces) -> np.ndarray:
+    """Area-weighted mean normal of ``faces`` (``+Z`` when it degenerates)."""
+    acc = np.zeros(3)
+    for fid in faces:
+        f = mesh.faces[fid]
+        acc += np.asarray(f.normal, dtype=float) * float(f.area_3d)
+    n = float(np.linalg.norm(acc))
+    if n < 1e-12:
+        return np.array([0.0, 0.0, 1.0])
+    return acc / n
+
+
+def _plane_axes(normal: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """A deterministic orthonormal basis of the plane perpendicular to ``normal``."""
+    n = np.asarray(normal, dtype=float)
+    ln = float(np.linalg.norm(n))
+    n = np.array([0.0, 0.0, 1.0]) if ln < 1e-12 else n / ln
+    ref = np.array([1.0, 0.0, 0.0]) if abs(float(n[0])) < 0.9 else np.array([0.0, 1.0, 0.0])
+    u = np.cross(n, ref)
+    u = u / float(np.linalg.norm(u))
+    v = np.cross(n, u)
+    return u, v
+
+
+def _sub_chart_aspect(mesh: MeshGraph, faces, u: np.ndarray, v: np.ndarray) -> float:
+    """3D "aspect" of a predicted sub-chart: the ratio of the LONGEST PCA extent to the
+    shortest, measured on the chart's mean-normal plane (``inf`` when it collapses to a
+    line — the degenerate sliver)."""
+    vids = sorted({int(vid) for fid in faces for vid in mesh.faces[fid].vertex_ids})
+    if len(vids) < 3:
+        return float("inf")
+    p = np.array([mesh.vertices[i].co for i in vids], dtype=float)
+    q = np.stack([p @ u, p @ v], axis=1)
+    q = q - q.mean(axis=0)
+    cov = (q.T @ q) / float(len(q))
+    _, vecs = np.linalg.eigh(cov)
+    ext = np.ptp(q @ vecs, axis=0)
+    lo, hi = float(ext.min()), float(ext.max())
+    if lo <= 1e-12:
+        return float("inf")
+    return hi / lo
+
+
+def _predicted_sub_charts(mesh: MeshGraph, chart_faces: set[int], seams: set[int],
+                          added: set[int]) -> list[list[int]]:
+    """The sub-charts ``chart_faces`` would break into under ``seams | added``, via
+    :func:`flood_charts` restricted to the chart (sorted, deterministic)."""
+    if not chart_faces:
+        return []
+    out: list[list[int]] = []
+    for comp in flood_charts(mesh, set(seams) | set(added)):
+        inside = sorted(f for f in comp if f in chart_faces)
+        if inside:
+            out.append(inside)
+    return out
+
+
+def candidate_cost_breakdown(mesh: MeshGraph, chart_faces, seams, added_edges,
+                             constraints: SeamConstraints, *, fold_angle: float = 90.0,
+                             smooth_angle: float = 45.0,
+                             tiny_face_fraction: float = 0.05) -> dict:
+    """The itemised cut cost of adding ``added_edges`` to ``chart_faces`` (W2 §4.3).
+
+    Every value is a JSON-safe float; lengths are normalised by the model bounding-box
+    diagonal so the numbers are scale-free (``0.0`` when the diagonal is 0). Penalties:
+
+    ``normalized_seam_length``       added 3D seam length / bbox diagonal.
+    ``visible_surface_penalty``      ``constraints.exposure_cost`` / diagonal. **0** with
+                                     no ``front_axis`` — visibility neutral, the engine
+                                     never guesses which way the asset faces.
+    ``smooth_surface_penalty``       Σ length × ``max(0, 1 − dihedral/smooth_angle)``: a
+                                     FLAT edge costs most, an edge at/above
+                                     ``smooth_angle`` costs nothing (cutting across a
+                                     smooth surface is what shows).
+    ``small_island_creation_penalty``how many predicted sub-charts hold less than
+                                     ``tiny_face_fraction`` of the chart's 3D area.
+    ``sliver_creation_penalty``      how many predicted sub-charts have ≤ 2 faces or a 3D
+                                     aspect ≥ :data:`SLIVER_ASPECT`.
+    ``protected_region_penalty``     added edges that are ``constraints.protected``. Only
+                                     mandatory-/locked-overridden ones can appear here:
+                                     a genuinely forbidden edge is rejected outright.
+
+    Bonuses (subtracted):
+
+    ``hidden_back_bonus``            Σ length × ``max(0, −facing)`` — seams hidden on the
+                                     back side are free wins. **0** without ``front_axis``.
+    ``concave_crease_bonus``         Σ length × ``dihedral/fold_angle`` over added edges at
+                                     or above ``smooth_angle``: creases are good seam
+                                     lines. NOTE the *concavity sign* is not available on
+                                     :class:`MeshGraph` (``dihedral_angle`` is unsigned),
+                                     so this is really a **crease** bonus; the key name is
+                                     kept for the W2 §4.3 contract.
+    ``material_boundary_bonus``      Σ length of added edges whose two faces differ in
+                                     ``material_index``.
+    ``user_preferred_bonus``         Σ length of added edges in ``constraints.preferred``.
+
+    ``total`` = Σ penalties − Σ bonuses. Also reports ``predicted_sub_chart_count`` and
+    the sorted ``predicted_sub_chart_face_counts``.
+
+    Pure: nothing is applied to the mesh, no seed, no Blender.
+    """
+    diag = bbox_diagonal(mesh)
+    added = {int(e) for e in added_edges if 0 <= int(e) < mesh.edge_count}
+    cfaces = {int(f) for f in chart_faces}
+    seam_set = {int(e) for e in seams}
+    front = constraints.front_vector()
+    smooth = max(float(smooth_angle), 1e-9)
+    fold = max(float(fold_angle), 1e-9)
+
+    def norm(value: float) -> float:
+        return 0.0 if diag <= 0.0 else float(value) / diag
+
+    smooth_raw = crease_raw = material_raw = preferred_raw = hidden_raw = 0.0
+    protected_hits = 0
+    for eid in sorted(added):
+        e = mesh.edges[eid]
+        length = edge_length(mesh, eid)
+        dihedral = float(e.dihedral_angle)
+        smooth_raw += length * max(0.0, 1.0 - dihedral / smooth)
+        if dihedral >= smooth:
+            crease_raw += length * (dihedral / fold)
+        if len(e.face_ids) == 2:
+            a, b = e.face_ids
+            if mesh.faces[a].material_index != mesh.faces[b].material_index:
+                material_raw += length
+        if eid in constraints.preferred:
+            preferred_raw += length
+        if eid in constraints.protected:
+            protected_hits += 1
+        if front is not None and e.face_ids:
+            facing = max(float(np.dot(np.asarray(mesh.faces[f].normal, dtype=float), front))
+                         for f in e.face_ids)
+            hidden_raw += length * max(0.0, -facing)
+
+    subs = _predicted_sub_charts(mesh, cfaces, seam_set, added)
+    chart_area = float(sum(float(mesh.faces[f].area_3d) for f in cfaces))
+    mean_n = _chart_mean_normal(mesh, sorted(cfaces))
+    u, v = _plane_axes(mean_n)
+    small = 0
+    slivers = 0
+    for sub in subs:
+        area = float(sum(float(mesh.faces[f].area_3d) for f in sub))
+        if chart_area > 0.0 and (area / chart_area) < float(tiny_face_fraction):
+            small += 1
+        if len(sub) <= 2 or _sub_chart_aspect(mesh, sub, u, v) >= SLIVER_ASPECT:
+            slivers += 1
+
+    out = {
+        "normalized_seam_length": norm(seam_length(mesh, added)),
+        "visible_surface_penalty": norm(constraints.exposure_cost(mesh, added)),
+        "smooth_surface_penalty": norm(smooth_raw),
+        "small_island_creation_penalty": float(small),
+        "sliver_creation_penalty": float(slivers),
+        "protected_region_penalty": float(protected_hits),
+        "hidden_back_bonus": norm(hidden_raw),
+        "concave_crease_bonus": norm(crease_raw),
+        "material_boundary_bonus": norm(material_raw),
+        "user_preferred_bonus": norm(preferred_raw),
+    }
+    out["total"] = float(sum(out[k] for k in COST_PENALTY_KEYS)
+                         - sum(out[k] for k in COST_BONUS_KEYS))
+    out["predicted_sub_chart_count"] = len(subs)
+    out["predicted_sub_chart_face_counts"] = sorted(len(s) for s in subs)
+    return out
+
+
+def _zero_cost_breakdown() -> dict:
+    """The cost of adding NOTHING (``unwrap_only``): every term 0, one sub-chart."""
+    out = {k: 0.0 for k in COST_PENALTY_KEYS + COST_BONUS_KEYS}
+    out["total"] = 0.0
+    out["predicted_sub_chart_count"] = 1
+    out["predicted_sub_chart_face_counts"] = []
+    return out
 
 
 # ------------------------------------------------------------------ paths
@@ -178,16 +387,19 @@ def _path_vertices(mesh: MeshGraph, start: int, path_edges) -> list[int]:
 # -------------------------------------------------------------- candidates
 
 
-def unwrap_only_candidate(target_island: int) -> SeamCandidate:
+def unwrap_only_candidate(target_island: int, *,
+                          cut_reason: str = "distortion_repair") -> SeamCandidate:
     """The no-cut candidate (§5): if re-unwrapping alone meets quality, G4 forbids
-    adding any seam at all."""
+    adding any seam at all. Its cost is zero by construction — nothing is cut."""
     return SeamCandidate(kind="unwrap_only", added_edges=frozenset(),
                          target_island=int(target_island), reason="unwrap_only",
-                         seam_length=0.0, exposure_cost=0.0)
+                         seam_length=0.0, exposure_cost=0.0,
+                         cut_reason=str(cut_reason), cost=_zero_cost_breakdown())
 
 
 def _make(mesh: MeshGraph, kind: str, added, target_island: int, constraints: SeamConstraints,
-          reason: str, notes: dict) -> SeamCandidate:
+          reason: str, notes: dict, *, chart_faces=(), seams=(),
+          cut_reason: str = "distortion_repair") -> SeamCandidate:
     added = frozenset(int(e) for e in added)
     check = constraints.check_added(added)
     notes = dict(notes)
@@ -196,11 +408,15 @@ def _make(mesh: MeshGraph, kind: str, added, target_island: int, constraints: Se
         notes["protected_cut"] = check["protected_cut"]
     return SeamCandidate(kind=kind, added_edges=added, target_island=int(target_island),
                          reason=reason, seam_length=seam_length(mesh, added),
-                         exposure_cost=constraints.exposure_cost(mesh, added), notes=notes)
+                         exposure_cost=constraints.exposure_cost(mesh, added), notes=notes,
+                         cut_reason=str(cut_reason),
+                         cost=candidate_cost_breakdown(mesh, chart_faces, seams, added,
+                                                       constraints))
 
 
 def normal_split_candidate(mesh: MeshGraph, chart_faces, seams: set[int],
-                           constraints: SeamConstraints, target_island: int) -> SeamCandidate | None:
+                           constraints: SeamConstraints, target_island: int, *,
+                           cut_reason: str = "distortion_repair") -> SeamCandidate | None:
     """The legacy VSA normal split, kept as the G4 baseline to compare against.
 
     A split that would cut a protected edge is NOT dropped: it comes back with
@@ -212,7 +428,8 @@ def normal_split_candidate(mesh: MeshGraph, chart_faces, seams: set[int],
     if not added:
         return None
     return _make(mesh, "normal_split", added, target_island, constraints,
-                 "normal_split", {"split_edges": len(added)})
+                 "normal_split", {"split_edges": len(added)},
+                 chart_faces=faces, seams=seams, cut_reason=cut_reason)
 
 
 def _stretch_of(face_stretch, fid: int) -> float:
@@ -285,7 +502,8 @@ def _splits_in_two(mesh: MeshGraph, chart_faces: set[int], seams: set[int], cut:
 
 def short_cut_candidate(mesh: MeshGraph, chart_faces, seams: set[int],
                         constraints: SeamConstraints, face_stretch, target_island: int,
-                        *, top_fraction: float = 0.2) -> SeamCandidate | None:
+                        *, top_fraction: float = 0.2,
+                        cut_reason: str = "distortion_repair") -> SeamCandidate | None:
     """A minimal-cost cut from the island's worst-distortion region to the boundary (§5).
 
     Cheaper and far shorter than a whole-chart normal split, and it routes *around* any
@@ -311,12 +529,14 @@ def short_cut_candidate(mesh: MeshGraph, chart_faces, seams: set[int],
         return None
     return _make(mesh, "short_cut", cut, target_island, constraints, "short_cut",
                  {"region_faces": len(region), "path_cost": float(cost),
-                  "start_vertex": int(start)})
+                  "start_vertex": int(start)},
+                 chart_faces=cfaces, seams=seams, cut_reason=cut_reason)
 
 
 def preferred_path_candidate(mesh: MeshGraph, chart_faces, seams: set[int],
                              constraints: SeamConstraints, face_stretch, target_island: int,
-                             *, top_fraction: float = 0.2) -> SeamCandidate | None:
+                             *, top_fraction: float = 0.2,
+                             cut_reason: str = "distortion_repair") -> SeamCandidate | None:
     """Same construction as :func:`short_cut_candidate`, but the path cost also carries
     the exposure term (edge length × visibility), so the route leaves the visible front
     and follows preferred / less-visible edges (§5, G4 "선호 경로 fixture").
@@ -350,30 +570,38 @@ def preferred_path_candidate(mesh: MeshGraph, chart_faces, seams: set[int],
         return None
     return _make(mesh, "preferred_path", cut, target_island, constraints, "preferred_path",
                  {"region_faces": len(region), "path_cost": float(cost),
-                  "start_vertex": int(start)})
+                  "start_vertex": int(start)},
+                 chart_faces=cfaces, seams=seams, cut_reason=cut_reason)
 
 
 def generate_candidates(mesh: MeshGraph, charts, target_island: int, seams: set[int],
                         constraints: SeamConstraints, face_stretch, *,
-                        max_candidates: int) -> list[SeamCandidate]:
+                        max_candidates: int,
+                        cut_reason: str = "distortion_repair") -> list[SeamCandidate]:
     """All cut candidates for ``target_island``, deterministically ordered (§5 / G4).
 
     Order is ``unwrap_only → short_cut → preferred_path → normal_split`` so the no-cut
     option is always evaluated first; candidates with identical ``added_edges`` are
     de-duplicated (first kind wins), constraint-violating candidates are pushed to the
     END (kept for the history, never chosen ahead of a valid one), and the list is
-    truncated to ``max_candidates``."""
+    truncated to ``max_candidates``.
+
+    ``cut_reason`` (:data:`CUT_REASONS`) is stamped on every candidate, and every
+    candidate carries its :func:`candidate_cost_breakdown` in ``cost``."""
     if max_candidates <= 0:
         return []
     chart_faces = set(charts[target_island])
     seams = set(seams)
 
-    produced: list[SeamCandidate] = [unwrap_only_candidate(target_island)]
+    produced: list[SeamCandidate] = [unwrap_only_candidate(target_island,
+                                                            cut_reason=cut_reason)]
     for factory in (short_cut_candidate, preferred_path_candidate):
-        cand = factory(mesh, chart_faces, seams, constraints, face_stretch, target_island)
+        cand = factory(mesh, chart_faces, seams, constraints, face_stretch, target_island,
+                       cut_reason=cut_reason)
         if cand is not None:
             produced.append(cand)
-    ns = normal_split_candidate(mesh, chart_faces, seams, constraints, target_island)
+    ns = normal_split_candidate(mesh, chart_faces, seams, constraints, target_island,
+                               cut_reason=cut_reason)
     if ns is not None:
         produced.append(ns)
 

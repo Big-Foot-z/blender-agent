@@ -140,7 +140,7 @@ def test_run_manifest_keys_and_git_head_sha():
         mode="auto_generate",
         seed=7,
         options={"margin_px": 4, "texture_size": 2048},
-        quality_profile={"metric_version": 2, "anisotropy_p95_cap": 1.6},
+        quality_profile={"metric_version": 2, "anisotropy_global_p95_max": 1.6},
         model_path="C:/models/low.fbx",
         model_rel="models/low.fbx",
         mesh_identity={"fingerprint": "abc", "model_sha256": "deadbeef", "face_count": 12},

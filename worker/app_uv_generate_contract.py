@@ -266,6 +266,12 @@ MESH_IDENTITY_FILE = "mesh_identity.json"
 QUALITY_PROFILE_FILE = "quality_profile.json"
 SEAM_OVERLAY_FILE = "seam_overlay.json"
 SELECTED_HEATMAP_ANISOTROPY_FILE = "selected_heatmap_anisotropy.png"
+# Quality/fragmentation/texel/merge-back evidence artifacts (T7b, gates G14/G15).
+# All optional: only an automatic run emits them.
+QUALITY_REPORT_FILE = "quality_report.json"
+MERGE_BACK_HISTORY_FILE = "merge_back_history.json"
+SEAM_OVERLAY_PNG_FILE = "seam_overlay.png"
+SHADING_POLICY_FILE = "shading_policy.json"
 REQUIRED_PREVIEWS = (
     "baseline_uv_layout.png",
     "baseline_checker_front.png",
@@ -296,6 +302,10 @@ ARTIFACT_FILES: dict[str, tuple[str, bool]] = {
     "quality_profile": (QUALITY_PROFILE_FILE, False),
     "seam_overlay": (SEAM_OVERLAY_FILE, False),
     "selected_heatmap_anisotropy": (SELECTED_HEATMAP_ANISOTROPY_FILE, False),
+    "quality_report": (QUALITY_REPORT_FILE, False),
+    "merge_back_history": (MERGE_BACK_HISTORY_FILE, False),
+    "seam_overlay_png": (SEAM_OVERLAY_PNG_FILE, False),
+    "shading_policy": (SHADING_POLICY_FILE, False),
 }
 
 
@@ -780,6 +790,11 @@ def evaluate_auto_gate(
     constraints: dict | None,
     reread_audit: dict | None = None,
     input_diagnostics: dict | None = None,
+    fragmentation: dict | None = None,
+    texel_density: dict | None = None,
+    islands_disagree: bool | None = None,
+    shading: dict | None = None,
+    merge_back: dict | None = None,
 ) -> dict:
     """The automatic-mode required gate (work plan §3 상태, gates G1/G3/G6).
 
@@ -792,6 +807,19 @@ def evaluate_auto_gate(
     edges / zero-area faces / degenerate input triangles / isolated vertices). A
     block whose ``ok`` is false is an ``input_defects`` failure — an abnormal
     input is diagnosed, never accepted. ``None`` skips the check entirely.
+
+    The T7b blocks below are all optional; ``None`` means "not evaluated" and
+    leaves the gate result exactly as it was (gates G7/G8/G9/G10/G3):
+
+    - ``fragmentation``: ``valid is False`` -> ``fragmentation_invalid`` invalid
+      reason; else a falsy ``passed`` -> ``fragmentation_failed`` failure.
+    - ``texel_density``: same shape -> ``texel_density_invalid`` /
+      ``texel_density_failed``.
+    - ``islands_disagree``: ``True`` -> ``island_connectivity_mismatch`` failure
+      (two independent island counts must agree).
+    - ``shading``: ``valid is False`` -> ``shading_policy_invalid`` invalid
+      reason; else a falsy ``passed`` -> ``shading_policy_failed`` failure.
+    - ``merge_back``: a falsy ``complete`` -> ``merge_back_incomplete`` failure.
     """
     failures: list[str] = []
     invalid_reasons: list[str] = []
@@ -825,6 +853,30 @@ def evaluate_auto_gate(
 
     if input_diagnostics is not None and not input_diagnostics.get("ok"):
         failures.append("input_defects")
+
+    if fragmentation is not None:
+        if fragmentation.get("valid") is False:
+            invalid_reasons.append("fragmentation_invalid")
+        elif not fragmentation.get("passed"):
+            failures.append("fragmentation_failed")
+
+    if texel_density is not None:
+        if texel_density.get("valid") is False:
+            invalid_reasons.append("texel_density_invalid")
+        elif not texel_density.get("passed"):
+            failures.append("texel_density_failed")
+
+    if islands_disagree is True:
+        failures.append("island_connectivity_mismatch")
+
+    if shading is not None:
+        if shading.get("valid") is False:
+            invalid_reasons.append("shading_policy_invalid")
+        elif not shading.get("passed"):
+            failures.append("shading_policy_failed")
+
+    if merge_back is not None and not merge_back.get("complete"):
+        failures.append("merge_back_incomplete")
 
     valid = not invalid_reasons
     return {
@@ -1043,6 +1095,58 @@ def build_layout_optimization_block(layout_report: dict | None) -> dict:
 
 
 # ---------------------------------------------------------------------------
+# Compact evidence blocks (T7b, gates G14/G15)
+# ---------------------------------------------------------------------------
+# The engine's fragmentation / texel-density / merge-back reports carry per-island
+# arrays the renderer never needs; these pick the summary-sized subset so the
+# summary stays small while the full report stays on disk as an artifact.
+def compact_fragmentation_block(frag: dict | None) -> dict:
+    """The summary-sized ``fragmentation`` block (gate G8)."""
+    f = frag or {}
+    return {
+        "passed": f.get("passed"),
+        "valid": f.get("valid"),
+        "failures": f.get("failures"),
+        "quality_failures": f.get("quality_failures"),
+        "metrics": f.get("metrics"),
+        "exempt_islands": f.get("exempt_islands"),
+        "tiny_island_ids": f.get("tiny_island_ids"),
+        "sliver_island_ids": f.get("sliver_island_ids"),
+    }
+
+
+def compact_texel_density_block(td: dict | None) -> dict:
+    """The summary-sized ``texel_density`` block (gate G9)."""
+    t = td or {}
+    return {
+        "passed": t.get("passed"),
+        "valid": t.get("valid"),
+        "failures": t.get("failures"),
+        "density_mean": t.get("density_mean"),
+        "density_cv": t.get("density_cv"),
+        "outlier_count": t.get("outlier_count"),
+        "outlier_island_ids": t.get("outlier_island_ids"),
+    }
+
+
+def compact_merge_back_block(mb: dict | None) -> dict:
+    """The summary-sized ``merge_back`` block (gate G10)."""
+    m = mb or {}
+    return {
+        "complete": m.get("complete"),
+        "enabled": m.get("enabled"),
+        "trials": m.get("trials"),
+        "accepted": m.get("accepted"),
+        "island_count_before": m.get("island_count_before"),
+        "island_count_after": m.get("island_count_after"),
+        "seam_length_before": m.get("seam_length_before"),
+        "seam_length_after": m.get("seam_length_after"),
+        "removable_remaining": m.get("removable_remaining"),
+        "reason": m.get("reason"),
+    }
+
+
+# ---------------------------------------------------------------------------
 # Summary builder (plan §4.1 — the renderer's primary input, §3 "primary input")
 # ---------------------------------------------------------------------------
 def build_generate_summary(
@@ -1074,6 +1178,12 @@ def build_generate_summary(
     input_diagnostics: dict | None = None,
     artist_approval: dict | None = None,
     acceptance_reason: str | None = None,
+    fragmentation: dict | None = None,
+    texel_density: dict | None = None,
+    packing: dict | None = None,
+    shading: dict | None = None,
+    merge_back: dict | None = None,
+    quality_report_passed: bool | None = None,
 ) -> dict:
     """Assemble ``uv_generate_summary.json`` (plan §4.1).
 
@@ -1082,7 +1192,7 @@ def build_generate_summary(
     ``seam_source`` records whether the seam set came from the explicit MVP 2 spec
     or was derived from a UV island boundary (revision plan §2.3, §4).
 
-    The keyword-only automation blocks (``mode`` .. ``acceptance_reason``) are all
+    The keyword-only automation blocks (``mode`` .. ``quality_report_passed``) are all
     optional and default to ``None`` so existing callers are unchanged (work plan
     §3, gates G6/G7). ``solver_accepted`` and ``artist_approved`` are reported
     separately: a passing solver run is never an artist approval (gate G6/G7).
@@ -1119,6 +1229,12 @@ def build_generate_summary(
         "artist_approved": bool(artist_approval and artist_approval.get("approved")),
         "artist_approval": artist_approval,
         "acceptance_reason": acceptance_reason,
+        "fragmentation": fragmentation,
+        "texel_density": texel_density,
+        "packing": packing,
+        "shading": shading,
+        "merge_back": merge_back,
+        "quality_report_passed": quality_report_passed,
     }
 
 

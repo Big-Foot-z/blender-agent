@@ -299,3 +299,88 @@ def test_nan_in_the_uv_map_makes_the_report_invalid():
     verdict = evaluate_quality(ENGINEERING_V0, report)
     assert verdict["valid"] is False
     assert verdict["passed"] is False
+
+
+# --- 10. the flat summary block (Gate G4) -----------------------------------------
+
+SUMMARY_KEYS = {
+    "metric_version",
+    "global_area_stretch_mean",
+    "global_area_stretch_p95",
+    "global_anisotropy_p95",
+    "global_anisotropy_max",
+    "worst_island_id",
+    "worst_island_area_stretch_p95",
+    "worst_island_anisotropy_p95",
+    "worst_island_anisotropy_max",
+    "bad_area_ratio",
+    "bad_area_threshold",
+    "summary_valid",
+}
+
+
+def test_summary_block_mirrors_the_global_and_worst_island_rows():
+    mesh = build_grid_plane(4, 4)
+    report = evaluate_distortion_v2(mesh, identity_uv(mesh))
+
+    s = report["summary"]
+    assert set(s) == SUMMARY_KEYS
+    assert s["metric_version"] == METRIC_VERSION == 2
+
+    g = report["global"]
+    assert s["global_anisotropy_p95"] == g["anisotropy_p95"]
+    assert s["global_anisotropy_max"] == g["anisotropy_max"]
+    assert s["global_area_stretch_mean"] == g["area_stretch_mean"]
+    assert s["global_area_stretch_p95"] == g["area_stretch_p95"]
+    assert s["bad_area_ratio"] == g["exceed_area_fraction"]
+    assert s["bad_area_threshold"] == report["exceed_basis_anisotropy"]
+
+    worst = report["islands"][report["worst_island_id"]]
+    assert s["worst_island_id"] == report["worst_island_id"]
+    assert s["worst_island_anisotropy_p95"] == worst["anisotropy_p95"]
+    assert s["worst_island_anisotropy_max"] == worst["anisotropy_max"]
+    assert s["worst_island_area_stretch_p95"] == worst["area_stretch_p95"]
+
+    assert s["summary_valid"] is True
+
+
+def test_summary_block_exposes_a_tiny_bad_patch():
+    mesh = build_grid_plane(10, 10)
+    uvmap = identity_uv(mesh)
+
+    bad_fid = 55
+    loops = mesh.faces[bad_fid].loop_indices
+    cu = sum(uvmap.get(li)[0] for li in loops) / len(loops)
+    cv = sum(uvmap.get(li)[1] for li in loops) / len(loops)
+    for li in loops:
+        u, v = uvmap.get(li)
+        uvmap.set(li, cu + (u - cu) * 2.0, cv + (v - cv) * 0.5)  # det = 1, ratio = 4
+
+    all_faces = [f.id for f in mesh.faces]
+    report = evaluate_distortion_v2(mesh, uvmap, [all_faces])
+
+    s = report["summary"]
+    assert s["summary_valid"] is True
+    assert s["bad_area_ratio"] > 0.0
+    assert s["bad_area_ratio"] == report["global"]["exceed_area_fraction"]
+    assert s["worst_island_anisotropy_max"] > report["global"]["anisotropy_mean"]
+    assert s["worst_island_anisotropy_max"] == pytest.approx(4.0, abs=ANISO_TOL)
+
+
+def test_compact_report_keeps_the_summary_block_unchanged():
+    mesh = build_grid_plane(4, 4)
+    report = evaluate_distortion_v2(mesh, identity_uv(mesh))
+
+    compact = compact_distortion_v2(report)
+    assert compact["summary"] == report["summary"]
+
+
+def test_summary_valid_is_false_when_the_uv_map_has_a_nan():
+    mesh = build_grid_plane(4, 4)
+    uvmap = identity_uv(mesh)
+    uvmap.uv[3] = (float("nan"), 0.0)
+
+    report = evaluate_distortion_v2(mesh, uvmap)
+    assert report["valid"] is False
+    assert set(report["summary"]) == SUMMARY_KEYS
+    assert report["summary"]["summary_valid"] is False

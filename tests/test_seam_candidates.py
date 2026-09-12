@@ -8,6 +8,7 @@ candidate ordering/budget.
 
 from __future__ import annotations
 
+import json
 import math
 
 import pytest
@@ -16,6 +17,7 @@ from chart_uv_agent import candidates as C
 from chart_uv_agent.constraints import SeamConstraints
 from chart_uv_agent.fixtures import build_folded_planes
 from chart_uv_agent.segmentation import flood_charts, mandatory_seam_edges, split_chart
+from uv_agent.geometry.mesh_graph import MeshGraph
 from uv_agent.io.fixtures import build_cylinder, build_grid_plane
 
 GRID_N = 6
@@ -330,3 +332,162 @@ def test_rank_key_orders_by_islands_then_length_then_exposure():
     assert sorted([d, c, b, a]) == [a, b, c, d]
     # Float noise never decides the order.
     assert C.rank_key(2, 1.0 + 1e-12, 0.0) == C.rank_key(2, 1.0, 0.0)
+
+
+# ------------------------------------------------------- cut cost (W2 §4.3)
+
+STRIP_NX, STRIP_NY = 12, 2
+
+
+def _strip(*, split_materials: bool = False):
+    """A ``12 × 2`` quad strip plane = one chart. Cutting it across the short axis gives
+    two fat ``6 × 2`` halves; cutting along the long axis gives two ``12 × 1`` slivers."""
+    verts = [(float(i), float(j), 0.0)
+             for j in range(STRIP_NY + 1) for i in range(STRIP_NX + 1)]
+
+    def vid(i: int, j: int) -> int:
+        return j * (STRIP_NX + 1) + i
+
+    faces = [[vid(i, j), vid(i + 1, j), vid(i + 1, j + 1), vid(i, j + 1)]
+             for j in range(STRIP_NY) for i in range(STRIP_NX)]
+    mats = None
+    if split_materials:
+        mats = [0 if j == 0 else 1 for j in range(STRIP_NY) for _ in range(STRIP_NX)]
+    mesh = MeshGraph.from_faces("strip", verts, faces, material_indices=mats)
+    seams = mandatory_seam_edges(mesh)
+    charts = flood_charts(mesh, seams)
+    assert len(charts) == 1
+    return mesh, vid, seams, charts[0]
+
+
+def _across_cut(mesh, vid):
+    """2 edges cutting the strip across the middle -> two 6 x 2 halves."""
+    return {mesh.edge_key(vid(6, j), vid(6, j + 1)) for j in range(STRIP_NY)}
+
+
+def _along_cut(mesh, vid):
+    """12 edges cutting along the long axis -> two 12 x 1 slivers."""
+    return {mesh.edge_key(vid(i, 1), vid(i + 1, 1)) for i in range(STRIP_NX)}
+
+
+def test_cost_breakdown_penalises_the_sliver_cut_over_the_fat_cut():
+    mesh, vid, seams, chart = _strip()
+    con = SeamConstraints.build(mesh)
+    a = C.candidate_cost_breakdown(mesh, chart, seams, _across_cut(mesh, vid), con)
+    b = C.candidate_cost_breakdown(mesh, chart, seams, _along_cut(mesh, vid), con)
+
+    assert a["predicted_sub_chart_count"] == 2
+    assert a["predicted_sub_chart_face_counts"] == [12, 12]
+    assert b["predicted_sub_chart_count"] == 2
+    assert b["predicted_sub_chart_face_counts"] == [12, 12]
+
+    # the 12 x 1 halves are slivers; the 6 x 2 halves are not.
+    assert a["sliver_creation_penalty"] == 0.0
+    assert b["sliver_creation_penalty"] > 0.0
+    # neither cut makes a tiny island (both halves are half the chart).
+    assert a["small_island_creation_penalty"] == 0.0
+    assert b["small_island_creation_penalty"] == 0.0
+    # the long cut is the longer seam and the worse cut overall.
+    assert b["normalized_seam_length"] > a["normalized_seam_length"]
+    assert b["total"] > a["total"]
+    # a flat strip has no creases, no materials, no preferences.
+    assert b["concave_crease_bonus"] == 0.0
+    assert b["material_boundary_bonus"] == 0.0
+    assert b["user_preferred_bonus"] == 0.0
+    assert b["protected_region_penalty"] == 0.0
+    assert b["smooth_surface_penalty"] > 0.0        # cutting across a smooth surface
+    # every reported value is JSON-safe.
+    assert json.loads(json.dumps(b)) == b
+
+
+def test_cost_breakdown_is_visibility_neutral_without_a_front_axis():
+    mesh, vid, seams, chart = _strip()
+    con = SeamConstraints.build(mesh)
+    assert con.front_axis == ""
+    cost = C.candidate_cost_breakdown(mesh, chart, seams, _along_cut(mesh, vid), con)
+    assert cost["visible_surface_penalty"] == 0.0
+    assert cost["hidden_back_bonus"] == 0.0
+
+
+def test_cost_breakdown_rewards_material_boundaries_and_user_preferences():
+    mesh, vid, seams, chart = _strip(split_materials=True)
+    cut = _along_cut(mesh, vid)
+    plain = C.candidate_cost_breakdown(mesh, chart, seams, cut,
+                                       SeamConstraints.build(mesh))
+    assert plain["material_boundary_bonus"] > 0.0          # the cut IS the material border
+    assert plain["user_preferred_bonus"] == 0.0
+
+    pref = sorted(cut)[:3]
+    con = SeamConstraints.build(mesh, preferred=pref)
+    liked = C.candidate_cost_breakdown(mesh, chart, seams, cut, con)
+    assert liked["user_preferred_bonus"] > 0.0
+    assert liked["total"] < plain["total"]
+
+    # the same cut across the SHORT axis stays inside one material.
+    across = C.candidate_cost_breakdown(mesh, chart, seams, _across_cut(mesh, vid),
+                                        SeamConstraints.build(mesh))
+    assert across["material_boundary_bonus"] == 0.0
+
+
+def test_cost_breakdown_counts_protected_edges_that_mandatory_overrode():
+    folded = build_folded_planes(6)
+    seams = mandatory_seam_edges(folded)
+    charts = flood_charts(folded, seams)
+    fold = sorted(e.id for e in folded.edges
+                  if len(e.face_ids) == 2 and e.dihedral_angle >= 90.0)
+    con = SeamConstraints.build(folded, protected={fold[0]})
+    assert fold[0] not in con.forbidden                   # mandatory won
+    cost = C.candidate_cost_breakdown(folded, charts[0], seams, {fold[0]}, con)
+    assert cost["protected_region_penalty"] == 1.0
+    assert cost["concave_crease_bonus"] > 0.0             # a crease is a good seam line
+    assert cost["smooth_surface_penalty"] == 0.0
+
+
+def test_unwrap_only_cost_is_all_zero():
+    cand = C.unwrap_only_candidate(3)
+    assert cand.cut_reason == "distortion_repair"
+    cost = cand.cost
+    for key in C.COST_PENALTY_KEYS + C.COST_BONUS_KEYS:
+        assert cost[key] == 0.0
+    assert cost["total"] == 0.0
+    assert cost["predicted_sub_chart_count"] == 1
+    assert json.loads(json.dumps(cand.to_dict())) == cand.to_dict()
+
+
+def test_rank_key_breaks_remaining_ties_on_total_cost():
+    a = C.rank_key(2, 1.0, 0.0, 0.5)
+    b = C.rank_key(2, 1.0, 0.0, 1.5)
+    c = C.rank_key(2, 1.0, 5.0, 0.0)
+    d = C.rank_key(2, 2.0, 0.0, 0.0)
+    e = C.rank_key(3, 0.1, 0.0, 0.0)
+    assert sorted([e, d, c, b, a]) == [a, b, c, d, e]
+    assert len(a) == 4
+    # existing 3-argument callers keep working, with total_cost = 0.
+    assert C.rank_key(2, 1.0, 0.0) == (2, 1.0, 0.0, 0.0)
+    assert C.rank_key(2, 1.0, 0.0, 1e-12) == C.rank_key(2, 1.0, 0.0)
+
+
+def test_generated_candidates_carry_a_cut_reason_and_a_cost_breakdown():
+    mesh, vid, seams, charts = _grid()
+    hot = 1 * GRID_N + 1
+    con = SeamConstraints.build(mesh)
+    cands = C.generate_candidates(mesh, charts, 0, seams, con, _stretch(mesh, hot),
+                                  max_candidates=10, cut_reason="correctness_repair")
+    assert len(cands) >= 2
+    keys = set(C.COST_PENALTY_KEYS + C.COST_BONUS_KEYS) | {
+        "total", "predicted_sub_chart_count", "predicted_sub_chart_face_counts"}
+    for cand in cands:
+        assert cand.cut_reason == "correctness_repair"
+        assert set(cand.cost) == keys
+        d = cand.to_dict()
+        assert d["cut_reason"] == "correctness_repair"
+        assert d["cost"] == cand.cost
+        assert json.loads(json.dumps(d)) == d
+
+    # default reason code, and a cut candidate really predicts two sub-charts.
+    default = C.generate_candidates(mesh, charts, 0, seams, con, _stretch(mesh, hot),
+                                    max_candidates=10)
+    assert all(c.cut_reason == "distortion_repair" for c in default)
+    cut = [c for c in default if c.added_edges][0]
+    assert cut.cost["predicted_sub_chart_count"] == 2
+    assert cut.cost["normalized_seam_length"] > 0.0

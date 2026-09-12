@@ -40,6 +40,7 @@ def _report(**overrides) -> dict:
                 "anisotropy_p95": 1.4,
                 "anisotropy_max": 2.2,
                 "area_stretch_mean": 0.25,
+                "area_stretch_p95": 0.40,
                 "exceed_area_fraction": 0.03,
             }
         ],
@@ -70,12 +71,12 @@ def test_load_by_string_id():
 
 def test_missing_required_key_raises_value_error():
     data = ENGINEERING_V0.to_dict()
-    del data["anisotropy_p95_cap_island"]
+    del data["anisotropy_island_p95_max"]
     del data["regression_budget"]
     with pytest.raises(ValueError) as exc:
         load_quality_profile(data)
     message = str(exc.value)
-    assert "anisotropy_p95_cap_island" in message
+    assert "anisotropy_island_p95_max" in message
     assert "regression_budget" in message
 
 
@@ -89,6 +90,79 @@ def test_extra_key_raises_value_error():
 
 def test_to_dict_round_trip():
     assert load_quality_profile(ENGINEERING_V0.to_dict()) == ENGINEERING_V0
+
+
+_NEW_PROFILE_KEYS = (
+    "area_stretch_global_p95_max",
+    "area_stretch_island_p95_max",
+    "border_margin_px",
+    "min_island_uv_area",
+    "tiny_island_uv_area",
+    "tiny_island_count_max",
+    "tiny_island_area_ratio_max",
+    "sliver_aspect_min",
+    "sliver_uv_area_max",
+    "sliver_island_count_max",
+    "island_aspect_p95_max",
+    "texel_density_cv_max",
+    "texel_density_outlier_tolerance",
+    "texel_density_outlier_count_max",
+    "packing_efficiency_min",
+    "shading_uv_policy",
+    "merge_back_enabled",
+    "merge_back_max_trials",
+)
+
+
+def test_new_profile_keys_are_required_and_round_trip():
+    data = ENGINEERING_V0.to_dict()
+    for key in _NEW_PROFILE_KEYS:
+        assert key in REQUIRED_PROFILE_KEYS, key
+        assert key in data, key
+    assert load_quality_profile(data) == ENGINEERING_V0
+    for key in _NEW_PROFILE_KEYS:
+        partial = ENGINEERING_V0.to_dict()
+        del partial[key]
+        with pytest.raises(ValueError) as exc:
+            load_quality_profile(partial)
+        assert key in str(exc.value)
+
+
+def test_new_profile_key_defaults():
+    assert ENGINEERING_V0.area_stretch_global_p95_max == 0.9
+    assert ENGINEERING_V0.area_stretch_island_p95_max == 1.1
+    assert ENGINEERING_V0.border_margin_px == 4
+    assert ENGINEERING_V0.min_island_uv_area == 1e-4
+    assert ENGINEERING_V0.tiny_island_uv_area == 0.002
+    assert ENGINEERING_V0.tiny_island_count_max == 8
+    assert ENGINEERING_V0.tiny_island_area_ratio_max == 0.05
+    assert ENGINEERING_V0.sliver_aspect_min == 8.0
+    assert ENGINEERING_V0.sliver_uv_area_max == 0.01
+    assert ENGINEERING_V0.sliver_island_count_max == 0
+    assert ENGINEERING_V0.island_aspect_p95_max == 6.0
+    assert ENGINEERING_V0.texel_density_cv_max == 0.15
+    assert ENGINEERING_V0.texel_density_outlier_tolerance == 0.30
+    assert ENGINEERING_V0.texel_density_outlier_count_max == 0
+    assert ENGINEERING_V0.packing_efficiency_min == 0.42
+    assert ENGINEERING_V0.shading_uv_policy == "preserve"
+    assert ENGINEERING_V0.merge_back_enabled is True
+    assert ENGINEERING_V0.merge_back_max_trials == 64
+
+
+@pytest.mark.parametrize(
+    "policy",
+    ["preserve", "split_normals_on_uv_seams", "require_uv_seam_on_sharp_edges"],
+)
+def test_allowed_shading_uv_policies_load(policy):
+    data = dict(ENGINEERING_V0.to_dict(), shading_uv_policy=policy)
+    assert load_quality_profile(data).shading_uv_policy == policy
+
+
+def test_invalid_shading_uv_policy_raises_value_error():
+    data = dict(ENGINEERING_V0.to_dict(), shading_uv_policy="smooth_everything")
+    with pytest.raises(ValueError) as exc:
+        load_quality_profile(data)
+    assert "shading_uv_policy" in str(exc.value)
 
 
 def test_regression_budget_for_missing_metric_is_zero():
@@ -153,7 +227,47 @@ def test_evaluate_quality_island_failure():
         if c["scope"] == "island" and c["name"] == "anisotropy_p95"
     ]
     assert failing[0]["passed"] is False
-    assert failing[0]["limit"] == ENGINEERING_V0.anisotropy_p95_cap_island
+    assert failing[0]["limit"] == ENGINEERING_V0.anisotropy_island_p95_max
+
+
+def test_evaluate_quality_global_area_stretch_p95_failure():
+    report = _report()
+    report["global"]["area_stretch_p95"] = 1.0
+    result = evaluate_quality(ENGINEERING_V0, report)
+    assert result["valid"] is True
+    assert result["passed"] is False
+    assert "area_stretch_p95" in result["failures"]
+    failing = [
+        c
+        for c in result["checks"]
+        if c["scope"] == "global" and c["name"] == "area_stretch_p95"
+    ]
+    assert failing[0]["passed"] is False
+    assert failing[0]["limit"] == ENGINEERING_V0.area_stretch_global_p95_max
+
+
+def test_evaluate_quality_island_area_stretch_p95_failure():
+    report = _report()
+    report["islands"][0]["area_stretch_p95"] = 1.2
+    result = evaluate_quality(ENGINEERING_V0, report)
+    assert result["valid"] is True
+    assert result["passed"] is False
+    assert "area_stretch_p95" in result["failures"]
+    failing = [
+        c
+        for c in result["checks"]
+        if c["scope"] == "island" and c["name"] == "area_stretch_p95"
+    ]
+    assert failing[0]["passed"] is False
+    assert failing[0]["limit"] == ENGINEERING_V0.area_stretch_island_p95_max
+
+
+def test_evaluate_quality_missing_island_area_stretch_p95_is_invalid():
+    report = _report()
+    del report["islands"][0]["area_stretch_p95"]
+    result = evaluate_quality(ENGINEERING_V0, report)
+    assert result["valid"] is False
+    assert "islands[0].area_stretch_p95" in result["invalid_reasons"]
 
 
 def test_evaluate_quality_uv_degenerate_failure():
@@ -286,6 +400,24 @@ def test_accept_candidate_constraint_violation():
     result = _accept(constraints_ok=False, regression_ok=False)
     assert result["accepted"] is False
     assert result["reason"] == "constraint_violation"
+
+
+def test_accept_candidate_fragmentation_limit_exceeded():
+    """G6 ordering: the fragmentation limit is consulted AFTER the constraint check and
+    BEFORE the regression budget — a cut that shatters the layout is rejected for that,
+    not for a metric that merely drifted."""
+    result = _accept(fragmentation_ok=False, regression_ok=False)
+    assert result["accepted"] is False
+    assert result["reason"] == "fragmentation_limit_exceeded"
+
+    # A constraint violation still outranks it.
+    assert _accept(fragmentation_ok=False, constraints_ok=False)["reason"] == (
+        "constraint_violation")
+    # ... and correctness outranks both.
+    assert _accept(fragmentation_ok=False, correctness_ok=False)["reason"] == (
+        "correctness_regression")
+    # Default is "fine", so every existing call site is unchanged.
+    assert _accept(quality_after_passed=True)["reason"] == "quality_passed"
 
 
 def test_accept_candidate_regression_budget_exceeded():

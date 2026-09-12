@@ -421,3 +421,189 @@ def test_build_generate_summary_carries_input_diagnostics():
         object_name="Fixture", seam_spec=None, metrics={}, seam_integrity={},
         layout_optimization={}, artifacts={})
     assert legacy["input_diagnostics"] is None
+
+
+# --- T7b gate codes (G7/G8/G9/G10/G3) --------------------------------------
+def test_evaluate_auto_gate_fragmentation_invalid_and_failed():
+    g = contract.evaluate_auto_gate(
+        **_ok_gate_inputs(), fragmentation={"valid": False, "passed": True})
+    assert g["valid"] is False and g["passed"] is False
+    assert "fragmentation_invalid" in g["invalid_reasons"]
+    assert "fragmentation_failed" not in g["failures"]
+
+    g2 = contract.evaluate_auto_gate(
+        **_ok_gate_inputs(), fragmentation={"valid": True, "passed": False})
+    assert g2["valid"] is True and g2["passed"] is False
+    assert g2["failures"] == ["fragmentation_failed"]
+
+    g3 = contract.evaluate_auto_gate(
+        **_ok_gate_inputs(), fragmentation={"valid": True, "passed": True})
+    assert g3["passed"] is True and g3["failures"] == []
+
+
+def test_evaluate_auto_gate_texel_density_invalid_and_failed():
+    g = contract.evaluate_auto_gate(
+        **_ok_gate_inputs(), texel_density={"valid": False, "passed": True})
+    assert g["valid"] is False and g["passed"] is False
+    assert "texel_density_invalid" in g["invalid_reasons"]
+
+    g2 = contract.evaluate_auto_gate(
+        **_ok_gate_inputs(), texel_density={"valid": True, "passed": False})
+    assert g2["valid"] is True and g2["passed"] is False
+    assert g2["failures"] == ["texel_density_failed"]
+
+    g3 = contract.evaluate_auto_gate(
+        **_ok_gate_inputs(), texel_density={"valid": True, "passed": True})
+    assert g3["passed"] is True and g3["failures"] == []
+
+
+def test_evaluate_auto_gate_island_connectivity_mismatch():
+    g = contract.evaluate_auto_gate(**_ok_gate_inputs(), islands_disagree=True)
+    assert g["valid"] is True and g["passed"] is False
+    assert g["failures"] == ["island_connectivity_mismatch"]
+
+    g2 = contract.evaluate_auto_gate(**_ok_gate_inputs(), islands_disagree=False)
+    assert g2["passed"] is True and g2["failures"] == []
+
+
+def test_evaluate_auto_gate_shading_policy_invalid_and_failed():
+    g = contract.evaluate_auto_gate(
+        **_ok_gate_inputs(), shading={"valid": False, "passed": True, "failures": []})
+    assert g["valid"] is False and g["passed"] is False
+    assert "shading_policy_invalid" in g["invalid_reasons"]
+
+    g2 = contract.evaluate_auto_gate(
+        **_ok_gate_inputs(), shading={"valid": True, "passed": False, "failures": ["x"]})
+    assert g2["valid"] is True and g2["passed"] is False
+    assert g2["failures"] == ["shading_policy_failed"]
+
+    g3 = contract.evaluate_auto_gate(
+        **_ok_gate_inputs(), shading={"valid": True, "passed": True, "failures": []})
+    assert g3["passed"] is True and g3["failures"] == []
+
+
+def test_evaluate_auto_gate_merge_back_incomplete():
+    g = contract.evaluate_auto_gate(**_ok_gate_inputs(), merge_back={"complete": False})
+    assert g["valid"] is True and g["passed"] is False
+    assert g["failures"] == ["merge_back_incomplete"]
+
+    g2 = contract.evaluate_auto_gate(**_ok_gate_inputs(), merge_back={"complete": True})
+    assert g2["passed"] is True and g2["failures"] == []
+
+
+def test_evaluate_auto_gate_t7b_blocks_default_none_is_unchanged():
+    base = contract.evaluate_auto_gate(**_ok_gate_inputs())
+    same = contract.evaluate_auto_gate(
+        **_ok_gate_inputs(), fragmentation=None, texel_density=None,
+        islands_disagree=None, shading=None, merge_back=None)
+    assert same == base
+    assert same["passed"] is True
+    assert same["failures"] == [] and same["invalid_reasons"] == []
+
+
+# --- T7b summary keys (G14) ------------------------------------------------
+def test_build_generate_summary_defaults_the_t7b_keys_to_none():
+    s = contract.build_generate_summary(
+        run_id="r", status=contract.STATUS_NEEDS_USER_REVIEW, model="m",
+        object_name="Pot", seam_spec=None, metrics=None, seam_integrity=_integrity(),
+        layout_optimization={"enabled": False}, artifacts={})
+    for key in ("fragmentation", "texel_density", "packing", "shading",
+                "merge_back", "quality_report_passed"):
+        assert key in s
+        assert s[key] is None
+
+
+def test_build_generate_summary_carries_the_t7b_blocks():
+    frag = {"passed": True, "valid": True, "failures": []}
+    td = {"passed": False, "valid": True, "failures": ["density_cv"]}
+    packing = {"efficiency": 0.71, "limit": 0.65, "passed": True, "advisory": False}
+    shading = {"passed": True, "valid": True, "failures": []}
+    merge_back = {"complete": True, "trials": 3, "accepted": 1}
+    s = contract.build_generate_summary(
+        run_id="r", status=contract.STATUS_NEEDS_USER_REVIEW, model="m",
+        object_name="Pot", seam_spec=None, metrics=None, seam_integrity=_integrity(),
+        layout_optimization={"enabled": True}, artifacts={},
+        mode=contract.MODE_AUTO_GENERATE,
+        fragmentation=frag, texel_density=td, packing=packing, shading=shading,
+        merge_back=merge_back, quality_report_passed=False)
+    assert s["fragmentation"] == frag
+    assert s["texel_density"] == td
+    assert s["packing"]["efficiency"] == 0.71
+    assert s["shading"] == shading
+    assert s["merge_back"]["trials"] == 3
+    assert s["quality_report_passed"] is False
+
+
+# --- T7b artifact registry additions (G15) ---------------------------------
+def test_artifact_files_carry_the_t7b_evidence_artifacts():
+    expected = {
+        "quality_report": "quality_report.json",
+        "merge_back_history": "merge_back_history.json",
+        "seam_overlay_png": "seam_overlay.png",
+        "shading_policy": "shading_policy.json",
+    }
+    for key, filename in expected.items():
+        assert key in contract.ARTIFACT_FILES
+        assert contract.ARTIFACT_FILES[key] == (filename, False)
+    assert contract.QUALITY_REPORT_FILE == "quality_report.json"
+    assert contract.MERGE_BACK_HISTORY_FILE == "merge_back_history.json"
+    assert contract.SEAM_OVERLAY_PNG_FILE == "seam_overlay.png"
+    assert contract.SHADING_POLICY_FILE == "shading_policy.json"
+
+
+# --- T7b compact helpers ---------------------------------------------------
+def test_compact_fragmentation_block_on_none_and_empty():
+    keys = {"passed", "valid", "failures", "quality_failures", "metrics",
+            "exempt_islands", "tiny_island_ids", "sliver_island_ids"}
+    for arg in (None, {}):
+        blk = contract.compact_fragmentation_block(arg)
+        assert set(blk) == keys
+        assert all(v is None for v in blk.values())
+
+
+def test_compact_fragmentation_block_drops_the_per_island_arrays():
+    blk = contract.compact_fragmentation_block({
+        "passed": False, "valid": True, "failures": ["tiny_islands"],
+        "quality_failures": [], "metrics": {"tiny_island_count": 2},
+        "islands": [{"id": 0}, {"id": 1}], "checks": {"tiny": False},
+        "exempt_islands": 1, "tiny_island_ids": [0, 1], "sliver_island_ids": []})
+    assert "islands" not in blk and "checks" not in blk
+    assert blk["failures"] == ["tiny_islands"]
+    assert blk["metrics"]["tiny_island_count"] == 2
+    assert blk["tiny_island_ids"] == [0, 1]
+
+
+def test_compact_texel_density_block_on_none_and_empty():
+    keys = {"passed", "valid", "failures", "density_mean", "density_cv",
+            "outlier_count", "outlier_island_ids"}
+    for arg in (None, {}):
+        blk = contract.compact_texel_density_block(arg)
+        assert set(blk) == keys
+        assert all(v is None for v in blk.values())
+
+    full = contract.compact_texel_density_block({
+        "passed": True, "valid": True, "failures": [], "density_mean": 512.0,
+        "density_cv": 0.12, "outlier_count": 0, "outlier_island_ids": [],
+        "islands": [{"id": 0, "density": 511.0}]})
+    assert "islands" not in full
+    assert full["density_cv"] == 0.12
+
+
+def test_compact_merge_back_block_on_none_and_empty():
+    keys = {"complete", "enabled", "trials", "accepted", "island_count_before",
+            "island_count_after", "seam_length_before", "seam_length_after",
+            "removable_remaining", "reason"}
+    for arg in (None, {}):
+        blk = contract.compact_merge_back_block(arg)
+        assert set(blk) == keys
+        assert all(v is None for v in blk.values())
+
+    full = contract.compact_merge_back_block({
+        "complete": True, "enabled": True, "trials": 4, "accepted": 2,
+        "island_count_before": 12, "island_count_after": 10,
+        "seam_length_before": 3.5, "seam_length_after": 3.1,
+        "removable_remaining": 0, "reason": "no_more_candidates",
+        "history": [{"trial": 0}]})
+    assert "history" not in full
+    assert full["accepted"] == 2
+    assert full["reason"] == "no_more_candidates"

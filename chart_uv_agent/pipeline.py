@@ -184,6 +184,7 @@ def _v2_result_block(obj, mesh: MeshGraph, final_seams: set[int], *, profile, re
 
     Measures the layout already on ``obj`` (never unwraps), so the numbers describe exactly
     what the run shipped."""
+    from chart_uv_agent.quality_report import build_quality_report
     from chart_uv_agent.refinement_loop import measure_layout, seam_length_report
 
     measurement = measure_layout(obj, mesh, final_seams, profile=profile, stage="final",
@@ -199,6 +200,13 @@ def _v2_result_block(obj, mesh: MeshGraph, final_seams: set[int], *, profile, re
         "correctness": measurement["correctness"],
         "quality": measurement["quality"],
         "mandatory_audit": measurement["mandatory_audit"],
+        "fragmentation": measurement["fragmentation"],
+        "texel_density": measurement["texel_density"],
+        "packing": measurement["packing"],
+        "border_inset": measurement["border_inset"],
+        "hard_failures": list(measurement["hard_failures"]),
+        "quality_failures": list(measurement["quality_failures"]),
+        "quality_report": build_quality_report(measurement, profile),
         "uv_island_count": int(measurement["uv_island_count"]),
         "islands_disagree": bool(measurement["islands_disagree"]),
         "quality_profile": profile.to_dict(),
@@ -254,6 +262,16 @@ def _apply_v2_metrics(metrics: dict, measurement: dict) -> None:
                                           .get("overlap_area_total", 0.0))
     metrics["local_flip_count"] = int((corr.get("orientation") or {})
                                       .get("local_flip_count", 0))
+    frag = (measurement.get("fragmentation") or {}).get("metrics") or {}
+    metrics["tiny_island_count"] = int(frag.get("tiny_island_count", 0) or 0)
+    metrics["sliver_island_count"] = int(frag.get("sliver_island_count", 0) or 0)
+    metrics["normalized_seam_length"] = float(frag.get("normalized_seam_length", 0.0) or 0.0)
+    metrics["texel_density_cv"] = float((measurement.get("texel_density") or {})
+                                        .get("density_cv", float("nan")))
+    metrics["packing_efficiency_v2"] = float((measurement.get("packing") or {})
+                                             .get("efficiency", float("nan")))
+    metrics["min_border_gap_px"] = float((corr.get("border_gap") or {})
+                                         .get("min_gap_px", float("nan")))
     metrics["metric_version"] = 2
 
 
@@ -269,14 +287,22 @@ def _pack_margin_for(profile, margin: float | None) -> float:
     return max(float(margin or 0.0), floor)
 
 
+#: The correctness checks a pure RE-PACK (never a cut) can repair: island-to-island
+#: spacing and tile-border padding are both placement problems (G9/G11).
+_REPACK_ONLY_CHECKS = ("island_gap", "border_gap")
+
+
 def _island_gap_only_failure(correctness: dict) -> bool:
-    """True when ``island_gap`` is the ONE failing correctness check (overlap / orientation /
-    degenerate / bounds all pass) — the only case a pure re-pack can repair."""
+    """True when the failing correctness checks are ONLY the placement ones.
+
+    ``island_gap`` / ``border_gap`` are the two a pure re-pack can repair; if anything
+    else (overlap / orientation / degenerate / bounds) fails, re-packing is the wrong
+    tool and the loop must not pretend otherwise."""
     checks = {str(c.get("name")): bool(c.get("passed"))
               for c in (correctness or {}).get("checks", ())}
-    if checks.get("island_gap", True):
+    if all(checks.get(name, True) for name in _REPACK_ONLY_CHECKS):
         return False
-    return all(v for k, v in checks.items() if k != "island_gap")
+    return all(v for k, v in checks.items() if k not in _REPACK_ONLY_CHECKS)
 
 
 def _gap_repack_pass(obj, mesh, final_seams, *, profile, regions, pack_margin: float,

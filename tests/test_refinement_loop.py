@@ -260,3 +260,127 @@ def test_seam_length_report_splits_and_sums():
     assert report["bbox_diagonal"] > 0.0
     assert report["auxiliary_normalized"] == pytest.approx(
         report["auxiliary"] / report["bbox_diagonal"], abs=1e-12)
+
+
+# -------------------------------------------- 8. border inset + the new G7/G8/G9/G11 blocks
+
+
+def test_measure_layout_applies_border_inset_and_reports_new_blocks(monkeypatch):
+    """G9/G11: the shipped layout is pushed inside the tile padding by a PLACEMENT-only
+    transform, and the measurement carries the new gate blocks."""
+    mesh, _backend, obj, seams, _constraints = _sphere(monkeypatch)
+
+    measurement = R.unwrap_and_measure(obj, mesh, seams, profile=PROFILE, margin=0.005,
+                                       stage="refinement")
+
+    for key in ("fragmentation", "texel_density", "packing", "border_inset",
+                "hard_failures", "quality_failures"):
+        assert key in measurement, key
+
+    border = [c for c in measurement["correctness"]["checks"]
+              if c["name"] == "border_gap"]
+    assert len(border) == 1
+    assert border[0]["passed"] is True, border[0]
+    assert measurement["correctness"]["border_margin_px"] == float(PROFILE.border_margin_px)
+
+    inset = measurement["border_inset"]
+    b = float(PROFILE.border_margin_px) / float(PROFILE.texture_size_px)
+    u0, v0, u1, v1 = inset["bbox_after"]
+    assert min(u0, v0) >= b - 1e-9
+    assert max(u1, v1) <= 1.0 - b + 1e-9
+    # "applied" is only True when the layout really was outside the padding.
+    before_u0, before_v0, before_u1, before_v1 = inset["bbox_before"]
+    was_outside = (min(before_u0, before_v0) < b - 1e-12
+                   or max(before_u1, before_v1) > 1.0 - b + 1e-12)
+    assert inset["applied"] is was_outside
+
+    assert measurement["packing"]["advisory"] is True
+    assert 0.0 <= measurement["packing"]["efficiency"] <= 1.0
+    assert measurement["passed"] is (not measurement["hard_failures"])
+
+
+def test_border_inset_is_uniform_and_idempotent(monkeypatch):
+    """A uniform similarity transform cannot change any distortion or density RATIO, and
+    a layout already inside the padding is left byte-identical (G9)."""
+    from chart_uv_agent import unwrap as unwrap_mod
+
+    mesh, _backend, obj, seams, _constraints = _sphere(monkeypatch)
+    unwrap_mod.unwrap_and_pack(obj, seams, margin=0.005)
+    islands = segmentation.flood_charts(mesh, seams)
+
+    def _ratios():
+        uvmap = unwrap_mod.read_uvmap(obj, mesh)
+        distortion = R.evaluate_distortion_v2(
+            mesh, uvmap, islands, stage="candidate",
+            exceed_basis=PROFILE.bad_area_threshold)
+        texel = R.evaluate_texel_density(
+            mesh, uvmap, islands, texture_size_px=PROFILE.texture_size_px,
+            cv_max=PROFILE.texel_density_cv_max,
+            outlier_tolerance=PROFILE.texel_density_outlier_tolerance,
+            outlier_count_max=PROFILE.texel_density_outlier_count_max)
+        return (float(distortion["global"]["anisotropy_p95"]),
+                float(texel["density_cv"]))
+
+    aniso_before, cv_before = _ratios()
+    first = R.ensure_border_margin(obj, mesh, profile=PROFILE)
+    aniso_after, cv_after = _ratios()
+
+    assert aniso_after == pytest.approx(aniso_before, abs=1e-9)
+    assert cv_after == pytest.approx(cv_before, abs=1e-9)
+
+    uv_after_first = obj.uv.uv.copy()
+    second = R.ensure_border_margin(obj, mesh, profile=PROFILE)
+    assert second["applied"] is False
+    assert np.array_equal(obj.uv.uv, uv_after_first)
+    assert 0.0 < first["scale"] <= 1.0
+
+
+def test_candidate_creating_sliver_is_rejected_with_fragmentation_reason(monkeypatch):
+    """G6: a cut whose layout adds non-exempt sliver islands is rejected by the
+    fragmentation limit — before the regression budget is even consulted — and the seams
+    are fully restored."""
+    mesh, _backend, obj, seams, constraints = _sphere(monkeypatch)
+    edge = _interior_edge(mesh, seams)
+
+    # BEFORE is measured with the real G7 measurement (and must pass it), so the rejection
+    # below is unambiguously "the candidate made fragmentation worse".
+    before = R.unwrap_and_measure(obj, mesh, seams, profile=PROFILE, margin=0.005,
+                                  stage="refinement")
+    assert before["fragmentation"]["passed"] is True
+    uv_before = obj.uv.uv.copy()
+    seams_before = set(seams)
+
+    real_fragmentation = R.evaluate_fragmentation
+
+    def _sliver(*args, **kwargs):
+        report = dict(real_fragmentation(*args, **kwargs))
+        checks = []
+        for check in report["checks"]:
+            check = dict(check)
+            if check["name"] == "sliver_islands":
+                check.update({"value": 3, "passed": False})
+            checks.append(check)
+        report.update({"checks": checks, "passed": False, "hard_passed": False,
+                       "failures": ["sliver_islands"]})
+        return report
+
+    monkeypatch.setattr(R, "evaluate_fragmentation", _sliver)
+
+    cand = SeamCandidate(kind="short_cut", added_edges=frozenset({edge}),
+                         target_island=0, reason="sliver",
+                         seam_length=0.0, exposure_cost=0.0)
+    monkeypatch.setattr(R, "generate_candidates", _fixed_candidates(cand))
+
+    result = R.run_refinement(obj, mesh, seams, constraints=constraints, profile=PROFILE,
+                              budget={"max_iterations": 1}, margin=0.005,
+                              initial_measurement=before)
+
+    assert result["candidate_history"]
+    for record in result["candidate_history"]:
+        assert record["accepted"] is False
+        assert record["reason"] == "fragmentation_limit_exceeded"
+        assert record["fragmentation_ok"] is False
+
+    assert result["seams"] == seams_before
+    assert result["distortion_seams"] == set()
+    assert np.array_equal(obj.uv.uv, uv_before)

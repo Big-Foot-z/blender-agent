@@ -308,3 +308,38 @@ def test_island_cap_termination_reason(monkeypatch):
     termination = result["termination"]
     assert termination["candidates_evaluated"] == 0, termination
     assert termination["reason"] == "island_cap", termination
+
+
+# --------------------------- 11. the new G7/G8/G9/G11/G15 result blocks ship (G15)
+
+
+def test_no_spec_result_carries_fragmentation_texel_packing_and_quality_report(monkeypatch):
+    """G7/G8/G9/G11/G15: the automatic result carries every new gate block plus the one
+    self-contained ``quality_report`` document, and that document survives json.dumps."""
+    mesh, _backend, obj = _sphere(monkeypatch)
+    result = run_chart_uv(obj, mesh, max_rounds=3,
+                          budget={"max_candidates_per_round": 2})
+
+    for key in ("fragmentation", "texel_density", "packing", "border_inset",
+                "hard_failures", "quality_failures", "quality_report"):
+        assert key in result, key
+
+    json.dumps(result["quality_report"])
+    report = result["quality_report"]
+    assert report["schema_version"] == 1
+    assert report["hard_failures"] == result["hard_failures"]
+
+    # ``auto_passed`` is the report's verdict AND the v1 mandatory hard gate; the report
+    # never claims a pass the run did not have.
+    assert result["auto_passed"] is (report["passed"] and result["auto_passed"])
+    if not report["passed"]:
+        assert result["auto_passed"] is False
+
+    # The v2 metric summary carries the new numbers.
+    for key in ("tiny_island_count", "sliver_island_count", "normalized_seam_length",
+                "texel_density_cv", "packing_efficiency_v2", "min_border_gap_px"):
+        assert key in result["metrics"], key
+
+    # The shipped layout respects the tile padding (G9).
+    border = [c for c in result["correctness"]["checks"] if c["name"] == "border_gap"]
+    assert len(border) == 1 and border[0]["passed"] is True

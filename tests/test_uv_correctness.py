@@ -11,6 +11,7 @@ import pytest
 from uv_agent.geometry.mesh_graph import MeshGraph
 from uv_agent.geometry.solution import UVMap
 from uv_agent.geometry.uv_correctness import (
+    border_gap_audit,
     bounds_audit,
     compact_correctness,
     degenerate_uv_audit,
@@ -20,7 +21,7 @@ from uv_agent.geometry.uv_correctness import (
     orientation_audit,
     triangle_intersection_area,
 )
-from uv_agent.io.fixtures import build_grid_plane
+from uv_agent.io.fixtures import build_cube, build_grid_plane
 
 
 # ---------------------------------------------------------------------------
@@ -327,6 +328,74 @@ def test_single_island_gap_is_trivially_passed():
 
 
 # ---------------------------------------------------------------------------
+# 7b. tile-border gap (Gate G9: pixel padding / mip safety)
+# ---------------------------------------------------------------------------
+
+def _two_islands_at(u0a, v0a, u0b, v0b, side=0.2):
+    mesh = two_quad_mesh()
+    uvmap = UVMap.for_mesh(mesh)
+    set_face_uv(mesh, uvmap, 0, square_uv(u0a, v0a, side))
+    set_face_uv(mesh, uvmap, 1, square_uv(u0b, v0b, side))
+    return mesh, uvmap
+
+
+def test_border_gap_passes_when_islands_clear_every_border():
+    # Both islands sit at u,v in [0.1, 0.7]: 102.4 px from the nearest border.
+    mesh, uvmap = _two_islands_at(0.1, 0.1, 0.5, 0.5)
+    report = border_gap_audit(mesh, uvmap, texture_size_px=1024, border_margin_px=8.0)
+    assert report["island_count"] == 2
+    assert report["min_gap_uv"] == pytest.approx(0.1, abs=1e-9)
+    assert report["min_gap_px"] == pytest.approx(102.4, abs=1e-6)
+    assert report["passed"] is True
+    assert report["border_margin_px"] == 8.0
+    assert report["texture_size_px"] == 1024
+    assert report["closest_border"] in ("u0", "v0")
+    assert report["closest_island"] is not None
+
+
+def test_border_gap_fails_when_island_touches_u0():
+    mesh, uvmap = _two_islands_at(0.0, 0.1, 0.5, 0.5)
+    report = border_gap_audit(mesh, uvmap, texture_size_px=1024, border_margin_px=4.0)
+    assert report["min_gap_px"] == pytest.approx(0.0, abs=1e-9)
+    assert report["passed"] is False
+    assert report["closest_border"] == "u0"
+    assert report["closest_island"] is not None
+
+
+def test_border_gap_two_pixels_from_v1_depends_on_the_margin():
+    d = 2.0 / 1024.0
+    mesh, uvmap = _two_islands_at(0.1, 1.0 - d - 0.2, 0.5, 0.1)
+    strict = border_gap_audit(mesh, uvmap, texture_size_px=1024, border_margin_px=4.0)
+    assert strict["min_gap_px"] == pytest.approx(2.0, abs=1e-6)
+    assert strict["closest_border"] == "v1"
+    assert strict["passed"] is False
+
+    loose = border_gap_audit(mesh, uvmap, texture_size_px=1024, border_margin_px=2.0)
+    assert loose["min_gap_px"] == pytest.approx(2.0, abs=1e-6)
+    assert loose["passed"] is True
+
+
+def test_border_gap_single_closed_island_falls_back_to_all_edges():
+    # A cube is closed: no mesh-boundary edge and, with one welded island, no
+    # inter-island edge either - the audit must still report a finite gap.
+    mesh = build_cube()
+    uvmap = UVMap.for_mesh(mesh)
+    for loop in mesh.loops:
+        co = mesh.vertices[loop.vertex_id].co
+        uvmap.set(loop.index, 0.2 + 0.3 * (co[0] + 0.5), 0.2 + 0.3 * (co[1] + 0.5))
+
+    report = border_gap_audit(mesh, uvmap, [list(range(len(mesh.faces)))],
+                              texture_size_px=1024, border_margin_px=4.0)
+    assert report["island_count"] == 1
+    assert math.isfinite(report["min_gap_uv"])
+    assert report["min_gap_uv"] == pytest.approx(0.2, abs=1e-9)
+    assert report["min_gap_px"] == pytest.approx(204.8, abs=1e-6)
+    assert report["passed"] is True
+    assert report["closest_border"] in ("u0", "v0")
+    assert report["closest_island"] == 0
+
+
+# ---------------------------------------------------------------------------
 # 8. aggregate
 # ---------------------------------------------------------------------------
 
@@ -340,7 +409,8 @@ def test_evaluate_correctness_clean_case_passes_and_compacts():
     assert report["island_count"] == 1
     assert report["islands_source"] == "uv_connectivity"
     assert [c["name"] for c in report["checks"]] == [
-        "overlap", "orientation", "degenerate", "bounds", "island_gap"]
+        "overlap", "orientation", "degenerate", "bounds", "island_gap",
+        "border_gap"]
     assert all(c["passed"] for c in report["checks"])
 
     compact = compact_correctness(report)
@@ -362,6 +432,36 @@ def test_evaluate_correctness_nan_fails_bounds_and_is_counted():
     assert report["bounds"]["finite"] is False
     assert report["passed"] is False
     assert report["nan_triangle_count"] >= 1
+
+
+def test_evaluate_correctness_reports_the_border_gap_check_and_compacts_it():
+    mesh = build_grid_plane(nx=3, ny=3)
+    uvmap = planar_uv(mesh, scale=0.9, offset=0.05)
+
+    report = evaluate_correctness(mesh, uvmap, texture_size_px=1024, margin_px=4,
+                                  border_margin_px=8.0)
+    assert report["border_margin_px"] == 8.0
+    assert report["border_gap"]["min_gap_px"] == pytest.approx(51.2, abs=1e-6)
+    check = next(c for c in report["checks"] if c["name"] == "border_gap")
+    assert check["limit"] == 8.0
+    assert check["value"] == pytest.approx(51.2, abs=1e-6)
+    assert check["passed"] is True
+
+    compact = compact_correctness(report)
+    assert "min_border_gap_px" in compact
+    assert compact["min_border_gap_px"] == pytest.approx(51.2, abs=1e-6)
+
+
+def test_evaluate_correctness_border_margin_defaults_to_margin_px():
+    mesh = build_grid_plane(nx=3, ny=3)
+    uvmap = planar_uv(mesh, scale=0.9, offset=0.05)
+
+    report = evaluate_correctness(mesh, uvmap, texture_size_px=1024, margin_px=6.0,
+                                  border_margin_px=None)
+    assert report["border_margin_px"] == 6.0
+    assert report["border_gap"]["border_margin_px"] == 6.0
+    check = next(c for c in report["checks"] if c["name"] == "border_gap")
+    assert check["limit"] == 6.0
 
 
 # ---------------------------------------------------------------------------

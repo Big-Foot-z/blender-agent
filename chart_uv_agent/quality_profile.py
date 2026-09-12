@@ -16,6 +16,20 @@ The numeric defaults are the ENGINEERING starting point (``calibrated = False``)
 product quality bar. G8 requires calibration against reviewer-approved real models plus a
 holdout set before the automatic quality path ships; the area-stretch 0.50/0.60 values
 carried over from the chart gate are explicitly NOT copied onto the anisotropy caps.
+
+The G8 "profile 필수 키" set is every field of :class:`QualityProfile`, named after the
+acceptance document: ``anisotropy_global_p95_max`` / ``anisotropy_island_p95_max`` /
+``anisotropy_max_max``, ``bad_area_threshold`` / ``bad_area_ratio_max`` /
+``bad_area_ratio_island_max``, ``area_stretch_global_mean_max`` /
+``area_stretch_island_mean_max`` / ``area_stretch_global_p95_max`` /
+``area_stretch_island_p95_max``, the packing keys (``border_margin_px``,
+``packing_efficiency_min``), the island-hygiene keys (``min_island_uv_area``,
+``tiny_island_uv_area``, ``tiny_island_count_max``, ``tiny_island_area_ratio_max``,
+``sliver_aspect_min``, ``sliver_uv_area_max``, ``sliver_island_count_max``,
+``island_aspect_p95_max``), the texel-density keys (``texel_density_cv_max``,
+``texel_density_outlier_tolerance``, ``texel_density_outlier_count_max``),
+``shading_uv_policy``, and the merge-back keys (``merge_back_enabled``,
+``merge_back_max_trials``).
 """
 
 from __future__ import annotations
@@ -47,22 +61,50 @@ class QualityProfile:
     calibrated: bool = False
 
     # --- anisotropy caps (G8; deliberately NOT the area-stretch numbers) ---
-    anisotropy_p95_cap_global: float = 1.6
-    anisotropy_p95_cap_island: float = 1.8
-    anisotropy_max_cap: float = 3.0
+    anisotropy_global_p95_max: float = 1.6
+    anisotropy_island_p95_max: float = 1.8
+    anisotropy_max_max: float = 3.0
 
     # --- exceed-area basis and caps (G8) ---
-    exceed_basis_anisotropy: float = 1.6
-    exceed_area_fraction_cap_global: float = 0.05
-    exceed_area_fraction_cap_island: float = 0.10
+    bad_area_threshold: float = 1.6
+    bad_area_ratio_max: float = 0.05
+    bad_area_ratio_island_max: float = 0.10
 
     # --- area stretch caps (existing chart-gate meaning kept) ---
-    area_stretch_mean_cap_global: float = 0.50
-    area_stretch_mean_cap_island: float = 0.60
+    area_stretch_global_mean_max: float = 0.50
+    area_stretch_island_mean_max: float = 0.60
+    area_stretch_global_p95_max: float = 0.9
+    area_stretch_island_p95_max: float = 1.1
 
     # --- texture context (margin/texel decisions must be part of the frozen profile) ---
     texture_size_px: int = 1024
     margin_px: int = 4
+
+    # --- packing (G8) ---
+    border_margin_px: int = 4
+    packing_efficiency_min: float = 0.42
+
+    # --- island hygiene: tiny islands and slivers (G8) ---
+    min_island_uv_area: float = 1e-4
+    tiny_island_uv_area: float = 0.002
+    tiny_island_count_max: int = 8
+    tiny_island_area_ratio_max: float = 0.05
+    sliver_aspect_min: float = 8.0
+    sliver_uv_area_max: float = 0.01
+    sliver_island_count_max: int = 0
+    island_aspect_p95_max: float = 6.0
+
+    # --- texel density uniformity (G8) ---
+    texel_density_cv_max: float = 0.15
+    texel_density_outlier_tolerance: float = 0.30
+    texel_density_outlier_count_max: int = 0
+
+    # --- shading / seam policy (G8) ---
+    shading_uv_policy: str = "preserve"
+
+    # --- merge-back budget (G8) ---
+    merge_back_enabled: bool = True
+    merge_back_max_trials: int = 64
 
     # --- regression budget (G5): relative allowance on non-target metrics ---
     regression_budget: dict = field(default_factory=_default_regression_budget)
@@ -93,16 +135,34 @@ REQUIRED_PROFILE_KEYS: tuple[str, ...] = (
     "profile_id",
     "metric_version",
     "calibrated",
-    "anisotropy_p95_cap_global",
-    "anisotropy_p95_cap_island",
-    "anisotropy_max_cap",
-    "exceed_basis_anisotropy",
-    "exceed_area_fraction_cap_global",
-    "exceed_area_fraction_cap_island",
-    "area_stretch_mean_cap_global",
-    "area_stretch_mean_cap_island",
+    "anisotropy_global_p95_max",
+    "anisotropy_island_p95_max",
+    "anisotropy_max_max",
+    "bad_area_threshold",
+    "bad_area_ratio_max",
+    "bad_area_ratio_island_max",
+    "area_stretch_global_mean_max",
+    "area_stretch_island_mean_max",
+    "area_stretch_global_p95_max",
+    "area_stretch_island_p95_max",
     "texture_size_px",
     "margin_px",
+    "border_margin_px",
+    "packing_efficiency_min",
+    "min_island_uv_area",
+    "tiny_island_uv_area",
+    "tiny_island_count_max",
+    "tiny_island_area_ratio_max",
+    "sliver_aspect_min",
+    "sliver_uv_area_max",
+    "sliver_island_count_max",
+    "island_aspect_p95_max",
+    "texel_density_cv_max",
+    "texel_density_outlier_tolerance",
+    "texel_density_outlier_count_max",
+    "shading_uv_policy",
+    "merge_back_enabled",
+    "merge_back_max_trials",
     "regression_budget",
     "max_iterations",
     "max_candidates_per_round",
@@ -110,6 +170,13 @@ REQUIRED_PROFILE_KEYS: tuple[str, ...] = (
     "island_cap",
     "min_improvement_ratio",
     "seed",
+)
+
+#: The only shading/seam policies a frozen profile may declare (G8).
+SHADING_UV_POLICIES: tuple[str, ...] = (
+    "preserve",
+    "split_normals_on_uv_seams",
+    "require_uv_seam_on_sharp_edges",
 )
 
 ENGINEERING_V0 = QualityProfile()
@@ -122,7 +189,8 @@ def load_quality_profile(value=None) -> QualityProfile:
 
     A dict must carry EXACTLY the required keys: a missing key raises ``ValueError``
     (G8 — a profile is only frozen if it is complete) and an unknown key raises
-    ``ValueError`` rather than being silently dropped.
+    ``ValueError`` rather than being silently dropped. ``shading_uv_policy`` must be one
+    of :data:`SHADING_UV_POLICIES`; anything else raises ``ValueError``.
     """
     if value is None:
         return ENGINEERING_V0
@@ -144,6 +212,12 @@ def load_quality_profile(value=None) -> QualityProfile:
             raise ValueError(f"quality profile has unknown keys: {extra}")
         data = dict(value)
         data["regression_budget"] = dict(data["regression_budget"])
+        policy = data["shading_uv_policy"]
+        if policy not in SHADING_UV_POLICIES:
+            raise ValueError(
+                f"unknown shading_uv_policy {policy!r}; "
+                f"allowed: {list(SHADING_UV_POLICIES)}"
+            )
         return QualityProfile(**data)
     raise TypeError(f"cannot load quality profile from {type(value).__name__}")
 
@@ -214,10 +288,11 @@ def evaluate_quality(profile: QualityProfile, distortion_v2: dict) -> dict:
         return float(raw)
 
     global_limits = (
-        ("anisotropy_p95", profile.anisotropy_p95_cap_global),
-        ("anisotropy_max", profile.anisotropy_max_cap),
-        ("area_stretch_mean", profile.area_stretch_mean_cap_global),
-        ("exceed_area_fraction", profile.exceed_area_fraction_cap_global),
+        ("anisotropy_p95", profile.anisotropy_global_p95_max),
+        ("anisotropy_max", profile.anisotropy_max_max),
+        ("area_stretch_mean", profile.area_stretch_global_mean_max),
+        ("area_stretch_p95", profile.area_stretch_global_p95_max),
+        ("exceed_area_fraction", profile.bad_area_ratio_max),
     )
     for key, limit in global_limits:
         val = value_of(glob, key, f"global.{key}")
@@ -233,10 +308,11 @@ def evaluate_quality(profile: QualityProfile, distortion_v2: dict) -> dict:
         islands = []
 
     island_limits = (
-        ("anisotropy_p95", profile.anisotropy_p95_cap_island),
-        ("anisotropy_max", profile.anisotropy_max_cap),
-        ("area_stretch_mean", profile.area_stretch_mean_cap_island),
-        ("exceed_area_fraction", profile.exceed_area_fraction_cap_island),
+        ("anisotropy_p95", profile.anisotropy_island_p95_max),
+        ("anisotropy_max", profile.anisotropy_max_max),
+        ("area_stretch_mean", profile.area_stretch_island_mean_max),
+        ("area_stretch_p95", profile.area_stretch_island_p95_max),
+        ("exceed_area_fraction", profile.bad_area_ratio_island_max),
     )
     for index, island in enumerate(islands):
         if not isinstance(island, dict):
@@ -316,13 +392,19 @@ def accept_candidate(
     correctness_ok: bool,
     constraints_ok: bool,
     regression_ok: bool,
+    fragmentation_ok: bool = True,
 ) -> dict:
     """Decide whether a seam/unwrap candidate is kept (G5 ordering).
 
-    Order: correctness → constraints → regression budget → full quality pass → relative
-    improvement on the TARGET failing metric (``min_improvement_ratio``). Anything else
-    is rejected as insufficient improvement, so the loop ends in needs_user_review rather
-    than drifting on noise.
+    Order: correctness → constraints → fragmentation limit (G6) → regression budget →
+    full quality pass → relative improvement on the TARGET failing metric
+    (``min_improvement_ratio``). Anything else is rejected as insufficient improvement,
+    so the loop ends in needs_user_review rather than drifting on noise.
+
+    ``fragmentation_ok`` is the G6 candidate-level fragmentation limit: a cut that creates
+    new dust/sliver islands is rejected with ``fragmentation_limit_exceeded`` BEFORE the
+    regression budget is consulted, because "the split made the layout unpaintable" is a
+    harder objection than "a non-target metric drifted inside its budget".
     """
     measurable = (
         _finite(target_before)
@@ -338,6 +420,8 @@ def accept_candidate(
         reason = "correctness_regression"
     elif not constraints_ok:
         reason = "constraint_violation"
+    elif not fragmentation_ok:
+        reason = "fragmentation_limit_exceeded"
     elif not regression_ok:
         reason = "regression_budget_exceeded"
     else:

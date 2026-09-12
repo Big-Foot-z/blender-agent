@@ -229,10 +229,12 @@ def _profile_summary(profile_dict: dict | None) -> dict | None:
     """The headline quality-profile keys for the summary (the full profile is an artifact)."""
     if not profile_dict:
         return None
-    keys = ("profile_id", "metric_version", "calibrated", "anisotropy_p95_cap_global",
-            "anisotropy_p95_cap_island", "anisotropy_max_cap",
-            "exceed_area_fraction_cap_global", "area_stretch_mean_cap_global",
-            "texture_size_px", "margin_px", "seed", "max_iterations",
+    keys = ("profile_id", "metric_version", "calibrated", "anisotropy_global_p95_max",
+            "anisotropy_island_p95_max", "anisotropy_max_max",
+            "bad_area_ratio_max", "area_stretch_global_mean_max",
+            "area_stretch_global_p95_max",
+            "texture_size_px", "margin_px", "border_margin_px",
+            "shading_uv_policy", "merge_back_enabled", "seed", "max_iterations",
             "max_candidates_per_round", "time_budget_s", "island_cap",
             "min_improvement_ratio")
     return {k: profile_dict.get(k) for k in keys if k in profile_dict}
@@ -984,6 +986,14 @@ def _finish_run(bpy, contract, job: dict, out_dir: str, status_path: str, status
     if auto:
         _write(contract.FINAL_REREAD_AUDIT_FILE, audit)
         _write(contract.CANDIDATE_HISTORY_FILE, res.get("candidate_history") or [])
+        # T7b evidence artifacts (G15): only written when the engine produced them,
+        # so an older engine result keeps the previous artifact set.
+        if res.get("quality_report") is not None:
+            _write(contract.QUALITY_REPORT_FILE, res.get("quality_report"))
+        if res.get("merge_back") is not None:
+            _write(contract.MERGE_BACK_HISTORY_FILE, res.get("merge_back"))
+        if res.get("shading") is not None:
+            _write(contract.SHADING_POLICY_FILE, res.get("shading"))
         _write(contract.SEAM_OVERLAY_FILE, build_seam_overlay(
             mesh, final_seams, res.get("seam_types") or {},
             history=res.get("history") or [],
@@ -996,7 +1006,7 @@ def _finish_run(bpy, contract, job: dict, out_dir: str, status_path: str, status
                 mesh, heat_uvmap, per_face_anisotropy(mesh, heat_uvmap),
                 os.path.join(out_dir, contract.SELECTED_HEATMAP_ANISOTROPY_FILE),
                 size=texture_size_px,
-                vmax=float((res.get("quality_profile") or {}).get("anisotropy_max_cap", 3.0)))
+                vmax=float((res.get("quality_profile") or {}).get("anisotropy_max_max", 3.0)))
         except Exception as exc:  # noqa: BLE001 - an image artifact failure is a warning (plan §13)
             warnings.append(f"selected_heatmap_anisotropy.png render failed: {exc}")
 
@@ -1037,7 +1047,12 @@ def _finish_run(bpy, contract, job: dict, out_dir: str, status_path: str, status
         auto_gate = contract.evaluate_auto_gate(
             mandatory=mandatory, quality=quality, correctness=correctness_compact,
             constraints=auto_constraints_eval, reread_audit=audit,
-            input_diagnostics=input_diagnostics)
+            input_diagnostics=input_diagnostics,
+            fragmentation=res.get("fragmentation"),
+            texel_density=res.get("texel_density"),
+            islands_disagree=res.get("islands_disagree"),
+            shading=res.get("shading"),
+            merge_back=res.get("merge_back"))
         for code in auto_gate["failures"]:
             warnings.append(f"auto gate: {code}")
         for reason in auto_gate["invalid_reasons"]:
@@ -1097,7 +1112,16 @@ def _finish_run(bpy, contract, job: dict, out_dir: str, status_path: str, status
         mandatory_audit={**mandatory, "reported_only": not auto},
         input_diagnostics=(None if input_diagnostics is None
                            else {**input_diagnostics, "reported_only": not auto}),
-        acceptance_reason=reason)
+        acceptance_reason=reason,
+        fragmentation=(contract.compact_fragmentation_block(res.get("fragmentation"))
+                       if res.get("fragmentation") is not None else None),
+        texel_density=(contract.compact_texel_density_block(res.get("texel_density"))
+                       if res.get("texel_density") is not None else None),
+        packing=res.get("packing"),
+        shading=res.get("shading"),
+        merge_back=(contract.compact_merge_back_block(res.get("merge_back"))
+                    if res.get("merge_back") is not None else None),
+        quality_report_passed=(res.get("quality_report") or {}).get("passed"))
     summary["feedback_applied"] = ctx["feedback_applied"]
     summary["performance"] = {
         "elapsed_s": round(time.monotonic() - ctx["started"], 3),

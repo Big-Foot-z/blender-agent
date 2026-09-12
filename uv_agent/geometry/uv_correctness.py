@@ -8,7 +8,8 @@ This module owns the correctness half:
 * **orientation** (local folds vs. a deliberately mirrored island),
 * **degenerate** UV triangles (separated from degenerate *input* faces),
 * UV **bounds**,
-* island **packing gap** against a ``margin_px`` / ``texture_size_px`` profile.
+* island **packing gap** against a ``margin_px`` / ``texture_size_px`` profile,
+* island-to-**tile border** gap (pixel padding / mip safety, Gate G9).
 
 Gate G1 requires the overlap number to come from a broad phase plus real
 triangle intersection areas, and requires a shared boundary (islands that merely
@@ -38,6 +39,7 @@ __all__ = [
     "degenerate_uv_audit",
     "bounds_audit",
     "island_gap_audit",
+    "border_gap_audit",
     "evaluate_correctness",
     "compact_correctness",
 ]
@@ -539,20 +541,103 @@ def island_gap_audit(mesh: MeshGraph, uvmap: UVMap, islands=None, *,
     }
 
 
+def _all_edge_segments(mesh: MeshGraph, uvmap: UVMap, lookup: dict[int, int]):
+    """Every edge's UV line, per incident face - the fallback used when a mesh
+    has no island boundary at all (a closed, single-island mesh). Without it the
+    border audit would be vacuous exactly for the meshes that need it most."""
+    fv_loop: dict[tuple[int, int], int] = {}
+    for loop in mesh.loops:
+        fv_loop[(loop.face_id, loop.vertex_id)] = loop.index
+
+    segs: list[tuple[int, np.ndarray, np.ndarray]] = []
+    for e in mesh.edges:
+        va, vb = e.vertex_ids
+        for fid in e.face_ids:
+            la = fv_loop.get((fid, va))
+            lb = fv_loop.get((fid, vb))
+            if la is None or lb is None:
+                continue
+            p = np.array(uvmap.get(la), dtype=float)
+            q = np.array(uvmap.get(lb), dtype=float)
+            if not (np.all(np.isfinite(p)) and np.all(np.isfinite(q))):
+                continue
+            segs.append((lookup.get(fid, -1), p, q))
+    return segs
+
+
+def border_gap_audit(mesh: MeshGraph, uvmap: UVMap, islands=None, *,
+                     texture_size_px: int = 1024,
+                     border_margin_px: float = 4.0) -> dict:
+    """Minimum island-to-tile-border gap (Gate G9, pixel padding / mip safety).
+
+    Texture filtering and mip generation both sample *outside* a texel, so an
+    island that runs right up to ``u=0``/``u=1``/``v=0``/``v=1`` bleeds across the
+    tile seam at the coarser mips. The gap measured here is the distance from any
+    island boundary segment (the same curves :func:`island_gap_audit` uses) to
+    each of the four tile edges, exactly: for a segment ``p-q`` the distance to
+    the line ``u=0`` is ``min(p.u, q.u)``, and symmetrically for the others. A
+    point outside the tile yields a negative gap and therefore fails.
+
+    A closed single-island mesh has no boundary segments at all; rather than
+    report a vacuous ``inf``, the audit then falls back to every edge's UV line,
+    which bounds the island just as well for this purpose."""
+    lookup, island_count, source = _island_of_face(mesh, uvmap, islands)
+    limit = float(border_margin_px) - 1e-6
+
+    segs = _island_boundary_segments(mesh, uvmap, lookup)
+    if not segs:
+        segs = _all_edge_segments(mesh, uvmap, lookup)
+
+    best = float("inf")
+    best_island: int | None = None
+    best_border: str | None = None
+
+    for isl, p, q in segs:
+        for name, d in (
+            ("u0", min(float(p[0]), float(q[0]))),
+            ("u1", min(1.0 - float(p[0]), 1.0 - float(q[0]))),
+            ("v0", min(float(p[1]), float(q[1]))),
+            ("v1", min(1.0 - float(p[1]), 1.0 - float(q[1]))),
+        ):
+            if d < best:
+                best = d
+                best_island = int(isl)
+                best_border = name
+
+    min_gap_px = best * float(texture_size_px)
+    return {
+        "min_gap_uv": float(best),
+        "min_gap_px": float(min_gap_px),
+        "border_margin_px": float(border_margin_px),
+        "texture_size_px": int(texture_size_px),
+        "passed": bool(min_gap_px >= limit),
+        "closest_island": best_island,
+        "closest_border": best_border,
+        "islands_source": source,
+        "island_count": int(island_count),
+    }
+
+
 # ---------------------------------------------------------------------------
 # Aggregate
 # ---------------------------------------------------------------------------
 
 def evaluate_correctness(mesh: MeshGraph, uvmap: UVMap, islands=None, *,
                          texture_size_px: int = 1024, margin_px: float = 4.0,
+                         border_margin_px: float | None = None,
                          bounds_tol: float = 1e-4,
                          overlap_area_tol: float = 1e-8) -> dict:
-    """Run the five Gate G1 correctness audits and combine their verdicts.
+    """Run the Gate G1/G9 correctness audits and combine their verdicts.
+
+    ``border_margin_px`` defaults to ``margin_px``: the padding a tile border
+    needs is the same padding two islands need unless a profile says otherwise.
 
     NaN handling follows plan §4: a non-finite UV makes ``bounds`` fail (so the
     whole report fails and can never be laundered into ``accepted``), while the
     geometric audits skip those triangles instead of producing garbage areas -
     the count is surfaced as ``nan_triangle_count`` rather than dropped."""
+    if border_margin_px is None:
+        border_margin_px = margin_px
     lookup, island_count, source = _island_of_face(mesh, uvmap, islands)
     resolved: list[list[int]] = [[] for _ in range(island_count)]
     for fid, isl in lookup.items():
@@ -567,8 +652,11 @@ def evaluate_correctness(mesh: MeshGraph, uvmap: UVMap, islands=None, *,
     bounds = bounds_audit(uvmap, tol=bounds_tol)
     gap = island_gap_audit(mesh, uvmap, resolved,
                            texture_size_px=texture_size_px, margin_px=margin_px)
+    border = border_gap_audit(mesh, uvmap, resolved,
+                              texture_size_px=texture_size_px,
+                              border_margin_px=border_margin_px)
 
-    for part in (overlap, orientation, gap):
+    for part in (overlap, orientation, gap, border):
         part["islands_source"] = source
 
     checks = [
@@ -589,6 +677,10 @@ def evaluate_correctness(mesh: MeshGraph, uvmap: UVMap, islands=None, *,
         {"name": "island_gap", "passed": gap["passed"],
          "value": gap["min_gap_px"], "limit": float(margin_px),
          "detail": f"texture_size_px={texture_size_px}"},
+        {"name": "border_gap", "passed": border["passed"],
+         "value": border["min_gap_px"], "limit": float(border_margin_px),
+         "detail": f"closest_border={border['closest_border']} "
+                   f"texture_size_px={texture_size_px}"},
     ]
 
     return {
@@ -600,10 +692,12 @@ def evaluate_correctness(mesh: MeshGraph, uvmap: UVMap, islands=None, *,
         "degenerate": degenerate,
         "bounds": bounds,
         "island_gap": gap,
+        "border_gap": border,
         "island_count": int(island_count),
         "islands_source": source,
         "texture_size_px": int(texture_size_px),
         "margin_px": float(margin_px),
+        "border_margin_px": float(border_margin_px),
     }
 
 
@@ -621,5 +715,6 @@ def compact_correctness(report: dict) -> dict:
         "mirrored_island_count": int(report.get("orientation", {}).get("mirrored_island_count", 0)),
         "uv_degenerate_count": int(report.get("degenerate", {}).get("uv_degenerate_count", 0)),
         "min_island_gap_px": float(report.get("island_gap", {}).get("min_gap_px", float("inf"))),
+        "min_border_gap_px": float(report.get("border_gap", {}).get("min_gap_px", float("inf"))),
         "bounds_ok": bool(report.get("bounds", {}).get("passed", False)),
     }
