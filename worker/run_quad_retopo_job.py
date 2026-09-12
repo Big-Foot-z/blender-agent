@@ -1080,7 +1080,8 @@ def _run_p5_chart(bpy, low, out_dir: str, *, forbidden_edges=None, region_spec=N
                    "pruned_auxiliary": res.get("pruned_auxiliary"),
                    "forbidden_edges": res.get("forbidden_edges"),
                    "forbidden_stripped": res.get("forbidden_stripped"),
-                   "metrics_before_correctness": pre, "correctness_history": res.get("correctness"),
+                   "metrics_before_correctness": pre,
+                   "correctness_history": res.get("correctness_rounds", res.get("correctness")),
                    "layout_optimization": res.get("layout_optimization"),
                    "history": res["history"], "seam_count": len(res["seams"]),
                    "seams": res.get("seams")}, fh, indent=2)
