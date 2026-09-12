@@ -380,3 +380,44 @@ def test_artifact_files_carry_the_new_optional_artifacts():
     for key, filename in expected.items():
         assert key in contract.ARTIFACT_FILES
         assert contract.ARTIFACT_FILES[key] == (filename, False)
+
+
+# --- input diagnostics (G1 topology/입력) -----------------------------------
+def test_evaluate_auto_gate_flags_input_defects():
+    bad = {"non_manifold_edge_count": 2, "zero_area_face_count": 1,
+           "input_defect_triangle_count": 1, "isolated_vertex_count": 0, "ok": False}
+    g = contract.evaluate_auto_gate(**_ok_gate_inputs(), input_diagnostics=bad)
+    assert g["valid"] is True and g["passed"] is False
+    assert "input_defects" in g["failures"]
+
+
+def test_evaluate_auto_gate_clean_input_diagnostics_still_passes():
+    ok = {"non_manifold_edge_count": 0, "zero_area_face_count": 0,
+          "input_defect_triangle_count": 0, "isolated_vertex_count": 0, "ok": True}
+    g = contract.evaluate_auto_gate(**_ok_gate_inputs(), input_diagnostics=ok)
+    assert g["passed"] is True
+    assert g["failures"] == []
+
+
+def test_evaluate_auto_gate_without_input_diagnostics_is_unchanged():
+    base = contract.evaluate_auto_gate(**_ok_gate_inputs())
+    same = contract.evaluate_auto_gate(**_ok_gate_inputs(), input_diagnostics=None)
+    assert same == base
+    assert same["failures"] == []
+
+
+def test_build_generate_summary_carries_input_diagnostics():
+    diag = {"non_manifold_edge_count": 1, "zero_area_face_count": 0,
+            "input_defect_triangle_count": 0, "isolated_vertex_count": 0, "ok": False}
+    s = contract.build_generate_summary(
+        run_id="r", status=contract.STATUS_NEEDS_USER_REVIEW, model="m.blend",
+        object_name="Fixture", seam_spec=None, metrics={}, seam_integrity={},
+        layout_optimization={}, artifacts={}, mode=contract.MODE_AUTO_GENERATE,
+        input_diagnostics=diag)
+    assert s["input_diagnostics"] == diag
+
+    legacy = contract.build_generate_summary(
+        run_id="r", status=contract.STATUS_ACCEPTED, model="m.blend",
+        object_name="Fixture", seam_spec=None, metrics={}, seam_integrity={},
+        layout_optimization={}, artifacts={})
+    assert legacy["input_diagnostics"] is None

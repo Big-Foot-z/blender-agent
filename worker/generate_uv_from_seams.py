@@ -845,6 +845,7 @@ def _run_auto(bpy, contract, job: dict, out_dir: str, status_path: str, status: 
         auto_constraints_eval=auto_constraints_eval,
         locked=locked, user_seam_ids=user_seam_ids,
         correctness_compact=correctness_compact,
+        input_diagnostics=res.get("input_diagnostics"),
         p5_extra={})
 
 
@@ -854,7 +855,8 @@ def _finish_run(bpy, contract, job: dict, out_dir: str, status_path: str, status
                 layout_optimization: dict, selected_candidate_id,
                 integrity, quality_v1, auto_constraints_eval,
                 locked, user_seam_ids, p5_extra: dict,
-                correctness_compact: dict | None = None) -> int:
+                correctness_compact: dict | None = None,
+                input_diagnostics: dict | None = None) -> int:
     """The shared post-engine path: identity, staging save, re-read audit, atomic
     promotion, artifacts, status classification, handoff and summary (G0/G1/G6/G7)."""
     from chart_uv_agent.reporting import (
@@ -907,6 +909,16 @@ def _finish_run(bpy, contract, job: dict, out_dir: str, status_path: str, status
     distortion_v2 = res.get("distortion_v2") or {}
     mandatory = dict(res.get("mandatory_audit") or {})
     quality = res.get("quality")
+    # G1 (topology/입력): the engine's input-defect diagnosis. It GATES an automatic run and
+    # is report-only in preserve_existing (recorded in the summary, never a status change).
+    if input_diagnostics is None:
+        input_diagnostics = res.get("input_diagnostics")
+    if input_diagnostics is not None and not input_diagnostics.get("ok"):
+        warnings.append("input defects: " + ",".join(
+            f"{k}={input_diagnostics.get(k)}" for k in
+            ("non_manifold_edge_count", "zero_area_face_count",
+             "input_defect_triangle_count", "isolated_vertex_count")
+            if input_diagnostics.get(k)))
 
     # --- (a) staging save (gate G6) ---------------------------------------
     staging_dir = os.path.join(out_dir, STAGING_DIR)
@@ -1006,6 +1018,7 @@ def _finish_run(bpy, contract, job: dict, out_dir: str, status_path: str, status
         "history": res.get("history"),
         "termination": res.get("termination"), "quality": quality,
         "seam_count": len(final_seams), "seams": list(final_seams),
+        "input_diagnostics": input_diagnostics,
     }
     p5.update(p5_extra)
     p5["auto_gate"] = None  # filled in below once the gate is evaluated
@@ -1023,7 +1036,8 @@ def _finish_run(bpy, contract, job: dict, out_dir: str, status_path: str, status
     if auto:
         auto_gate = contract.evaluate_auto_gate(
             mandatory=mandatory, quality=quality, correctness=correctness_compact,
-            constraints=auto_constraints_eval, reread_audit=audit)
+            constraints=auto_constraints_eval, reread_audit=audit,
+            input_diagnostics=input_diagnostics)
         for code in auto_gate["failures"]:
             warnings.append(f"auto gate: {code}")
         for reason in auto_gate["invalid_reasons"]:
@@ -1081,6 +1095,8 @@ def _finish_run(bpy, contract, job: dict, out_dir: str, status_path: str, status
         termination=res.get("termination"),
         seam_length=res.get("seam_length"),
         mandatory_audit={**mandatory, "reported_only": not auto},
+        input_diagnostics=(None if input_diagnostics is None
+                           else {**input_diagnostics, "reported_only": not auto}),
         acceptance_reason=reason)
     summary["feedback_applied"] = ctx["feedback_applied"]
     summary["performance"] = {

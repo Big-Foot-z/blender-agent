@@ -779,6 +779,7 @@ def evaluate_auto_gate(
     correctness: dict | None,
     constraints: dict | None,
     reread_audit: dict | None = None,
+    input_diagnostics: dict | None = None,
 ) -> dict:
     """The automatic-mode required gate (work plan §3 상태, gates G1/G3/G6).
 
@@ -786,6 +787,11 @@ def evaluate_auto_gate(
     "invalid_reasons": [str]}``. ``valid`` is false when a required input is
     missing or not evaluatable (which must never be read as a pass); ``failures``
     holds the gates that were evaluated and failed. ``passed`` requires both.
+
+    ``input_diagnostics`` is the engine's G1 input-defect block (non-manifold
+    edges / zero-area faces / degenerate input triangles / isolated vertices). A
+    block whose ``ok`` is false is an ``input_defects`` failure — an abnormal
+    input is diagnosed, never accepted. ``None`` skips the check entirely.
     """
     failures: list[str] = []
     invalid_reasons: list[str] = []
@@ -816,6 +822,9 @@ def evaluate_auto_gate(
 
     if reread_audit is not None and not reread_audit.get("passed"):
         failures.append("reread_audit_failed")
+
+    if input_diagnostics is not None and not input_diagnostics.get("ok"):
+        failures.append("input_defects")
 
     valid = not invalid_reasons
     return {
@@ -1062,6 +1071,7 @@ def build_generate_summary(
     termination: dict | None = None,
     seam_length: dict | None = None,
     mandatory_audit: dict | None = None,
+    input_diagnostics: dict | None = None,
     artist_approval: dict | None = None,
     acceptance_reason: str | None = None,
 ) -> dict:
@@ -1104,6 +1114,7 @@ def build_generate_summary(
         "termination": termination,
         "seam_length": seam_length,
         "mandatory_audit": mandatory_audit,
+        "input_diagnostics": input_diagnostics,
         "solver_accepted": status == STATUS_ACCEPTED,
         "artist_approved": bool(artist_approval and artist_approval.get("approved")),
         "artist_approval": artist_approval,

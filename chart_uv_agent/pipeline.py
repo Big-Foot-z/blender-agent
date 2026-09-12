@@ -27,9 +27,9 @@ from uv_agent.geometry.evaluation import (
 from uv_agent.geometry.mesh_graph import MeshGraph
 from uv_agent.geometry.solution import UVMap
 
-#: The five loop-termination reasons the automatic path may report (G5).
+#: The loop-termination reasons the automatic path may report (G5).
 TERMINATION_REASONS = ("quality_passed", "max_rounds", "no_improving_candidate",
-                       "island_cap", "time_budget")
+                       "island_cap", "time_budget", "no_failing_target")
 
 
 def _chart_metrics(mesh: MeshGraph, uvmap: UVMap, evaluation, *, fallback_used: bool = False) -> dict:
@@ -107,10 +107,18 @@ def _resolve_budget(profile, budget=None, *, seed=None) -> dict:
 
 
 def _termination_block(records, *, budget: dict, elapsed: float, passed: bool,
-                       exhausted_rounds: bool) -> dict:
+                       exhausted_rounds: bool, candidate_count: int | None = None) -> dict:
     """Roll the per-round :func:`run_refinement` terminations up into ONE explicit
-    termination for the whole pipeline (G5: 종료 이유 + 실제 사용량 기록)."""
+    termination for the whole pipeline (G5: 종료 이유 + 실제 사용량 기록).
+
+    ``candidates_evaluated`` is the LENGTH of the shipped ``candidate_history`` when it is
+    known, so the reported count and the evidence log can never disagree. When the loop
+    evaluated no candidate at all the reason must be the precise one (``max_rounds`` /
+    ``no_failing_target``), never the catch-all ``no_improving_candidate``."""
     reasons = [str(r.get("reason", "")) for r in records]
+    evaluated = int(sum(int(r.get("candidates_evaluated", 0)) for r in records))
+    if candidate_count is not None:
+        evaluated = int(candidate_count)
     if passed:
         reason = "quality_passed"
     elif "time_budget" in reasons:
@@ -119,13 +127,14 @@ def _termination_block(records, *, budget: dict, elapsed: float, passed: bool,
         reason = "island_cap"
     elif exhausted_rounds:
         reason = "max_rounds"
+    elif evaluated == 0 and "no_failing_target" in reasons:
+        reason = "no_failing_target"
     else:
         reason = "no_improving_candidate"
     return {
         "reason": reason,
         "iterations": int(sum(int(r.get("iterations", 0)) for r in records)),
-        "candidates_evaluated": int(sum(int(r.get("candidates_evaluated", 0))
-                                        for r in records)),
+        "candidates_evaluated": evaluated,
         "elapsed_s": float(elapsed),
         "budget": dict(budget),
         "round_reasons": reasons,
@@ -189,13 +198,37 @@ def _v2_result_block(obj, mesh: MeshGraph, final_seams: set[int], *, profile, re
         "candidate_history": _serialize_candidate_history(candidate_history),
         "termination": _termination_block(termination_records, budget=budget,
                                           elapsed=elapsed, passed=passed,
-                                          exhausted_rounds=exhausted_rounds),
+                                          exhausted_rounds=exhausted_rounds,
+                                          candidate_count=len(candidate_history or ())),
         "seam_length": seam_length_report(mesh, final_seams, mandatory=mandatory,
                                           user=constraints.locked,
                                           distortion_seams=distortion_seams),
         "auto_passed": bool(passed and _mandatory_gate_ok(gate)),
     }
     return block, measurement
+
+
+def _input_diagnostics(mesh: MeshGraph, distortion_v2: dict | None) -> dict:
+    """G1 (topology/입력): diagnose an abnormal INPUT mesh explicitly, so a run that could
+    not be evaluated is never silently reported as clean. Counts only — the gate decides."""
+    non_manifold = sum(1 for e in mesh.edges if bool(getattr(e, "is_non_manifold", False)))
+    zero_area = sum(1 for f in mesh.faces if float(f.area_3d) <= 1e-12)
+    defect = int(((distortion_v2 or {}).get("degenerate_triangles") or {})
+                 .get("input_defect_count", 0) or 0)
+    used: set[int] = set()
+    for f in mesh.faces:
+        used.update(int(v) for v in f.vertex_ids)
+    isolated = int(max(0, int(mesh.vertex_count) - len(used)))
+    out = {
+        "non_manifold_edge_count": int(non_manifold),
+        "zero_area_face_count": int(zero_area),
+        "input_defect_triangle_count": defect,
+        "isolated_vertex_count": isolated,
+    }
+    out["ok"] = not any(out[k] for k in
+                        ("non_manifold_edge_count", "zero_area_face_count",
+                         "input_defect_triangle_count", "isolated_vertex_count"))
+    return out
 
 
 def _apply_v2_metrics(metrics: dict, measurement: dict) -> None:
@@ -538,9 +571,25 @@ def run_chart_uv(obj, mesh: MeshGraph, *, config: ChartGateConfig | None = None,
 
         if best is None or _better(metrics, gate, best):
             best = {"seams": set(seams), "metrics": metrics, "gate": gate, "ev": ev}
+
+        # v2 measurement of the layout this round already holds (G4/G5): the v1 gate alone
+        # cannot see a quality-profile / correctness / mandatory failure, so a run that fails
+        # the profile must still enter the refinement loop. ``measure_layout`` never unwraps;
+        # it is resolved lazily so a round that needs no v2 answer pays nothing.
+        v2_cache: dict = {}
+
+        def _round_v2(_cache=v2_cache, _seams=seams):
+            if "m" not in _cache:
+                _cache["m"] = refinement_loop.measure_layout(
+                    obj, mesh, _seams, profile=profile, stage="round", regions=regions)
+            return _cache["m"]
+
         if gate.passed:
-            rec["reason"] = "all hard gates pass (distortion/overlap/bounds/seams)"
-            break
+            if not use_refinement_loop or _round_v2()["passed"]:
+                rec["reason"] = "all hard gates pass (distortion/overlap/bounds/seams)"
+                break
+            rec["v2_passed"] = False
+            rec["reason"] = "v1 gates pass but the v2 quality profile does not"
 
         changed = False
 
@@ -618,13 +667,21 @@ def run_chart_uv(obj, mesh: MeshGraph, *, config: ChartGateConfig | None = None,
         # core, so the no-spec path and the user-assisted path obey the same rules. The
         # legacy in-place split + provisional accept/revert is kept for regression runs
         # (``use_refinement_loop=False``).
-        if use_refinement_loop and not changed and (global_over or worst_over) \
+        # The v2 trigger is OR-ed with the v1 one: a v2 quality / correctness / mandatory
+        # failure is a refinement target too, so a run that fails the frozen profile can
+        # never terminate with "no candidate was ever evaluated" (G4/G5).
+        v2_needed = False
+        if use_refinement_loop and not changed:
+            v2_needed = not _round_v2()["passed"]
+            rec["v2_passed"] = not v2_needed
+        if use_refinement_loop and not changed and (global_over or worst_over or v2_needed) \
                 and len(charts) < config.island_count_max:
             before_seams = set(seams)
             ref = refinement_loop.run_refinement(
                 obj, mesh, seams, constraints=constraints, profile=profile,
                 budget={**budget, "max_iterations": 1}, margin=pack_margin, regions=regions,
-                history=history, candidate_history=candidate_history)
+                history=history, candidate_history=candidate_history,
+                initial_measurement=_round_v2())
             termination_records.append(ref["termination"])
             seams = set(ref["seams"])
             if seams != before_seams:
@@ -811,6 +868,8 @@ def run_chart_uv(obj, mesh: MeshGraph, *, config: ChartGateConfig | None = None,
         budget=budget, elapsed=time.monotonic() - started_at, gate=gate,
         exhausted_rounds=rounds_exhausted)
     result.update(v2_block)
+    # G1 (topology/입력): the input-defect diagnosis ships with every automatic result.
+    result["input_diagnostics"] = _input_diagnostics(mesh, v2_block.get("distortion_v2"))
     result["correctness_rounds"] = correctness["history"]
     _apply_v2_metrics(metrics, v2_measurement)
     result["seam_types"] = {int(k): v for k, v in seam_types.items()}
@@ -1067,6 +1126,8 @@ def _run_user_seam_uv(obj, mesh: MeshGraph, spec, *, config: ChartGateConfig,
         budget=budget, elapsed=time.monotonic() - started_at, gate=gate,
         exhausted_rounds=False)
     result.update(v2_block)
+    # Same G1 input-defect diagnosis as the no-spec path.
+    result["input_diagnostics"] = _input_diagnostics(mesh, v2_block.get("distortion_v2"))
     result["correctness_rounds"] = []
     _apply_v2_metrics(metrics, v2_measurement)
     result["seam_types"] = {int(k): v for k, v in seam_types.items()}

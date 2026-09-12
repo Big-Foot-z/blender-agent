@@ -12,6 +12,7 @@ import json
 
 from artist_uv_agent.user_seams import UserSeamSpec
 from chart_uv_agent.fixtures import build_displaced_sphere
+from chart_uv_agent.gate import ChartGateConfig
 from chart_uv_agent.pipeline import run_chart_uv
 from chart_uv_agent.segmentation import mandatory_seam_edges
 from tests.helpers.fake_blender_uv import FakeUnwrapBackend
@@ -233,3 +234,65 @@ def test_island_gap_failure_is_repacked_never_recut(monkeypatch):
     assert len(gap_repacks) >= 2
     expected = result["pack_margin_uv"]
     assert [float(c[2]) for c in gap_repacks[-2:]] == [expected * 1.5, expected * 2.0]
+
+
+# ------------------------------------------- 7. v2-only quality failure drives the loop (G4/G5)
+
+
+def test_v2_quality_failure_triggers_refinement_when_v1_passes(monkeypatch):
+    """G4/G5: the v1 stretch thresholds are relaxed so they cannot fire; the v2 quality
+    profile still fails, and that alone must run the refinement loop (candidates really
+    evaluated), never terminate with an untried 'no_improving_candidate'."""
+    mesh, _backend, obj = _sphere(monkeypatch)
+    config = ChartGateConfig(stretch_max=9.0, worst_island_distortion_max=9.0)
+
+    result = run_chart_uv(obj, mesh, config=config, max_rounds=3,
+                          budget={"max_candidates_per_round": 2})
+
+    assert result["quality"]["passed"] is False, result["quality"]
+    assert result["candidate_history"], result["termination"]
+    assert result["termination"]["candidates_evaluated"] >= 1, result["termination"]
+    assert result["termination"]["candidates_evaluated"] == len(result["candidate_history"])
+    assert result["termination"]["iterations"] >= 1, result["termination"]
+    assert result["termination"]["reason"] in {
+        "quality_passed", "max_rounds", "no_improving_candidate", "island_cap",
+        "time_budget", "no_failing_target",
+    }
+
+
+# ------------------------------------------------- 8. input defect diagnosis (G1)
+
+
+def _with_zero_area_face(mesh):
+    """``mesh`` plus one extra ZERO-AREA (collinear) triangle — an abnormal input."""
+    from uv_agent.geometry.mesh_graph import MeshGraph
+
+    coords = [tuple(v.co) for v in mesh.vertices]
+    faces = [list(f.vertex_ids) for f in mesh.faces]
+    base = len(coords)
+    coords += [(10.0, 0.0, 0.0), (11.0, 0.0, 0.0), (12.0, 0.0, 0.0)]
+    faces.append([base, base + 1, base + 2])
+    return MeshGraph.from_faces(mesh.object_id, coords, faces)
+
+
+def test_input_diagnostics_clean_fixture_is_ok(monkeypatch):
+    mesh, _backend, obj = _sphere(monkeypatch)
+    result = run_chart_uv(obj, mesh, max_rounds=2,
+                          budget={"max_candidates_per_round": 2})
+
+    diag = result["input_diagnostics"]
+    assert diag["ok"] is True, diag
+    assert diag["non_manifold_edge_count"] == 0
+    assert diag["zero_area_face_count"] == 0
+    assert diag["input_defect_triangle_count"] == 0
+    assert diag["isolated_vertex_count"] == 0
+
+
+def test_input_diagnostics_flags_a_zero_area_face(monkeypatch):
+    from chart_uv_agent.pipeline import _input_diagnostics
+
+    mesh = _with_zero_area_face(build_displaced_sphere(segments=12, rings=8))
+    diag = _input_diagnostics(mesh, None)
+
+    assert diag["zero_area_face_count"] >= 1, diag
+    assert diag["ok"] is False, diag
