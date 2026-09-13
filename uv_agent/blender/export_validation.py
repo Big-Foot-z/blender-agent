@@ -244,6 +244,8 @@ REREAD_FAILURE_CODES = (
     "uv_fingerprint_mismatch",
     "vertex_fingerprint_mismatch",
     "topology_mismatch",
+    "catastrophic_failed",
+    "fragmentation_failed",
 )
 
 #: ``edge_geometry_key`` rounding used to match re-read edges back to the source.
@@ -482,11 +484,23 @@ def build_reread_audit(
 
     ``passed`` requires ALL of: a UV layer present, finite UVs, in-bounds UVs, the
     G1/G9 correctness audits, zero source-matched mandatory-90 welds, the G8 texel
-    density audit, the G10 shading policy, a matching UV corner fingerprint, a
-    matching vertex-position fingerprint and matching topology."""
+    density audit, the G10 shading policy, the CG12 catastrophic-distortion and
+    fragmentation audits, a matching UV corner fingerprint, a matching
+    vertex-position fingerprint and matching topology.
+
+    The audit also records the exact ``uv_hash`` of the re-read layout and the
+    ``source_uv_hash`` of the layout that was shipped, so a byte-level UV change
+    is evidence even when the rounded fingerprints agree (CG12)."""
     import numpy as np
 
+    from uv_agent.geometry.catastrophic_distortion import (
+        compact_catastrophic,
+        evaluate_catastrophic,
+        thresholds_from_profile,
+    )
     from uv_agent.geometry.evaluation import uv_bounds_ok, uv_islands_from_uvmap
+    from uv_agent.geometry.fragmentation import compact_fragmentation, evaluate_fragmentation
+    from uv_agent.geometry.mesh_identity import uv_hash
     from uv_agent.geometry.shading_policy import evaluate_shading_policy
     from uv_agent.geometry.texel_density import compact_texel_density, evaluate_texel_density
     from uv_agent.geometry.uv_correctness import compact_correctness, evaluate_correctness
@@ -520,6 +534,32 @@ def build_reread_audit(
     shading = evaluate_shading_policy(
         policy, mesh=reread_mesh, uvmap=reread_uvmap, seams=seams,
         tangent_ok=tangent_ok, **shading_kwargs)
+
+    # CG12: the shipped file is re-measured with the SAME catastrophic /
+    # fragmentation engines the solver was gated on — a needle or a shattered
+    # island set that only appears after the export round trip must not ship.
+    catastrophic = compact_catastrophic(evaluate_catastrophic(
+        reread_mesh, reread_uvmap, islands,
+        thresholds=thresholds_from_profile(profile)))
+    fragmentation = compact_fragmentation(evaluate_fragmentation(
+        reread_mesh, reread_uvmap, islands, seams,
+        min_island_uv_area=float(_profile_value(profile, "min_island_uv_area", 1e-4)),
+        tiny_island_uv_area=float(_profile_value(profile, "tiny_island_uv_area", 0.002)),
+        tiny_island_count_max=int(_profile_value(profile, "tiny_island_count_max", 8)),
+        tiny_island_area_ratio_max=float(
+            _profile_value(profile, "tiny_island_area_ratio_max", 0.05)),
+        sliver_aspect_min=float(_profile_value(profile, "sliver_aspect_min", 8.0)),
+        sliver_uv_area_max=float(_profile_value(profile, "sliver_uv_area_max", 0.01)),
+        sliver_island_count_max=int(_profile_value(profile, "sliver_island_count_max", 0)),
+        island_aspect_p95_max=float(_profile_value(profile, "island_aspect_p95_max", 6.0)),
+        texture_size_px=texture_size_px,
+        min_island_width_px=float(_profile_value(profile, "min_island_width_px", 10.0)),
+        min_island_area_px2=float(_profile_value(profile, "min_island_area_px2", 100.0)),
+        max_island_bbox_aspect=float(_profile_value(profile, "max_island_bbox_aspect", 8.0)),
+        max_island_perimeter_area_ratio=float(
+            _profile_value(profile, "max_island_perimeter_area_ratio", 12.0)),
+        max_tiny_island_area_fraction=float(
+            _profile_value(profile, "max_tiny_island_area_fraction", 0.02))))
 
     src_fp = uv_corner_fingerprint(source_mesh, source_uvmap)
     re_fp = uv_corner_fingerprint(reread_mesh, reread_uvmap)
@@ -563,6 +603,8 @@ def build_reread_audit(
         {"name": "uv_fingerprint", "passed": bool(uv_fingerprint["match"])},
         {"name": "vertex_fingerprint", "passed": bool(vertex_fingerprint["match"])},
         {"name": "topology", "passed": bool(topology_match)},
+        {"name": "catastrophic", "passed": bool(catastrophic["passed"])},
+        {"name": "fragmentation", "passed": bool(fragmentation["passed"])},
     ]
     codes = {
         "uv_present": "uv_missing",
@@ -575,6 +617,8 @@ def build_reread_audit(
         "uv_fingerprint": "uv_fingerprint_mismatch",
         "vertex_fingerprint": "vertex_fingerprint_mismatch",
         "topology": "topology_mismatch",
+        "catastrophic": "catastrophic_failed",
+        "fragmentation": "fragmentation_failed",
     }
     failures = [codes[c["name"]] for c in checks if not c["passed"]]
 
@@ -592,6 +636,10 @@ def build_reread_audit(
         "mandatory": mandatory,
         "texel_density": texel,
         "shading": shading,
+        "catastrophic": catastrophic,
+        "fragmentation": fragmentation,
+        "uv_hash": uv_hash(reread_uvmap),
+        "source_uv_hash": uv_hash(source_uvmap),
         "uv_fingerprint": uv_fingerprint,
         "vertex_fingerprint": vertex_fingerprint,
         "topology": topology,

@@ -492,3 +492,90 @@ def test_repack_for_gap_does_nothing_when_no_placement_check_fails(monkeypatch):
     assert "gap_repack" not in measurement
     assert history == []
     assert not [c for c in backend.calls if c[0] == "repack"]
+
+
+# --------------------------- 11. catastrophic block + verified rollback (CG2/CG3/CG7)
+
+
+def test_measurement_carries_the_catastrophic_block_and_the_uv_hash(monkeypatch):
+    """CG2/CG3: the hard catastrophic gate is measured next to the quality caps, and the
+    measurement carries the EXACT uv digest the rollback baseline is built from."""
+    mesh, _backend, obj, seams, _constraints = _sphere(monkeypatch)
+
+    measurement = R.unwrap_and_measure(obj, mesh, seams, profile=PROFILE, margin=0.005,
+                                       stage="refinement")
+
+    catastrophic = measurement["catastrophic"]
+    for key in ("metric_version", "passed", "valid", "hard_failed", "region_failed",
+                "bad_triangle_count", "bad_region_count", "bad_area_fraction",
+                "regions", "per_face_score", "thresholds"):
+        assert key in catastrophic, key
+    assert catastrophic["thresholds"]["anisotropy_hard_max"] == PROFILE.anisotropy_hard_max
+
+    # "catastrophic_failed" sits right after "correctness_failed" in the hard-failure list.
+    failed = not (catastrophic["passed"] and catastrophic["valid"])
+    assert ("catastrophic_failed" in measurement["hard_failures"]) is failed
+    assert measurement["passed"] is (not measurement["hard_failures"])
+
+    assert measurement["uv_hash"] == R.uv_hash(obj.uv)
+    # The seeding array is finite; the reporting array preserves "not measurable".
+    assert np.all(np.isfinite(measurement["face_anisotropy"]))
+    assert len(measurement["face_score_raw"]) == len(mesh.faces)
+
+
+def test_restore_snapshot_verifies_the_uv_hash(monkeypatch):
+    """CG7: a restore that does not restore raises instead of shipping the wrong UVs."""
+    from chart_uv_agent import unwrap as unwrap_mod
+
+    mesh, backend, obj, seams, _constraints = _sphere(monkeypatch)
+    measurement = R.unwrap_and_measure(obj, mesh, seams, profile=PROFILE, margin=0.005,
+                                       stage="refinement")
+    snapshot = R.take_snapshot(obj, mesh, seams, measurement)
+
+    assert snapshot.uv_hash == measurement["uv_hash"]
+    assert snapshot.island_count == measurement["island_count"]
+    assert snapshot.catastrophic_counters is not None
+
+    # A faithful restore is silent and puts the exact bytes back.
+    obj.uv.uv[0] += 0.25
+    assert R.restore_snapshot(obj, mesh, snapshot) == set(seams)
+    assert R.uv_hash(obj.uv) == snapshot.uv_hash
+
+    real_write = backend.write_uvmap
+
+    def _tampered(o, m, uvmap, **kwargs):
+        perturbed = uvmap.copy()
+        perturbed.uv[0] = perturbed.uv[0] + 1e-12
+        return real_write(o, m, perturbed, **kwargs)
+
+    monkeypatch.setattr(unwrap_mod, "write_uvmap", _tampered)
+    with pytest.raises(RuntimeError, match="snapshot_restore_mismatch"):
+        R.restore_snapshot(obj, mesh, snapshot)
+
+
+def test_exception_candidate_leaves_the_uv_hash_and_layer_identical(monkeypatch):
+    """CG7: the raise path restores byte-exactly — same digest, same seams, same layer."""
+    mesh, _backend, obj, seams, constraints = _sphere(monkeypatch)
+    before = R.unwrap_and_measure(obj, mesh, seams, profile=PROFILE, margin=0.005,
+                                  stage="refinement")
+    hash_before = R.uv_hash(obj.uv)
+    layer_before = obj.data.uv_layers.active
+    seams_before = set(seams)
+
+    cand = SeamCandidate(kind="unwrap_only", added_edges=frozenset(), target_island=0,
+                         reason="boom", seam_length=0.0, exposure_cost=0.0)
+
+    def _raise(*args, **kwargs):
+        raise RuntimeError("unwrap exploded")
+
+    monkeypatch.setattr("chart_uv_agent.unwrap.unwrap_and_pack", _raise)
+    monkeypatch.setattr(R, "generate_candidates", _fixed_candidates(cand))
+
+    result = R.run_refinement(obj, mesh, seams, constraints=constraints, profile=PROFILE,
+                              budget={"max_iterations": 1}, margin=0.005,
+                              initial_measurement=before)
+
+    assert [c["reason"] for c in result["candidate_history"]] == ["candidate_exception"]
+    assert R.uv_hash(obj.uv) == hash_before
+    assert obj.data.uv_layers.active == layer_before
+    assert result["seams"] == seams_before

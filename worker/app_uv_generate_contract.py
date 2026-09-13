@@ -272,6 +272,11 @@ QUALITY_REPORT_FILE = "quality_report.json"
 MERGE_BACK_HISTORY_FILE = "merge_back_history.json"
 SEAM_OVERLAY_PNG_FILE = "seam_overlay.png"
 SHADING_POLICY_FILE = "shading_policy.json"
+# Catastrophic-distortion / repair evidence artifacts (TC6b, gates CG13/CG0).
+# All optional: only an automatic run that ran the catastrophic pass emits them.
+CATASTROPHIC_FILE = "uv_catastrophic.json"
+REPAIR_HISTORY_FILE = "uv_repair_history.json"
+HEATMAP_META_FILE = "heatmap_meta.json"
 REQUIRED_PREVIEWS = (
     "baseline_uv_layout.png",
     "baseline_checker_front.png",
@@ -306,6 +311,9 @@ ARTIFACT_FILES: dict[str, tuple[str, bool]] = {
     "merge_back_history": (MERGE_BACK_HISTORY_FILE, False),
     "seam_overlay_png": (SEAM_OVERLAY_PNG_FILE, False),
     "shading_policy": (SHADING_POLICY_FILE, False),
+    "catastrophic": (CATASTROPHIC_FILE, False),
+    "repair_history": (REPAIR_HISTORY_FILE, False),
+    "heatmap_meta": (HEATMAP_META_FILE, False),
 }
 
 
@@ -795,6 +803,8 @@ def evaluate_auto_gate(
     islands_disagree: bool | None = None,
     shading: dict | None = None,
     merge_back: dict | None = None,
+    catastrophic: dict | None = None,
+    heatmap_identity: dict | None = None,
 ) -> dict:
     """The automatic-mode required gate (work plan §3 상태, gates G1/G3/G6).
 
@@ -820,6 +830,16 @@ def evaluate_auto_gate(
     - ``shading``: ``valid is False`` -> ``shading_policy_invalid`` invalid
       reason; else a falsy ``passed`` -> ``shading_policy_failed`` failure.
     - ``merge_back``: a falsy ``complete`` -> ``merge_back_incomplete`` failure.
+
+    The TC6b blocks are optional in the same way (gates CG13/CG4):
+
+    - ``catastrophic``: ``valid is False`` -> ``catastrophic_invalid`` invalid
+      reason; else a falsy ``passed`` -> ``catastrophic_failed`` failure, plus
+      ``catastrophic_region_failed`` when the damage is region-only
+      (``region_failed`` true, ``hard_failed`` false) so the report says WHICH
+      half of the metric fell over. Both codes are failures.
+    - ``heatmap_identity``: a falsy ``passed`` -> ``heatmap_identity_mismatch``
+      failure (the shipped heatmap must be the shipped UV).
     """
     failures: list[str] = []
     invalid_reasons: list[str] = []
@@ -877,6 +897,17 @@ def evaluate_auto_gate(
 
     if merge_back is not None and not merge_back.get("complete"):
         failures.append("merge_back_incomplete")
+
+    if catastrophic is not None:
+        if catastrophic.get("valid") is False:
+            invalid_reasons.append("catastrophic_invalid")
+        elif not catastrophic.get("passed"):
+            failures.append("catastrophic_failed")
+            if catastrophic.get("region_failed") and not catastrophic.get("hard_failed"):
+                failures.append("catastrophic_region_failed")
+
+    if heatmap_identity is not None and not heatmap_identity.get("passed"):
+        failures.append("heatmap_identity_mismatch")
 
     valid = not invalid_reasons
     return {
@@ -1146,6 +1177,52 @@ def compact_merge_back_block(mb: dict | None) -> dict:
     }
 
 
+def compact_catastrophic_block(rep: dict | None) -> dict:
+    """The summary-sized ``catastrophic`` block (gate CG13).
+
+    Scalars only: the full report's ``regions`` / ``worst_triangles`` / per-face
+    arrays stay on disk in ``uv_catastrophic.json``.
+    """
+    c = rep or {}
+    return {
+        "passed": c.get("passed"),
+        "valid": c.get("valid"),
+        "hard_failed": c.get("hard_failed"),
+        "region_failed": c.get("region_failed"),
+        "bad_triangle_count": c.get("bad_triangle_count"),
+        "bad_region_count": c.get("bad_region_count"),
+        "bad_area_fraction": c.get("bad_area_fraction"),
+        "max_anisotropy": c.get("max_anisotropy"),
+        "max_uv_triangle_aspect": c.get("max_uv_triangle_aspect"),
+        "near_collapse_count": c.get("near_collapse_count"),
+        "invalid_count": c.get("invalid_count"),
+        "boundary_spike_region_count": c.get("boundary_spike_region_count"),
+        "self_overlap_region_count": c.get("self_overlap_region_count"),
+    }
+
+
+def compact_repair_block(rep: dict | None) -> dict:
+    """The summary-sized ``repair`` block (catastrophic repair loop, gate CG13).
+
+    Records what the repair loop tried and what it actually bought; the full
+    per-round trace stays on disk in ``uv_repair_history.json``.
+    """
+    r = rep or {}
+    return {
+        "rounds": r.get("rounds"),
+        "reunwrap_accepted": r.get("reunwrap_accepted"),
+        "relief_accepted": r.get("relief_accepted"),
+        "rejected": r.get("rejected"),
+        "reason": r.get("reason"),
+        "bad_triangles_before": r.get("bad_triangles_before"),
+        "bad_triangles_after": r.get("bad_triangles_after"),
+        "bad_area_before": r.get("bad_area_before"),
+        "bad_area_after": r.get("bad_area_after"),
+        "island_count_before": r.get("island_count_before"),
+        "island_count_after": r.get("island_count_after"),
+    }
+
+
 # ---------------------------------------------------------------------------
 # Summary builder (plan §4.1 — the renderer's primary input, §3 "primary input")
 # ---------------------------------------------------------------------------
@@ -1184,6 +1261,10 @@ def build_generate_summary(
     shading: dict | None = None,
     merge_back: dict | None = None,
     quality_report_passed: bool | None = None,
+    catastrophic: dict | None = None,
+    heatmap_identity: dict | None = None,
+    uv_hash: str | None = None,
+    repair: dict | None = None,
 ) -> dict:
     """Assemble ``uv_generate_summary.json`` (plan §4.1).
 
@@ -1235,6 +1316,10 @@ def build_generate_summary(
         "shading": shading,
         "merge_back": merge_back,
         "quality_report_passed": quality_report_passed,
+        "catastrophic": catastrophic,
+        "heatmap_identity": heatmap_identity,
+        "uv_hash": uv_hash,
+        "repair": repair,
     }
 
 

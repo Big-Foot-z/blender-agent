@@ -314,3 +314,42 @@ def test_vertex_weld_helper_exported_and_audit_carries_the_key():
     audit["vertex_weld"] = {"applied": True, "vertices_before": 54,
                             "vertices_after": 8, "dist": 1e-6}
     assert audit["passed"] is True
+
+
+# --- CG12: the re-read audit re-runs catastrophic + fragmentation ----------
+def _needle_uvmap(mesh: MeshGraph) -> UVMap:
+    """A clean layout with ONE loop dragged across the tile — a needle triangle."""
+    uvmap = _folded_uvmap(mesh)
+    uvmap.set(0, 0.99, 0.99)
+    return uvmap
+
+
+def test_build_reread_audit_runs_catastrophic_and_fragmentation():
+    mesh = build_folded_planes(n=4)
+    uvmap = _folded_uvmap(mesh)
+    audit = _audit(mesh, uvmap, mesh, uvmap)
+    names = [c["name"] for c in audit["checks"]]
+    assert "catastrophic" in names and "fragmentation" in names
+    assert audit["catastrophic"]["passed"] is True
+    assert audit["fragmentation"]["passed"] is True
+    assert audit["failures"] == []
+    assert audit["passed"] is True
+
+
+def test_build_reread_audit_fails_on_a_needle_uv():
+    mesh = build_folded_planes(n=4)
+    audit = _audit(mesh, _folded_uvmap(mesh), mesh, _needle_uvmap(mesh))
+    assert audit["passed"] is False
+    assert "catastrophic_failed" in audit["failures"]
+    assert audit["catastrophic"]["passed"] is False
+
+
+def test_build_reread_audit_records_uv_hashes():
+    mesh = build_folded_planes(n=4)
+    uvmap = _folded_uvmap(mesh)
+    audit = _audit(mesh, uvmap, mesh, uvmap)
+    assert audit["uv_hash"] and audit["source_uv_hash"]
+    assert audit["uv_hash"] == audit["source_uv_hash"]
+
+    moved = _audit(mesh, uvmap, mesh, _folded_uvmap(mesh, nudge_loop=0))
+    assert moved["uv_hash"] != moved["source_uv_hash"]

@@ -45,10 +45,16 @@ from chart_uv_agent.quality_profile import (
 )
 from chart_uv_agent.segmentation import flood_charts, mandatory_seam_audit
 from uv_agent.blender.organic_unwrap import AI_UV_LAYER, mark_seams
+from uv_agent.geometry.catastrophic_distortion import (
+    catastrophic_counters,
+    evaluate_catastrophic,
+    thresholds_from_profile,
+)
 from uv_agent.geometry.distortion_v2 import evaluate_distortion_v2, per_face_anisotropy
 from uv_agent.geometry.evaluation import mandatory_seam_uv_audit, uv_islands_from_uvmap
 from uv_agent.geometry.fragmentation import evaluate_fragmentation
 from uv_agent.geometry.mesh_graph import MeshGraph
+from uv_agent.geometry.mesh_identity import uv_hash
 from uv_agent.geometry.solution import UVMap
 from uv_agent.geometry.texel_density import evaluate_texel_density
 from uv_agent.geometry.uv_correctness import evaluate_correctness
@@ -74,6 +80,21 @@ METRIC_PRIORITY: tuple[str, ...] = (
 #: The regression target name used when the round is repairing correctness, not distortion.
 CORRECTNESS_METRIC = "overlap_area_total"
 
+#: The pseudo-metric name a ``catastrophic_repair`` round carries (CG2/CG5): the target is a
+#: bad REGION, not a distortion metric, so it names itself rather than borrowing a v2 key.
+CATASTROPHIC_METRIC = "catastrophic_score"
+
+#: Which catastrophic reason a repair round goes after first (plan §7 ordering) — a
+#: collapsed/invalid triangle is unrecoverable damage, an area explosion is merely ugly.
+CATASTROPHIC_REASON_PRIORITY: tuple[tuple[str, ...], ...] = (
+    ("near_collapse", "invalid"),
+    ("local_flip",),
+    ("self_overlap",),
+    ("anisotropy_hard",),
+    ("needle",),
+    ("area_explosion", "area_collapse"),
+)
+
 
 # --------------------------------------------------------------------- budget
 
@@ -98,33 +119,64 @@ def resolve_budget(profile: QualityProfile, overrides: dict | None = None) -> di
 
 @dataclass
 class UvSnapshot:
-    """Everything one candidate trial may mutate (G5 "완전 복원")."""
+    """Everything one candidate trial may mutate (G5 "완전 복원" / CG7 rollback integrity).
+
+    ``uv_hash`` is the EXACT (unrounded) digest of the UVs at snapshot time — it is what
+    turns "we called write_uvmap" into "the layout really came back". ``catastrophic_counters``
+    and ``island_count`` travel with it so a rollback record can state what was rolled back
+    to without re-measuring.
+    """
 
     seams: frozenset[int]
     uvmap: UVMap
     layer_name: str = AI_UV_LAYER
+    uv_hash: str = ""
+    catastrophic_counters: tuple | None = None
+    island_count: int | None = None
 
 
-def take_snapshot(obj, mesh: MeshGraph, seams) -> UvSnapshot:
-    """Copy the current seam set + UV coordinates before a candidate is applied."""
+def take_snapshot(obj, mesh: MeshGraph, seams, measurement: dict | None = None) -> UvSnapshot:
+    """Copy the current seam set + UV coordinates before a candidate is applied.
+
+    ``measurement`` (when given) is the measurement of exactly these UVs; its catastrophic
+    counters and island count are carried on the snapshot as the CG7 rollback baseline.
+    """
     from chart_uv_agent import unwrap as unwrap_mod
 
     uvmap = unwrap_mod.read_uvmap(obj, mesh)
+    counters = None
+    island_count = None
+    if measurement is not None:
+        report = measurement.get("catastrophic")
+        if isinstance(report, dict):
+            counters = catastrophic_counters(report)
+        raw = measurement.get("island_count")
+        if raw is not None:
+            island_count = int(raw)
     return UvSnapshot(seams=frozenset(int(e) for e in seams), uvmap=uvmap.copy(),
-                      layer_name=AI_UV_LAYER)
+                      layer_name=AI_UV_LAYER, uv_hash=uv_hash(uvmap),
+                      catastrophic_counters=counters, island_count=island_count)
 
 
 def restore_snapshot(obj, mesh: MeshGraph, snap: UvSnapshot) -> set[int]:
-    """Put the UVs, the active UV layer and the marked seams back exactly (G5).
+    """Put the UVs, the active UV layer and the marked seams back exactly (G5 / CG7).
 
     ``mark_seams`` is only meaningful on a real Blender mesh; an off-Blender stand-in has
     no ``data.edges``, so the seam state there lives purely in the returned set.
+
+    The write is VERIFIED: the UVs are read back and hashed, and a digest that does not
+    match the snapshot raises ``RuntimeError("snapshot_restore_mismatch")``. A restore that
+    does not restore is a bug, and a silent one would let a rejected candidate's UVs ship.
     """
     from chart_uv_agent import unwrap as unwrap_mod
 
     unwrap_mod.write_uvmap(obj, mesh, snap.uvmap, layer_name=snap.layer_name)
     if hasattr(getattr(obj, "data", None), "edges"):
         mark_seams(obj, set(snap.seams))
+    if snap.uv_hash:
+        after = uv_hash(unwrap_mod.read_uvmap(obj, mesh))
+        if after != snap.uv_hash:
+            raise RuntimeError("snapshot_restore_mismatch")
     return set(snap.seams)
 
 
@@ -278,6 +330,24 @@ def measure_layout(obj, mesh: MeshGraph, seams, *, profile: QualityProfile,
     )
     quality = evaluate_quality(profile, distortion)
 
+    # CG2/CG3: the HARD catastrophic gate, measured next to (never inside) the quality
+    # caps. The overlap / flip face ids come from the correctness report above so the two
+    # detectors agree instead of each guessing; they only set region flags.
+    overlap_face_ids: list[int] = []
+    for sample in (correctness.get("overlap") or {}).get("samples") or ():
+        for key in ("face_a", "face_b"):
+            value = sample.get(key)
+            if isinstance(value, int) and value >= 0:
+                overlap_face_ids.append(int(value))
+    flip_face_ids = list((correctness.get("orientation") or {})
+                         .get("local_flip_face_ids") or ())
+    catastrophic = evaluate_catastrophic(
+        mesh, uvmap, islands,
+        thresholds=thresholds_from_profile(profile),
+        overlap_face_ids=sorted(set(overlap_face_ids)),
+        flip_face_ids=sorted(set(int(f) for f in flip_face_ids)),
+    )
+
     fragmentation = evaluate_fragmentation(
         mesh, uvmap, islands, seams,
         min_island_uv_area=profile.min_island_uv_area,
@@ -288,6 +358,13 @@ def measure_layout(obj, mesh: MeshGraph, seams, *, profile: QualityProfile,
         sliver_uv_area_max=profile.sliver_uv_area_max,
         sliver_island_count_max=profile.sliver_island_count_max,
         island_aspect_p95_max=profile.island_aspect_p95_max,
+        # CG8: the same island hygiene bar expressed in PIXELS at the profile's texture size.
+        texture_size_px=profile.texture_size_px,
+        min_island_width_px=profile.min_island_width_px,
+        min_island_area_px2=profile.min_island_area_px2,
+        max_island_bbox_aspect=profile.max_island_bbox_aspect,
+        max_island_perimeter_area_ratio=profile.max_island_perimeter_area_ratio,
+        max_tiny_island_area_fraction=profile.max_tiny_island_area_fraction,
     )
     texel_density = evaluate_texel_density(
         mesh, uvmap, islands,
@@ -311,6 +388,9 @@ def measure_layout(obj, mesh: MeshGraph, seams, *, profile: QualityProfile,
     face_aniso = per_face_anisotropy(mesh, uvmap)
     face_aniso = np.nan_to_num(np.asarray(face_aniso, dtype=float), nan=0.0,
                                posinf=0.0, neginf=0.0)
+    # Candidate SEEDING needs a finite array (nan_to_num above); REPORTING must not lie
+    # about an unmeasurable face, so the raw per-face score (NaN/None preserved) ships too.
+    face_score_raw = list(catastrophic.get("per_face_score") or ())
 
     islands_disagree = bool(len(islands) != len(uv_islands))
 
@@ -319,6 +399,8 @@ def measure_layout(obj, mesh: MeshGraph, seams, *, profile: QualityProfile,
         hard_failures.append("quality_profile_failed")
     if not correctness.get("passed", False):
         hard_failures.append("correctness_failed")
+    if not (catastrophic.get("passed", False) and catastrophic.get("valid", False)):
+        hard_failures.append("catastrophic_failed")
     if mandatory_audit["mandatory_90_missing"] != 0:
         hard_failures.append("mandatory_90_missing")
     if mandatory_audit["mandatory_90_uv_unsplit"] != 0:
@@ -342,8 +424,10 @@ def measure_layout(obj, mesh: MeshGraph, seams, *, profile: QualityProfile,
         "island_count": len(islands),
         "uv_island_count": len(uv_islands),
         "islands_disagree": islands_disagree,
+        "uv_hash": uv_hash(uvmap),
         "distortion_v2": distortion,
         "correctness": correctness,
+        "catastrophic": catastrophic,
         "quality": quality,
         "mandatory_audit": mandatory_audit,
         "fragmentation": fragmentation,
@@ -354,6 +438,7 @@ def measure_layout(obj, mesh: MeshGraph, seams, *, profile: QualityProfile,
         "quality_failures": quality_failures,
         "passed": passed,
         "face_anisotropy": face_aniso,
+        "face_score_raw": face_score_raw,
     }
 
 
@@ -514,6 +599,74 @@ def _correctness_counters(measurement: dict) -> tuple[float, int, int]:
     )
 
 
+def _finite_float(value, default: float) -> float:
+    """``float(value)`` when it is a real finite number, ``default`` otherwise.
+
+    ``None`` is what :mod:`catastrophic_distortion` reports for "not measurable"; it is
+    never silently read as 0.0 by a caller that wanted a magnitude."""
+    if value is None or isinstance(value, bool):
+        return float(default)
+    try:
+        out = float(value)
+    except (TypeError, ValueError):
+        return float(default)
+    return out if np.isfinite(out) else float(default)
+
+
+def _catastrophic_reason_rank(region: dict) -> int:
+    """Where ``region`` sits in :data:`CATASTROPHIC_REASON_PRIORITY` (lower = repair first).
+
+    The two boolean flags (``local_flip`` / ``self_overlap``) are folded into the same
+    ordering as the triangle reasons, so one comparison decides the whole priority."""
+    reasons = set(str(r) for r in (region.get("reasons") or ()))
+    if region.get("local_flip"):
+        reasons.add("local_flip")
+    if region.get("self_overlap"):
+        reasons.add("self_overlap")
+    for rank, group in enumerate(CATASTROPHIC_REASON_PRIORITY):
+        if reasons.intersection(group):
+            return rank
+    return len(CATASTROPHIC_REASON_PRIORITY)
+
+
+def _region_catastrophic(measurement: dict, faces) -> dict:
+    """The catastrophic sub-report restricted to exactly ``faces`` (a repair's own scope).
+
+    The target of a catastrophic round is a FACE SET; after a re-unwrap or a cut the region
+    ids renumber, so "did THIS region get better" can only be answered by re-counting the
+    same faces on the new measurement."""
+    want = {int(f) for f in faces}
+    report = measurement.get("catastrophic") or {}
+    bad_faces = {int(f) for f in (report.get("bad_face_ids") or ())}
+    bad_triangles = 0
+    area_fraction = 0.0
+    max_aniso: float | None = None
+    max_aspect: float | None = None
+    for region in report.get("regions") or ():
+        region_faces = {int(f) for f in (region.get("face_ids") or ())}
+        if not region_faces & want:
+            continue
+        bad_triangles += int(region.get("bad_triangle_count", 0) or 0)
+        area_fraction += _finite_float(region.get("area_fraction"), 0.0)
+        aniso = region.get("max_anisotropy")
+        if aniso is not None and np.isfinite(_finite_float(aniso, float("nan"))):
+            value = float(aniso)
+            max_aniso = value if max_aniso is None else max(max_aniso, value)
+        aspect = region.get("max_uv_aspect_ratio")
+        if aspect is not None:
+            value = float(aspect)
+            max_aspect = value if max_aspect is None else max(max_aspect, value)
+    score = max_aniso if max_aniso is not None else max_aspect
+    return {
+        "bad_triangle_count": int(bad_triangles),
+        "bad_face_count": len(bad_faces & want),
+        "area_fraction": float(area_fraction),
+        "max_anisotropy": max_aniso,
+        "max_uv_aspect_ratio": max_aspect,
+        "score": _finite_float(score, float("nan")),
+    }
+
+
 # ------------------------------------------------------------ target picking
 
 
@@ -542,6 +695,39 @@ def select_target(measurement: dict, rejected_regions: set, profile: QualityProf
             return None
         return {"kind": kind, "island_id": int(island_id), "faces": faces,
                 "metric": metric, "before": float(before)}
+
+    # (0) CG2/CG5: a CATASTROPHIC region outranks every average-based complaint. A needle
+    # or a collapsed face destroys the texture no matter how good the p95 looks, so it is
+    # repaired first — and counted regions before below-min ones, because a cluster large
+    # enough to be counted is the one the gate is failing on.
+    catastrophic = measurement.get("catastrophic") or {}
+    regions = list(catastrophic.get("regions") or ())
+    if regions:
+        ordered = sorted(
+            regions,
+            key=lambda r: (
+                1 if bool(r.get("below_cluster_min")) else 0,
+                _catastrophic_reason_rank(r),
+                -_finite_float(r.get("area_fraction"), 0.0),
+                int(r.get("region_id", 0)),
+            ),
+        )
+        for region in ordered:
+            faces = frozenset(int(f) for f in (region.get("face_ids") or ()))
+            if not faces or faces in rejected:
+                continue
+            before = region.get("max_anisotropy")
+            if before is None:
+                before = region.get("max_uv_aspect_ratio")
+            return {
+                "kind": "catastrophic_repair",
+                "island_id": int(region.get("island_id", -1)),
+                "faces": faces,
+                "region_id": int(region.get("region_id", 0)),
+                "metric": CATASTROPHIC_METRIC,
+                "before": _finite_float(before, float("nan")),
+                "reasons": list(region.get("reasons") or ()),
+            }
 
     quality = measurement.get("quality") or {}
     failed = [c for c in (quality.get("checks") or []) if not c.get("passed", True)]
@@ -717,6 +903,214 @@ def evaluate_candidate(obj, mesh: MeshGraph, seams, cand, *, target: dict, befor
         return record
 
 
+# ----------------------------------------------- catastrophic repair trials (CG5/CG6)
+
+
+def _catastrophic_verdict(mesh: MeshGraph, target: dict, before: dict, after: dict, *,
+                          profile: QualityProfile, constraints_ok: bool,
+                          island_cap_ok: bool) -> tuple[dict, dict, dict, dict]:
+    """The CG6 verdict for one catastrophic trial, plus the two region sub-reports.
+
+    Returns ``(verdict, region_before, region_after, extras)`` where ``extras`` carries the
+    individual gate results the record reports."""
+    from chart_uv_agent import catastrophic_repair as cat_repair
+
+    faces = target["faces"]
+    region_before = _region_catastrophic(before, faces)
+    region_after = _region_catastrophic(after, faces)
+
+    if after["correctness"].get("passed", False):
+        correctness_ok = True
+    elif before["correctness"].get("passed", False):
+        correctness_ok = False
+    else:
+        b_overlap, b_flip, b_degen = _correctness_counters(before)
+        a_overlap, a_flip, a_degen = _correctness_counters(after)
+        correctness_ok = (a_overlap <= b_overlap + 1e-12 and a_flip <= b_flip
+                          and a_degen <= b_degen)
+
+    mandatory_ok = (
+        after["mandatory_audit"]["mandatory_90_missing"] == 0
+        and after["mandatory_audit"]["mandatory_90_uv_unsplit"]
+        <= before["mandatory_audit"]["mandatory_90_uv_unsplit"]
+    )
+    fragmentation_ok = _fragmentation_ok(before, after)
+    regression = regression_within_budget(
+        profile,
+        (before.get("distortion_v2") or {}).get("global") or {},
+        (after.get("distortion_v2") or {}).get("global") or {},
+        target="anisotropy_max",
+    )
+    # A catastrophic "before" is BROKEN by definition, and a broken layout routinely has a
+    # non-finite global metric. There is nothing to regress FROM in that case, so a
+    # violation whose ``before`` was never measurable is not held against the repair; a
+    # finite before that got worse still is.
+    violations = [v for v in regression["violations"]
+                  if np.isfinite(_finite_float(v.get("before"), float("nan")))]
+    regression_ok = not violations
+
+    verdict = cat_repair.accept_catastrophic_candidate(
+        profile,
+        before=before, after=after, target_faces=faces, mesh=mesh,
+        correctness_ok=bool(correctness_ok), constraints_ok=bool(constraints_ok),
+        mandatory_ok=bool(mandatory_ok), fragmentation_ok=bool(fragmentation_ok),
+        island_cap_ok=bool(island_cap_ok), regression_ok=bool(regression_ok),
+        region_before=region_before, region_after=region_after,
+    )
+    extras = {
+        "correctness_ok": bool(correctness_ok),
+        "mandatory_ok": bool(mandatory_ok),
+        "fragmentation_ok": bool(fragmentation_ok),
+        "regression_ok": bool(regression_ok),
+        "regression_violations": list(violations),
+    }
+    return verdict, region_before, region_after, extras
+
+
+def _catastrophic_record(target: dict, *, kind: str, candidate: dict,
+                         aux_length: float, exposure: float) -> dict:
+    return {
+        "candidate": candidate,
+        "kind": str(kind),
+        "cut_reason": "catastrophic_repair",
+        "region_id": target.get("region_id"),
+        "target_island": int(target.get("island_id", -1)),
+        "target_metric": CATASTROPHIC_METRIC,
+        "aux_length": float(aux_length),
+        "exposure": float(exposure),
+    }
+
+
+def _finish_catastrophic_record(record: dict, *, before: dict, after: dict,
+                                verdict: dict, region_before: dict, region_after: dict,
+                                extras: dict, started: float) -> dict:
+    record.update(verdict)
+    record.update(extras)
+    record.update({
+        "after_measurement": after,
+        "island_count_after": int(after["island_count"]),
+        "quality_after_passed": bool(after["passed"]),
+        "target_before": float(region_before["score"]),
+        "target_after": float(region_after["score"]),
+        "region_before": dict(region_before),
+        "region_after": dict(region_after),
+        "catastrophic_before": list(catastrophic_counters(before.get("catastrophic") or {})),
+        "catastrophic_after": list(catastrophic_counters(after.get("catastrophic") or {})),
+        "elapsed_s": time.monotonic() - started,
+    })
+    return record
+
+
+def evaluate_reunwrap_candidate(obj, mesh: MeshGraph, seams, variant: dict, *,
+                                target: dict, before: dict, island_faces,
+                                profile: QualityProfile, margin: float,
+                                island_cap_ok: bool = True,
+                                regions: dict | None = None) -> dict:
+    """Trial ONE R1 same-seam re-unwrap variant (CG5): apply, measure, judge.
+
+    Like :func:`evaluate_candidate` this never restores — the caller owns the snapshot.
+    The seam set is not touched at all, so ``added_edges`` stays empty and a successful R1
+    means the model was repaired with ZERO new seams."""
+    from chart_uv_agent import catastrophic_repair as cat_repair
+
+    started = time.monotonic()
+    record = _catastrophic_record(target, kind="reunwrap", candidate=dict(variant),
+                                  aux_length=0.0, exposure=0.0)
+    record["variant_id"] = str(variant.get("variant_id", ""))
+    try:
+        cat_repair.apply_reunwrap_variant(obj, mesh, island_faces, variant, margin=margin)
+        after = measure_layout(obj, mesh, seams, profile=profile, stage="candidate",
+                               regions=regions)
+        verdict, region_before, region_after, extras = _catastrophic_verdict(
+            mesh, target, before, after, profile=profile, constraints_ok=True,
+            island_cap_ok=bool(island_cap_ok))
+        return _finish_catastrophic_record(record, before=before, after=after,
+                                           verdict=verdict, region_before=region_before,
+                                           region_after=region_after, extras=extras,
+                                           started=started)
+    except Exception as exc:                                   # noqa: BLE001 — reported
+        record.update({
+            "accepted": False,
+            "reason": "candidate_exception",
+            "error": str(exc),
+            "improvement_ratio": 0.0,
+            "after_measurement": None,
+            "island_count_after": None,
+            "elapsed_s": time.monotonic() - started,
+        })
+        return record
+
+
+def evaluate_relief_candidate(obj, mesh: MeshGraph, seams, cand, *, target: dict,
+                              before: dict, constraints, profile: QualityProfile,
+                              margin: float, island_cap_ok: bool = True,
+                              regions: dict | None = None) -> dict:
+    """Trial ONE R2 relief seam (CG5): apply the cut, unwrap, measure, judge.
+
+    A constraint violation short-circuits before any unwrap, exactly as in
+    :func:`evaluate_candidate` — an illegal cut is never measured."""
+    started = time.monotonic()
+    record = _catastrophic_record(target, kind=str(cand.kind), candidate=cand.to_dict(),
+                                  aux_length=seam_length(mesh, cand.added_edges),
+                                  exposure=float(cand.exposure_cost))
+    record["variant_id"] = None
+    record["relief_reason"] = str(cand.reason)
+
+    check = constraints.check_added(cand.added_edges)
+    if not check["ok"]:
+        record.update({
+            "accepted": False,
+            "reason": "constraint_violation",
+            "improvement_ratio": 0.0,
+            "protected_cut": list(check["protected_cut"]),
+            "after_measurement": None,
+            "island_count_after": None,
+            "elapsed_s": time.monotonic() - started,
+        })
+        return record
+
+    try:
+        trial_seams = {int(e) for e in seams} | {int(e) for e in cand.added_edges}
+        after = unwrap_and_measure(obj, mesh, trial_seams, profile=profile, margin=margin,
+                                   stage="candidate", regions=regions)
+        verdict, region_before, region_after, extras = _catastrophic_verdict(
+            mesh, target, before, after, profile=profile, constraints_ok=True,
+            island_cap_ok=bool(island_cap_ok))
+        return _finish_catastrophic_record(record, before=before, after=after,
+                                           verdict=verdict, region_before=region_before,
+                                           region_after=region_after, extras=extras,
+                                           started=started)
+    except Exception as exc:                                   # noqa: BLE001 — reported
+        record.update({
+            "accepted": False,
+            "reason": "candidate_exception",
+            "error": str(exc),
+            "improvement_ratio": 0.0,
+            "after_measurement": None,
+            "island_count_after": None,
+            "elapsed_s": time.monotonic() - started,
+        })
+        return record
+
+
+def _pick_catastrophic(trials: list[tuple]) -> tuple | None:
+    """The winning ``(candidate, record)`` of a catastrophic round, deterministically.
+
+    A candidate whose layout passes the whole bar beats a merely-accepted one; among
+    equals the biggest region improvement wins, and the production order (R1 variants
+    cheapest-first, relief candidates already ranked) breaks any remaining tie."""
+    accepted = [(index, pair) for index, pair in enumerate(trials)
+                if pair[1].get("accepted")]
+    if not accepted:
+        return None
+    best = min(accepted, key=lambda item: (
+        0 if item[1][1].get("quality_after_passed") else 1,
+        -round(float(item[1][1].get("improvement_ratio", 0.0)), 9),
+        item[0],
+    ))
+    return best[1]
+
+
 def _choice_key(record: dict, cand) -> tuple:
     """Deterministic tie-break for candidates of equal standing (§5 / G4 / G2).
 
@@ -730,6 +1124,176 @@ def _choice_key(record: dict, cand) -> tuple:
     total_cost = float((getattr(cand, "cost", None) or {}).get("total", 0.0))
     return rank_key(island_count, record.get("aux_length", 0.0),
                     record.get("exposure", 0.0), total_cost)
+
+
+# ------------------------------------------------- catastrophic repair round (CG5)
+
+
+def _catastrophic_history_row(target: dict, *, iterations: int, action: str, reason: str,
+                              record: dict | None, added: list[int],
+                              candidate_kind, candidates_evaluated: int) -> dict:
+    region_before = (record or {}).get("region_before") or {}
+    region_after = (record or {}).get("region_after") or region_before
+    before_value = float(region_before.get("score", target.get("before", float("nan")))
+                         if region_before else target.get("before", float("nan")))
+    after_value = float(region_after.get("score", before_value)
+                        if region_after else before_value)
+    return {
+        "round": int(iterations),
+        "stage": "refinement",
+        "action": str(action),
+        "reason": str(reason),
+        "cut_reason": "catastrophic_repair",
+        "region_id": target.get("region_id"),
+        "target_island": int(target.get("island_id", -1)),
+        "target_metric": CATASTROPHIC_METRIC,
+        "before": before_value,
+        "after": after_value,
+        "improvement_ratio": float((record or {}).get("improvement_ratio", 0.0)),
+        "added_edges": list(added),
+        "candidate_kind": candidate_kind,
+        "candidates_evaluated": int(candidates_evaluated),
+        "bad_triangles_before": int(region_before.get("bad_triangle_count", 0) or 0),
+        "bad_triangles_after": int(region_after.get("bad_triangle_count", 0) or 0),
+        "bad_area_before": float(region_before.get("area_fraction", 0.0) or 0.0),
+        "bad_area_after": float(region_after.get("area_fraction", 0.0) or 0.0),
+    }
+
+
+def _run_catastrophic_round(obj, mesh: MeshGraph, seams: set[int], *, target: dict,
+                            measurement: dict, constraints, profile: QualityProfile,
+                            budget: dict, margin: float, regions, history: list,
+                            candidate_history: list, iterations: int,
+                            island_cap_ok: bool) -> dict:
+    """ONE catastrophic repair round: R1 same-seam re-unwrap, then (only then) R2 relief.
+
+    Every trial is bracketed by the snapshot pair, so a rejected R1 variant leaves the UVs
+    *and* the seam set exactly as they were — verified by the snapshot's ``uv_hash`` (CG7).
+    Returns ``measurement`` ``None`` when nothing was accepted; the caller then marks the
+    region rejected and moves on.
+    """
+    from chart_uv_agent import catastrophic_repair as cat_repair
+
+    islands = measurement.get("islands") or []
+    island_id = int(target.get("island_id", -1))
+    island_faces = (sorted(int(f) for f in islands[island_id])
+                    if 0 <= island_id < len(islands) else sorted(target["faces"]))
+
+    snapshot = take_snapshot(obj, mesh, seams, measurement)
+    evaluated = 0
+
+    # --- R1: same seams, different solver settings -------------------------------
+    r1_trials: list[tuple] = []
+    for variant in cat_repair.reunwrap_candidates(target, profile):
+        try:
+            record = evaluate_reunwrap_candidate(
+                obj, mesh, seams, variant, target=target, before=measurement,
+                island_faces=island_faces, profile=profile, margin=margin,
+                island_cap_ok=True, regions=regions)
+        finally:
+            restore_snapshot(obj, mesh, snapshot)
+        record["round"] = int(iterations)
+        evaluated += 1
+        candidate_history.append(record)
+        r1_trials.append((variant, record))
+
+    chosen = _pick_catastrophic(r1_trials)
+    if chosen is not None:
+        variant, record = chosen
+        cat_repair.apply_reunwrap_variant(obj, mesh, island_faces, variant, margin=margin)
+        after = measure_layout(obj, mesh, seams, profile=profile, stage="refinement",
+                               regions=regions)
+        history.append(_catastrophic_history_row(
+            target, iterations=iterations, action="reunwrap", reason=target["kind"],
+            record=record, added=[], candidate_kind="reunwrap",
+            candidates_evaluated=len(r1_trials)))
+        return {"reason": "r1_accepted", "candidates_evaluated": evaluated,
+                "measurement": after, "seams": set(seams), "added_seams": set()}
+
+    # --- R2: a relief seam, and only because every R1 variant failed --------------
+    relief = cat_repair.relief_seam_candidates(
+        mesh, islands, island_id, seams, constraints, target["faces"],
+        max_candidates=int(budget["max_candidates_per_round"]))
+
+    if not island_cap_ok:
+        # The cap blocks CUTS. Every relief candidate is recorded as rejected without
+        # ever being unwrapped, so the evidence says WHY the repair stopped.
+        for cand in relief:
+            record = _catastrophic_record(
+                target, kind=str(cand.kind), candidate=cand.to_dict(),
+                aux_length=seam_length(mesh, cand.added_edges),
+                exposure=float(cand.exposure_cost))
+            record.update({
+                "round": int(iterations),
+                "variant_id": None,
+                "relief_reason": str(cand.reason),
+                "accepted": False,
+                "reason": "island_cap_reached",
+                "improvement_ratio": 0.0,
+                "after_measurement": None,
+                "island_count_after": None,
+                "elapsed_s": 0.0,
+            })
+            candidate_history.append(record)
+        history.append(_catastrophic_history_row(
+            target, iterations=iterations, action="reject_region",
+            reason="island_cap_reached", record=None, added=[], candidate_kind=None,
+            candidates_evaluated=len(r1_trials)))
+        return {"reason": "island_cap_reached", "candidates_evaluated": evaluated,
+                "measurement": None, "seams": set(seams), "added_seams": set()}
+
+    r2_trials: list[tuple] = []
+    for cand in relief:
+        if cand.rejected:
+            record = _catastrophic_record(
+                target, kind=str(cand.kind), candidate=cand.to_dict(),
+                aux_length=seam_length(mesh, cand.added_edges),
+                exposure=float(cand.exposure_cost))
+            record.update({
+                "round": int(iterations),
+                "variant_id": None,
+                "relief_reason": str(cand.reason),
+                "accepted": False,
+                "reason": str(cand.rejected),
+                "improvement_ratio": 0.0,
+                "after_measurement": None,
+                "island_count_after": None,
+                "elapsed_s": 0.0,
+            })
+            candidate_history.append(record)
+            continue
+        try:
+            record = evaluate_relief_candidate(
+                obj, mesh, seams, cand, target=target, before=measurement,
+                constraints=constraints, profile=profile, margin=margin,
+                island_cap_ok=True, regions=regions)
+        finally:
+            restore_snapshot(obj, mesh, snapshot)
+        record["round"] = int(iterations)
+        evaluated += 1
+        candidate_history.append(record)
+        r2_trials.append((cand, record))
+
+    chosen = _pick_catastrophic(r2_trials)
+    if chosen is None:
+        history.append(_catastrophic_history_row(
+            target, iterations=iterations, action="reject_region", reason=target["kind"],
+            record=None, added=[], candidate_kind=None,
+            candidates_evaluated=len(r1_trials) + len(r2_trials)))
+        return {"reason": "no_improving_candidate", "candidates_evaluated": evaluated,
+                "measurement": None, "seams": set(seams), "added_seams": set()}
+
+    cand, record = chosen
+    added = sorted(int(e) for e in cand.added_edges)
+    new_seams = set(seams) | set(added)
+    after = unwrap_and_measure(obj, mesh, new_seams, profile=profile, margin=margin,
+                               stage="refinement", regions=regions)
+    history.append(_catastrophic_history_row(
+        target, iterations=iterations, action="split", reason=target["kind"],
+        record=record, added=added, candidate_kind=cand.kind,
+        candidates_evaluated=len(r1_trials) + len(r2_trials)))
+    return {"reason": "r2_accepted", "candidates_evaluated": evaluated,
+            "measurement": after, "seams": new_seams, "added_seams": set(added)}
 
 
 # --------------------------------------------------------------------- loop
@@ -763,6 +1327,8 @@ def run_refinement(obj, mesh: MeshGraph, seams: set[int], *, constraints,
     started = clock()
     iterations = 0
     candidates_evaluated = 0
+    catastrophic_rounds = 0
+    round_reasons: list[dict] = []
 
     measurement = initial_measurement
     if measurement is None:
@@ -780,21 +1346,54 @@ def run_refinement(obj, mesh: MeshGraph, seams: set[int], *, constraints,
         if float(clock() - started) >= budget["time_budget_s"]:
             reason = "time_budget"
             break
-        if measurement["island_count"] >= budget["island_cap"]:
-            reason = "island_cap"
-            break
 
         target = select_target(measurement, rejected_regions, profile)
         if target is None:
             reason = "no_improving_candidate" if rejected_regions else "no_failing_target"
             break
 
+        # CG5 island cap: the cap limits SEAMS, not repairs. A catastrophic target's R1
+        # variants add no seam at all, so the cap may not stop them — it only blocks the
+        # R2 relief cut (handled inside the catastrophic branch).
+        island_cap_ok = bool(measurement["island_count"] < budget["island_cap"])
+        is_catastrophic = target["kind"] == "catastrophic_repair"
+        if not island_cap_ok and not is_catastrophic:
+            reason = "island_cap"
+            break
+
+        if is_catastrophic:
+            if catastrophic_rounds >= int(profile.catastrophic_repair_max_rounds):
+                reason = "catastrophic_budget"
+                round_reasons.append({"round": iterations, "kind": target["kind"],
+                                      "reason": "catastrophic_budget"})
+                break
+            catastrophic_rounds += 1
+            outcome = _run_catastrophic_round(
+                obj, mesh, seams, target=target, measurement=measurement,
+                constraints=constraints, profile=profile, budget=budget, margin=margin,
+                regions=regions, history=history, candidate_history=candidate_history,
+                iterations=iterations, island_cap_ok=island_cap_ok)
+            candidates_evaluated += int(outcome["candidates_evaluated"])
+            round_reasons.append({"round": iterations, "kind": target["kind"],
+                                  "reason": outcome["reason"]})
+            iterations += 1
+            if outcome["measurement"] is not None:
+                measurement = outcome["measurement"]
+                seams = outcome["seams"]
+                distortion_seams |= outcome["added_seams"]
+                continue
+            rejected_regions.add(target["faces"])
+            if outcome["reason"] == "island_cap_reached":
+                reason = "island_cap"
+                break
+            continue
+
         # G2: WHY this round is cutting at all travels with every candidate and every
         # history row — a correctness repair is not a distortion repair.
         cut_reason = ("correctness_repair" if target["kind"] == "correctness_repair"
                       else "distortion_repair")
 
-        snapshot = take_snapshot(obj, mesh, seams)
+        snapshot = take_snapshot(obj, mesh, seams, measurement)
         cands = generate_candidates(
             mesh, measurement["islands"], target["island_id"], seams, constraints,
             measurement["face_anisotropy"],
@@ -902,6 +1501,8 @@ def run_refinement(obj, mesh: MeshGraph, seams: set[int], *, constraints,
             "candidates_evaluated": int(candidates_evaluated),
             "elapsed_s": float(clock() - started),
             "budget": dict(budget),
+            "catastrophic_rounds": int(catastrophic_rounds),
+            "round_reasons": list(round_reasons),
         },
         "rejected_regions": [sorted(int(f) for f in region)
                              for region in sorted(rejected_regions, key=sorted)],
@@ -944,12 +1545,16 @@ def seam_length_report(mesh: MeshGraph, seams, *, mandatory, user, distortion_se
 
 
 __all__ = [
+    "CATASTROPHIC_METRIC",
+    "CATASTROPHIC_REASON_PRIORITY",
     "CORRECTNESS_METRIC",
     "GAP_REPACK_FACTORS",
     "METRIC_PRIORITY",
     "UvSnapshot",
     "ensure_border_margin",
     "evaluate_candidate",
+    "evaluate_relief_candidate",
+    "evaluate_reunwrap_candidate",
     "gap_only_failure",
     "measure_layout",
     "repack_for_gap",

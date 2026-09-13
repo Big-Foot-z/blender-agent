@@ -607,3 +607,147 @@ def test_compact_merge_back_block_on_none_and_empty():
     assert "history" not in full
     assert full["accepted"] == 2
     assert full["reason"] == "no_more_candidates"
+
+
+# --- TC6b catastrophic / heatmap-identity gate codes (CG13, CG4) -----------
+def test_evaluate_auto_gate_catastrophic_invalid_is_not_a_pass():
+    g = contract.evaluate_auto_gate(**_ok_gate_inputs(), catastrophic={
+        "valid": False, "passed": False, "hard_failed": True, "region_failed": False})
+    assert g["valid"] is False
+    assert g["passed"] is False
+    assert g["invalid_reasons"] == ["catastrophic_invalid"]
+    assert "catastrophic_failed" not in g["failures"]
+
+
+def test_evaluate_auto_gate_catastrophic_hard_failure():
+    g = contract.evaluate_auto_gate(**_ok_gate_inputs(), catastrophic={
+        "valid": True, "passed": False, "hard_failed": True, "region_failed": True,
+        "bad_triangle_count": 7})
+    assert g["valid"] is True
+    assert g["passed"] is False
+    # A hard failure reports the one code; the region granularity is only added
+    # when the damage is region-ONLY.
+    assert g["failures"] == ["catastrophic_failed"]
+
+
+def test_evaluate_auto_gate_catastrophic_region_only_failure():
+    g = contract.evaluate_auto_gate(**_ok_gate_inputs(), catastrophic={
+        "valid": True, "passed": False, "hard_failed": False, "region_failed": True,
+        "bad_region_count": 2})
+    assert g["passed"] is False
+    assert g["failures"] == ["catastrophic_failed", "catastrophic_region_failed"]
+
+
+def test_evaluate_auto_gate_catastrophic_passing_block_is_a_pass():
+    g = contract.evaluate_auto_gate(**_ok_gate_inputs(), catastrophic={
+        "valid": True, "passed": True, "hard_failed": False, "region_failed": False})
+    assert g["passed"] is True
+    assert g["failures"] == [] and g["invalid_reasons"] == []
+
+
+def test_evaluate_auto_gate_heatmap_identity_mismatch():
+    g = contract.evaluate_auto_gate(**_ok_gate_inputs(),
+                                    heatmap_identity={"passed": False})
+    assert g["valid"] is True
+    assert g["passed"] is False
+    assert g["failures"] == ["heatmap_identity_mismatch"]
+
+    ok = contract.evaluate_auto_gate(**_ok_gate_inputs(),
+                                     heatmap_identity={"passed": True})
+    assert ok["passed"] is True and ok["failures"] == []
+
+
+def test_evaluate_auto_gate_tc6b_blocks_default_none_is_unchanged():
+    base = contract.evaluate_auto_gate(**_ok_gate_inputs())
+    same = contract.evaluate_auto_gate(**_ok_gate_inputs(),
+                                       catastrophic=None, heatmap_identity=None)
+    assert same == base
+    assert same["passed"] is True
+
+
+# --- TC6b summary keys + artifacts (CG13, CG0) -----------------------------
+def test_build_generate_summary_defaults_the_tc6b_keys_to_none():
+    s = contract.build_generate_summary(
+        run_id="r", status=contract.STATUS_NEEDS_USER_REVIEW, model="m",
+        object_name="Pot", seam_spec=None, metrics=None, seam_integrity=_integrity(),
+        layout_optimization={"enabled": False}, artifacts={})
+    for key in ("catastrophic", "heatmap_identity", "uv_hash", "repair"):
+        assert key in s
+        assert s[key] is None
+
+
+def test_build_generate_summary_carries_the_tc6b_blocks():
+    cat = {"passed": False, "valid": True, "hard_failed": True, "bad_triangle_count": 3}
+    heat = {"passed": True, "uv_hash": "abc", "heatmap_uv_hash": "abc"}
+    repair = {"rounds": 2, "reunwrap_accepted": 1, "relief_accepted": 0}
+    s = contract.build_generate_summary(
+        run_id="r", status=contract.STATUS_NEEDS_USER_REVIEW, model="m",
+        object_name="Pot", seam_spec=None, metrics=None, seam_integrity=_integrity(),
+        layout_optimization={"enabled": True}, artifacts={},
+        mode=contract.MODE_AUTO_GENERATE,
+        catastrophic=cat, heatmap_identity=heat, uv_hash="deadbeef", repair=repair)
+    assert s["catastrophic"] == cat
+    assert s["heatmap_identity"]["passed"] is True
+    assert s["uv_hash"] == "deadbeef"
+    assert s["repair"]["rounds"] == 2
+
+
+def test_artifact_files_carry_the_tc6b_evidence_artifacts():
+    expected = {
+        "catastrophic": "uv_catastrophic.json",
+        "repair_history": "uv_repair_history.json",
+        "heatmap_meta": "heatmap_meta.json",
+    }
+    for key, filename in expected.items():
+        assert key in contract.ARTIFACT_FILES
+        assert contract.ARTIFACT_FILES[key] == (filename, False)
+    assert contract.CATASTROPHIC_FILE == "uv_catastrophic.json"
+    assert contract.REPAIR_HISTORY_FILE == "uv_repair_history.json"
+    assert contract.HEATMAP_META_FILE == "heatmap_meta.json"
+
+
+# --- TC6b compact helpers --------------------------------------------------
+def test_compact_catastrophic_block_on_none_and_empty():
+    keys = {"passed", "valid", "hard_failed", "region_failed", "bad_triangle_count",
+            "bad_region_count", "bad_area_fraction", "max_anisotropy",
+            "max_uv_triangle_aspect", "near_collapse_count", "invalid_count",
+            "boundary_spike_region_count", "self_overlap_region_count"}
+    for arg in (None, {}):
+        blk = contract.compact_catastrophic_block(arg)
+        assert set(blk) == keys
+        assert all(v is None for v in blk.values())
+
+
+def test_compact_catastrophic_block_drops_the_heavy_arrays():
+    blk = contract.compact_catastrophic_block({
+        "passed": False, "valid": True, "hard_failed": True, "region_failed": True,
+        "bad_triangle_count": 4, "bad_region_count": 1, "bad_area_fraction": 0.02,
+        "max_anisotropy": 91.0, "max_uv_triangle_aspect": 120.0,
+        "near_collapse_count": 2, "invalid_count": 0,
+        "boundary_spike_region_count": 1, "self_overlap_region_count": 0,
+        "regions": [{"region_id": 0}], "worst_triangles": [{"face_id": 3}],
+        "per_face_score": [0.0, 1.0]})
+    assert "regions" not in blk and "worst_triangles" not in blk
+    assert "per_face_score" not in blk
+    assert blk["bad_triangle_count"] == 4
+    assert blk["max_anisotropy"] == 91.0
+
+
+def test_compact_repair_block_on_none_and_empty():
+    keys = {"rounds", "reunwrap_accepted", "relief_accepted", "rejected", "reason",
+            "bad_triangles_before", "bad_triangles_after", "bad_area_before",
+            "bad_area_after", "island_count_before", "island_count_after"}
+    for arg in (None, {}):
+        blk = contract.compact_repair_block(arg)
+        assert set(blk) == keys
+        assert all(v is None for v in blk.values())
+
+    full = contract.compact_repair_block({
+        "rounds": 3, "reunwrap_accepted": 1, "relief_accepted": 1, "rejected": 1,
+        "reason": "no_improvement", "bad_triangles_before": 12,
+        "bad_triangles_after": 0, "bad_area_before": 0.04, "bad_area_after": 0.0,
+        "island_count_before": 6, "island_count_after": 8,
+        "history": [{"round": 0}]})
+    assert "history" not in full
+    assert full["rounds"] == 3
+    assert full["bad_triangles_after"] == 0
