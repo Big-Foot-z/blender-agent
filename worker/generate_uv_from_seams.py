@@ -233,6 +233,7 @@ def _profile_summary(profile_dict: dict | None) -> dict | None:
             "anisotropy_island_p95_max", "anisotropy_max_max",
             "bad_area_ratio_max", "area_stretch_global_mean_max",
             "area_stretch_global_p95_max",
+            "anisotropy_hard_max", "bad_area_fraction_cap", "min_island_width_px",
             "texture_size_px", "margin_px", "border_margin_px",
             "shading_uv_policy", "merge_back_enabled", "seed", "max_iterations",
             "max_candidates_per_round", "time_budget_s", "island_cap",

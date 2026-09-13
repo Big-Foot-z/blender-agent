@@ -365,3 +365,82 @@ def test_seam_overlay_png_colours_edges_by_reason_code(tmp_path):
     probe = dict((eid, tuple(rgb)) for eid, rgb in out["pixel_probe"])
     assert probe[mandatory] == (220, 40, 40)            # a mandatory seam is red
     assert probe[ghost] == (255, 0, 255)                # rejected candidate is magenta
+
+
+# ---------------------------------------------------------------------------
+# heat map / gate data identity (CG4 / CG0)
+# ---------------------------------------------------------------------------
+def test_heatmap_hard_fail_and_inf_painting_and_uv_hash(tmp_path):
+    from uv_agent.geometry.mesh_identity import uv_hash
+
+    mesh, uvmap = _flat_quad_grid()
+    # face 0 is a hard fail with an otherwise "good" value, face 3 is +inf
+    values = [1.0, 2.0, 3.0, float("inf")]
+    path = str(tmp_path / "aniso_gate.png")
+
+    out = write_anisotropy_heatmap_png(
+        mesh, uvmap, values, path, size=256, vmin=1.0, vmax=3.0,
+        hard_fail_faces=[0], meta={"run_id": "r1", "mesh_fingerprint": "fp"},
+    )
+
+    probe = out["pixel_probe"]
+    assert probe[0] == [0, 0, 0]          # hard fail wins over the ramp
+    assert probe[3] == [255, 0, 255]      # +inf is magenta, never clamped to red
+    assert out["hard_fail_faces"] == 1
+    assert out["nonfinite_faces"] == 1
+    assert out["nan_faces"] == 0
+    assert out["max_value"] == 3.0
+
+    assert out["uv_hash"] == uv_hash(uvmap)
+    meta = out["meta"]
+    assert meta["uv_hash"] == uv_hash(uvmap)
+    assert meta["run_id"] == "r1" and meta["mesh_fingerprint"] == "fp"
+    assert (meta["size"], meta["vmin"], meta["vmax"]) == (256, 1.0, 3.0)
+    assert meta["nan_color"] == [255, 0, 255]
+    assert meta["hard_fail_color"] == [0, 0, 0]
+
+
+def test_heatmap_identity_check_and_meta_json(tmp_path):
+    from chart_uv_agent.reporting import heatmap_identity_check, write_heatmap_meta_json
+
+    meta = {
+        "uv_hash": "a" * 64,
+        "mesh_fingerprint": "b" * 64,
+        "metric_version": 2,
+        "run_id": "run-1",
+    }
+    ok = heatmap_identity_check(meta, uv_hash="a" * 64, mesh_fingerprint="b" * 64,
+                                metric_version=2, run_id="run-1")
+    assert ok == {"passed": True, "mismatches": []}
+
+    changed = heatmap_identity_check(meta, uv_hash="c" * 64, mesh_fingerprint="b" * 64,
+                                     metric_version=2, run_id="run-1")
+    assert changed["passed"] is False
+    assert changed["mismatches"] == ["uv_hash"]
+
+    missing = dict(meta)
+    del missing["run_id"]
+    gone = heatmap_identity_check(missing, uv_hash="a" * 64, mesh_fingerprint="b" * 64,
+                                  metric_version=2, run_id="run-1")
+    assert gone["passed"] is False
+    assert gone["mismatches"] == ["run_id"]
+
+    path = str(tmp_path / "heatmap_meta.json")
+    write_heatmap_meta_json(path, {**meta, "probe": np.array([1.0, float("nan")])})
+    with open(path, "r", encoding="utf-8") as fh:
+        loaded = json.load(fh)
+    assert loaded["uv_hash"] == meta["uv_hash"]
+    assert loaded["probe"] == [1.0, None]
+
+
+def test_heatmap_bytes_unchanged_for_existing_callers(tmp_path):
+    mesh, uvmap = _flat_quad_grid()
+    values = [1.0, 2.0, 3.0, float("nan")]
+    p1 = str(tmp_path / "a.png")
+    p2 = str(tmp_path / "b.png")
+
+    write_anisotropy_heatmap_png(mesh, uvmap, values, p1, size=128)
+    write_anisotropy_heatmap_png(mesh, uvmap, values, p2, size=128,
+                                 hard_fail_faces=(), meta={"run_id": "r"})
+    with open(p1, "rb") as fh1, open(p2, "rb") as fh2:
+        assert fh1.read() == fh2.read()

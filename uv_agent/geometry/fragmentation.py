@@ -42,6 +42,32 @@ Classification: ``tiny := uv_area < tiny_island_uv_area``;
 Hard checks (``passed`` is exactly ``hard_passed``): ``zero_area_islands``,
 ``below_min_area_islands``, ``sliver_islands``. Quality checks (reported, never
 gating): ``tiny_island_count``, ``tiny_island_area_ratio``, ``island_aspect_p95``.
+
+CG8 (pixel-space tiny/sliver gate) is OPT IN: pass ``texture_size_px`` to get the
+per-island px metrics (``area_px2``, ``min_width_px``, ``perimeter_px``,
+``perimeter_area_ratio``), and pass the caps as well to get the extra checks
+``island_min_width_px`` / ``island_min_area_px2`` / ``island_bbox_aspect`` /
+``island_perimeter_area_ratio`` (all HARD, limit 0 non-exempt offenders) plus the
+QUALITY check ``tiny_island_area_fraction``. With ``texture_size_px`` or a cap left as
+``None`` nothing new is evaluated, so every existing caller is unchanged. The px
+definitions, with ``T = texture_size_px``:
+
+``area_px2``
+    ``uv_area * T**2``.
+``min_width_px``
+    the SHORT side of the PCA-oriented box, ``* T`` — the narrowest the island gets, so
+    it is what a ``margin_px`` border has to fit inside.
+``perimeter_px``
+    sum of the island's UV boundary segment lengths ``* T``. The boundary is the same
+    edge set as ``_boundary_edges`` (mesh boundary edges plus edges that separate this
+    island from another), measured on the loops of the face INSIDE the island, matching
+    ``uv_correctness._island_boundary_segments``. An island with no boundary edge at all
+    (a closed surface unwrapped as one piece) falls back to the perimeter of its PCA box.
+``perimeter_area_ratio``
+    ``perimeter_px / sqrt(area_px2)`` — scale free (4.0 for a square), 0 when the area is 0.
+
+The CG8 exemption is the same ``mandatory_bounded`` exemption as G7: such an island is
+still measured and reported, but never a hard failure.
 """
 
 from __future__ import annotations
@@ -119,14 +145,55 @@ def _boundary_edges(mesh: MeshGraph, face_ids) -> list[int]:
     return out
 
 
+def _island_uv_perimeter(
+    mesh: MeshGraph,
+    uvmap: UVMap,
+    face_ids,
+    boundary,
+    fv_loop: dict[tuple[int, int], int],
+) -> float:
+    """UV length of the island's boundary (CG8).
+
+    One segment per boundary edge, taken from the loops of the incident face that is
+    INSIDE the island (the same curves ``uv_correctness._island_boundary_segments``
+    measures gaps between). Non-finite UVs make the total non-finite.
+    """
+    inside = set(int(f) for f in face_ids)
+    total = 0.0
+    for eid in boundary:
+        edge = mesh.edges[eid]
+        va, vb = edge.vertex_ids
+        for fid in edge.face_ids:
+            if int(fid) not in inside:
+                continue
+            la = fv_loop.get((int(fid), int(va)))
+            lb = fv_loop.get((int(fid), int(vb)))
+            if la is None or lb is None:
+                continue
+            p = uvmap.get(la)
+            q = uvmap.get(lb)
+            total += math.hypot(float(q[0]) - float(p[0]), float(q[1]) - float(p[1]))
+    return float(total)
+
+
 def island_shape_rows(
     mesh: MeshGraph,
     uvmap: UVMap,
     islands,
     *,
     fold_angle: float = 90.0,
+    texture_size_px: int | None = None,
 ) -> list[dict]:
-    """One row per island (a face-id list) describing its 3D / UV shape (Gate G7)."""
+    """One row per island (a face-id list) describing its 3D / UV shape (Gate G7).
+
+    When ``texture_size_px`` is given, each row also carries the CG8 pixel metrics
+    ``area_px2`` / ``min_width_px`` / ``perimeter_px`` / ``perimeter_area_ratio``.
+    """
+    fv_loop: dict[tuple[int, int], int] = {}
+    if texture_size_px is not None:
+        for loop in mesh.loops:
+            fv_loop[(int(loop.face_id), int(loop.vertex_id))] = int(loop.index)
+
     rows: list[dict] = []
     for island_id, face_ids in enumerate(islands):
         fids = [int(f) for f in face_ids]
@@ -156,6 +223,31 @@ def island_shape_rows(
             for eid in boundary
         )
 
+        px: dict = {}
+        if texture_size_px is not None:
+            scale = float(texture_size_px)
+            area_px2 = float(uv_area) * scale * scale
+            min_width_px = float(short_side) * scale
+            if boundary:
+                perimeter_uv = _island_uv_perimeter(
+                    mesh, uvmap, fids, boundary, fv_loop
+                )
+            elif math.isfinite(long_side) and math.isfinite(short_side):
+                perimeter_uv = 2.0 * (float(long_side) + float(short_side))
+            else:
+                perimeter_uv = float("nan")
+            perimeter_px = float(perimeter_uv) * scale
+            if math.isfinite(area_px2) and area_px2 > 0.0:
+                ratio = float(perimeter_px / math.sqrt(area_px2))
+            else:
+                ratio = 0.0
+            px = {
+                "area_px2": float(area_px2),
+                "min_width_px": float(min_width_px),
+                "perimeter_px": float(perimeter_px),
+                "perimeter_area_ratio": float(ratio),
+            }
+
         rows.append(
             {
                 "island_id": int(island_id),
@@ -168,6 +260,7 @@ def island_shape_rows(
                 "boundary_edge_count": len(boundary),
                 "mandatory_bounded": bool(mandatory_bounded),
                 "one_two_face": bool(len(fids) <= 2),
+                **px,
             }
         )
     return rows
@@ -205,14 +298,26 @@ def evaluate_fragmentation(
     sliver_uv_area_max: float,
     sliver_island_count_max: int,
     island_aspect_p95_max: float,
+    texture_size_px: int | None = None,
+    min_island_width_px: float | None = None,
+    min_island_area_px2: float | None = None,
+    max_island_bbox_aspect: float | None = None,
+    max_island_perimeter_area_ratio: float | None = None,
+    max_tiny_island_area_fraction: float | None = None,
 ) -> dict:
     """Gate G7 island-count / fragmentation report (JSON-serialisable apart from
-    ``aspect_ratio`` possibly being ``inf`` on a degenerate island)."""
+    ``aspect_ratio`` possibly being ``inf`` on a degenerate island).
+
+    CG8 is opt in: without ``texture_size_px`` (or with the caps left ``None``) the
+    report is byte-for-byte the G7 report it always was.
+    """
     # Lazy import: keeps ``uv_agent.geometry`` free of a chart_uv_agent import at
     # module load time (the seam metric is the only thing that needs it).
     from chart_uv_agent.candidates import bbox_diagonal, seam_length
 
-    rows = island_shape_rows(mesh, uvmap, islands, fold_angle=fold_angle)
+    rows = island_shape_rows(
+        mesh, uvmap, islands, fold_angle=fold_angle, texture_size_px=texture_size_px
+    )
 
     non_finite = any(not math.isfinite(r["uv_area"]) for r in rows)
 
@@ -224,6 +329,13 @@ def evaluate_fragmentation(
     below_min_count = 0
     sliver_hard_count = 0
     tiny_uv_area = 0.0
+    # CG8 (only populated when texture_size_px is given): non-exempt offenders.
+    narrow_count = 0
+    small_area_count = 0
+    wide_aspect_count = 0
+    ragged_count = 0
+    non_exempt_widths: list[float] = []
+    non_exempt_areas_px2: list[float] = []
 
     for row in rows:
         uv_area = row["uv_area"]
@@ -249,6 +361,21 @@ def evaluate_fragmentation(
             below_min_count += 1
         if sliver:
             sliver_hard_count += 1
+        if texture_size_px is None:
+            continue
+        non_exempt_widths.append(float(row["min_width_px"]))
+        non_exempt_areas_px2.append(float(row["area_px2"]))
+        if min_island_width_px is not None and row["min_width_px"] < min_island_width_px:
+            narrow_count += 1
+        if min_island_area_px2 is not None and row["area_px2"] < min_island_area_px2:
+            small_area_count += 1
+        if max_island_bbox_aspect is not None and row["aspect_ratio"] > max_island_bbox_aspect:
+            wide_aspect_count += 1
+        if (
+            max_island_perimeter_area_ratio is not None
+            and row["perimeter_area_ratio"] > max_island_perimeter_area_ratio
+        ):
+            ragged_count += 1
 
     island_count = len(rows)
     one_two_face_count = sum(1 for r in rows if r["one_two_face"])
@@ -279,6 +406,15 @@ def evaluate_fragmentation(
         "seam_length_total": float(total_seam_length),
         "bbox_diagonal": float(diagonal),
     }
+
+    if texture_size_px is not None:
+        metrics["texture_size_px"] = int(texture_size_px)
+        metrics["min_island_width_px"] = (
+            float(min(non_exempt_widths)) if non_exempt_widths else None
+        )
+        metrics["island_area_px2_min"] = (
+            float(min(non_exempt_areas_px2)) if non_exempt_areas_px2 else None
+        )
 
     checks = [
         _check("zero_area_islands", "hard", int(zero_area_count), 0, zero_area_count == 0),
@@ -314,6 +450,58 @@ def evaluate_fragmentation(
             aspect_p95 <= island_aspect_p95_max,
         ),
     ]
+
+    if texture_size_px is not None:
+        if min_island_width_px is not None:
+            checks.append(
+                _check(
+                    "island_min_width_px",
+                    "hard",
+                    int(narrow_count),
+                    0,
+                    narrow_count == 0,
+                )
+            )
+        if min_island_area_px2 is not None:
+            checks.append(
+                _check(
+                    "island_min_area_px2",
+                    "hard",
+                    int(small_area_count),
+                    0,
+                    small_area_count == 0,
+                )
+            )
+        if max_island_bbox_aspect is not None:
+            checks.append(
+                _check(
+                    "island_bbox_aspect",
+                    "hard",
+                    int(wide_aspect_count),
+                    0,
+                    wide_aspect_count == 0,
+                )
+            )
+        if max_island_perimeter_area_ratio is not None:
+            checks.append(
+                _check(
+                    "island_perimeter_area_ratio",
+                    "hard",
+                    int(ragged_count),
+                    0,
+                    ragged_count == 0,
+                )
+            )
+        if max_tiny_island_area_fraction is not None:
+            checks.append(
+                _check(
+                    "tiny_island_area_fraction",
+                    "quality",
+                    float(tiny_area_ratio),
+                    float(max_tiny_island_area_fraction),
+                    tiny_area_ratio <= max_tiny_island_area_fraction,
+                )
+            )
 
     failures = [c["name"] for c in checks if c["scope"] == "hard" and not c["passed"]]
     quality_failures = [

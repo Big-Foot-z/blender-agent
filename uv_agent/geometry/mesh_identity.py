@@ -68,6 +68,34 @@ def fingerprint_from_arrays(coords, faces, mats) -> str:
     return hashlib.sha256(blob).hexdigest()
 
 
+# ---------------------------------------------------------------------------
+# UV hash (CG7 rollback baseline / CG0 evidence): exact, unrounded UV identity.
+# ---------------------------------------------------------------------------
+def uv_hash_from_array(arr) -> str:
+    """SHA-256 of ``len:`` + the float64 little-endian bytes of ``arr``.
+
+    Unlike :func:`fingerprint_from_arrays` this is *exact*: no rounding, so a
+    1e-12 nudge of a single UV changes the digest (a rollback that restored a
+    "visually identical" layout is still a different layout). NaN bytes are
+    hashed as they are, so a NaN UV never hashes equal to a finite one. The
+    loop-count prefix keeps two different-length arrays with the same byte tail
+    apart. Deterministic across processes (no ``hash()``, no dict order).
+    """
+    import numpy as np  # local: keeps the module importable without numpy
+
+    a = np.ascontiguousarray(np.asarray(arr, dtype="<f8"))
+    n = int(a.shape[0]) if a.ndim else 0
+    h = hashlib.sha256()
+    h.update(f"{n}:".encode("utf-8"))
+    h.update(a.tobytes(order="C"))
+    return h.hexdigest()
+
+
+def uv_hash(uvmap) -> str:
+    """:func:`uv_hash_from_array` adapter for a :class:`UVMap` (``uvmap.uv``)."""
+    return uv_hash_from_array(uvmap.uv)
+
+
 def sha256_file(path: str) -> str:
     h = hashlib.sha256()
     with open(path, "rb") as fh:

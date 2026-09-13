@@ -153,7 +153,12 @@ class FakeUnwrapBackend:
     def unwrap_and_pack(self, obj, seams, *, margin: float = 0.02,
                         method: str = "MINIMUM_STRETCH", minimize_iters: int = 0,
                         pack_shape: str = "CONCAVE", rotate: bool = True,
-                        average_scale: bool = True, layer_name: str = AI_UV_LAYER) -> int:
+                        average_scale: bool = True, layer_name: str = AI_UV_LAYER,
+                        iterations: int | None = None, no_flip: bool = False,
+                        fill_holes: bool = False) -> int:
+        """``iterations`` / ``no_flip`` / ``fill_holes`` are accepted for interface parity
+        with the real backend and IGNORED by the planar projection (they are solver knobs);
+        they are recorded in ``self.calls`` so tests can assert what was requested."""
         seams = {int(e) for e in seams}
         plan, uvmap = self._project_all(seams)
         if average_scale:
@@ -164,7 +169,9 @@ class FakeUnwrapBackend:
         obj.uv = uvmap
         obj.marked_seams = set(seams)
         self.last_seams = set(seams)
-        self.calls.append(("unwrap", sorted(seams), margin, method))
+        self.calls.append(("unwrap", sorted(seams), margin, method,
+                           {"iterations": iterations, "no_flip": bool(no_flip),
+                            "fill_holes": bool(fill_holes)}))
         return len(seams)
 
     def repack(self, obj, *, margin: float = 0.02, pack_shape: str = "CONCAVE",
@@ -189,11 +196,15 @@ class FakeUnwrapBackend:
 
     def reunwrap_faces(self, obj, face_ids, *, method: str = "MINIMUM_STRETCH",
                        minimize_iters: int = 0, margin: float = 0.001,
-                       layer_name: str = AI_UV_LAYER) -> int:
+                       layer_name: str = AI_UV_LAYER, iterations: int | None = None,
+                       no_flip: bool = False, fill_holes: bool = False) -> int:
         """Re-project ONLY the islands containing ``face_ids`` in place (no re-pack — the
         caller re-packs). Islands are recovered from the last marked seam set; each
         re-projected island is translated back to its previous centroid so it stays where
-        the packer put it."""
+        the packer put it.
+
+        ``iterations`` / ``no_flip`` / ``fill_holes`` are accepted for interface parity and
+        IGNORED by the projection; they are recorded in ``self.calls``."""
         face_ids = {int(f) for f in face_ids}
         seams = set(obj.marked_seams or self.last_seams)
         plan = island_plan_from_seams(self.mesh, seams)
@@ -208,7 +219,9 @@ class FakeUnwrapBackend:
                 uvmap.uv[loops] = pts - pts.mean(axis=0) + before.mean(axis=0)
                 touched += len(isl.face_ids)
         obj.uv = uvmap
-        self.calls.append(("reunwrap_faces", sorted(face_ids), margin, method))
+        self.calls.append(("reunwrap_faces", sorted(face_ids), margin, method,
+                           {"iterations": iterations, "no_flip": bool(no_flip),
+                            "fill_holes": bool(fill_holes)}))
         return touched
 
     def pack_subset(self, obj, face_ids, *, margin: float = 0.01,

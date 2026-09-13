@@ -31,6 +31,9 @@ def unwrap_and_pack(
     rotate: bool = True,
     average_scale: bool = True,
     layer_name: str = AI_UV_LAYER,
+    iterations: int | None = None,
+    no_flip: bool = False,
+    fill_holes: bool = False,
 ) -> int:
     """Mark ``seams``, unwrap, density-normalise, and pack (U2.1/U2.3/U3.1). The default
     method is **SLIM (``MINIMUM_STRETCH``)** — it is locally injective, so charts do not
@@ -41,7 +44,11 @@ def unwrap_and_pack(
     ``rotate`` / ``average_scale`` / ``minimize_iters`` are the levers the UV Layout
     Optimization Loop (UV_LAYOUT_OPTIMIZATION_LOOP_PLAN §8) sweeps across candidates; the
     defaults reproduce the prior single-unwrap behaviour exactly (existing callers
-    unchanged)."""
+    unchanged).
+
+    ``iterations`` / ``no_flip`` / ``fill_holes`` are the Blender 5.1 ``uv.unwrap`` levers
+    the repair-ordering variants (:data:`UNWRAP_VARIANTS`) sweep; the defaults
+    (``None`` / ``False`` / ``False``) emit the exact same operator call as before."""
     import bpy
 
     mesh = obj.data
@@ -55,7 +62,8 @@ def unwrap_and_pack(
     try:
         bpy.ops.mesh.select_all(action="SELECT")
         bpy.ops.uv.select_all(action="SELECT")
-        bpy.ops.uv.unwrap(method=method, margin=margin)
+        _unwrap_op(bpy, method=method, margin=margin, iterations=iterations,
+                   no_flip=no_flip, fill_holes=fill_holes)
         # minimize_stretch only for ABF (it is non-injective; never for SLIM).
         if minimize_iters and method == "ANGLE_BASED":
             try:
@@ -132,12 +140,42 @@ def _pack(bpy, margin: float, shape: str, rotate: bool = True) -> None:
             continue
 
 
+def _unwrap_op(bpy, *, method: str, margin: float, iterations: int | None = None,
+               no_flip: bool = False, fill_holes: bool = False) -> None:
+    """``bpy.ops.uv.unwrap`` with graceful degradation across signature drift.
+
+    Blender 5.1 accepts ``iterations`` / ``no_flip`` / ``fill_holes``; older builds do not,
+    and raise ``TypeError``. Like :func:`_pack`, the extra kwargs are dropped one tier at a
+    time until the call is accepted. With the defaults the FIRST tier is already the bare
+    ``bpy.ops.uv.unwrap(method=method, margin=margin)`` the previous code issued."""
+    extra: dict = {}
+    if iterations is not None:
+        extra["iterations"] = int(iterations)
+    if no_flip:
+        extra["no_flip"] = True
+    if fill_holes:
+        extra["fill_holes"] = True
+    for kwargs in ({**extra, "method": method, "margin": margin},
+                   {"method": method, "margin": margin}):
+        try:
+            bpy.ops.uv.unwrap(**kwargs)
+            return
+        except TypeError:
+            continue
+
+
 def reunwrap_faces(obj, face_ids, *, method: str = "MINIMUM_STRETCH", minimize_iters: int = 0,
-                   margin: float = 0.001, layer_name: str = AI_UV_LAYER) -> int:
+                   margin: float = 0.001, layer_name: str = AI_UV_LAYER,
+                   iterations: int | None = None, no_flip: bool = False,
+                   fill_holes: bool = False) -> int:
     """Re-unwrap ONLY ``face_ids`` (the self-folding charts) with the locally-injective
     SLIM (``MINIMUM_STRETCH``) method, leaving other charts as-is (§5d correctness fix —
     SLIM removes self-folds without splitting). Returns the face count re-unwrapped; the
-    caller re-packs. ``minimize_stretch`` is skipped for SLIM (non-injective)."""
+    caller re-packs. ``minimize_stretch`` is skipped for SLIM (non-injective).
+
+    ``iterations`` / ``no_flip`` / ``fill_holes`` express the same-seam re-unwrap variants
+    (:data:`UNWRAP_VARIANTS`) — repair ordering re-runs THIS function with different solver
+    settings instead of changing the seam set. Defaults keep the previous call verbatim."""
     import bmesh
     import bpy
 
@@ -152,7 +190,8 @@ def reunwrap_faces(obj, face_ids, *, method: str = "MINIMUM_STRETCH", minimize_i
         for f in bm.faces:
             f.select = f.index in fs
         bmesh.update_edit_mesh(obj.data)
-        bpy.ops.uv.unwrap(method=method, margin=margin)
+        _unwrap_op(bpy, method=method, margin=margin, iterations=iterations,
+                   no_flip=no_flip, fill_holes=fill_holes)
         if minimize_iters:
             try:
                 bpy.ops.uv.minimize_stretch(iterations=int(minimize_iters))
@@ -208,5 +247,19 @@ def flipped_faces(mesh: MeshGraph, uvmap: UVMap) -> list[int]:
     return out
 
 
+#: Same-seam re-unwrap variants (CG5 repair ordering) — pure data, no ``bpy``.
+#: Each entry is a kwargs bundle for :func:`reunwrap_faces` / :func:`unwrap_and_pack`
+#: (``id`` stripped): the repair loop retries a failing chart with a DIFFERENT solver
+#: setting before it resorts to changing the seam set. Ordered cheapest/most-likely first.
+UNWRAP_VARIANTS: tuple[dict, ...] = (
+    {"id": "slim_iter50_noflip", "method": "MINIMUM_STRETCH", "iterations": 50,
+     "no_flip": True},
+    {"id": "slim_fill_holes", "method": "MINIMUM_STRETCH", "iterations": 30,
+     "no_flip": True, "fill_holes": True},
+    {"id": "angle_based_minimize", "method": "ANGLE_BASED", "minimize_iters": 50},
+    {"id": "conformal", "method": "CONFORMAL"},
+)
+
+
 __all__ = ["unwrap_and_pack", "repack", "write_uvmap", "pack_subset", "flipped_faces",
-           "island_plan_from_seams", "read_uvmap"]
+           "island_plan_from_seams", "read_uvmap", "UNWRAP_VARIANTS"]

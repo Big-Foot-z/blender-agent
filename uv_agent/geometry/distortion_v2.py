@@ -153,22 +153,80 @@ def triangle_singular_values(p0, p1, p2, uv0, uv1, uv2) -> tuple[float, float, s
 
 
 class _Records:
-    """Flat per-triangle table for the whole mesh (one pass, reused by every scope)."""
+    """Flat per-triangle table for the whole mesh (one pass, reused by every scope).
 
-    __slots__ = ("face_id", "area_3d", "area_uv", "aniso", "status", "count")
+    ``s1`` / ``s2`` are the Jacobian singular values (NaN when the triangle is not
+    ``ok``), ``loops`` the ``(l0, l1, l2)`` loop-index triple the triangle came from and
+    ``uv_longest_edge`` the longest UV edge length of the triangle. They cost one pass
+    that was already being made and let the catastrophic gate
+    (:mod:`uv_agent.geometry.catastrophic_distortion`) reuse this table instead of
+    re-deriving the same Jacobians."""
 
-    def __init__(self, face_id, area_3d, area_uv, aniso, status):
+    __slots__ = (
+        "face_id",
+        "area_3d",
+        "area_uv",
+        "aniso",
+        "status",
+        "count",
+        "s1",
+        "s2",
+        "loops",
+        "uv_longest_edge",
+    )
+
+    def __init__(
+        self,
+        face_id,
+        area_3d,
+        area_uv,
+        aniso,
+        status,
+        s1=None,
+        s2=None,
+        loops=None,
+        uv_longest_edge=None,
+    ):
         self.face_id = np.asarray(face_id, dtype=np.int64)
         self.area_3d = np.asarray(area_3d, dtype=float)
         self.area_uv = np.asarray(area_uv, dtype=float)
         self.aniso = np.asarray(aniso, dtype=float)
         self.status = list(status)
         self.count = int(self.face_id.size)
+        n = self.count
+        self.s1 = (
+            np.asarray(s1, dtype=float)
+            if s1 is not None
+            else np.full(n, np.nan, dtype=float)
+        )
+        self.s2 = (
+            np.asarray(s2, dtype=float)
+            if s2 is not None
+            else np.full(n, np.nan, dtype=float)
+        )
+        self.loops: list[tuple[int, int, int]] = (
+            [(int(a), int(b), int(c)) for a, b, c in loops]
+            if loops is not None
+            else [(-1, -1, -1)] * n
+        )
+        self.uv_longest_edge = (
+            np.asarray(uv_longest_edge, dtype=float)
+            if uv_longest_edge is not None
+            else np.full(n, np.nan, dtype=float)
+        )
 
 
 def _tri_area_uv(uv0, uv1, uv2) -> float:
     return 0.5 * abs(
         (uv1[0] - uv0[0]) * (uv2[1] - uv0[1]) - (uv2[0] - uv0[0]) * (uv1[1] - uv0[1])
+    )
+
+
+def _tri_uv_longest_edge(uv0, uv1, uv2) -> float:
+    return max(
+        math.hypot(uv1[0] - uv0[0], uv1[1] - uv0[1]),
+        math.hypot(uv2[0] - uv1[0], uv2[1] - uv1[1]),
+        math.hypot(uv0[0] - uv2[0], uv0[1] - uv2[1]),
     )
 
 
@@ -178,6 +236,10 @@ def _collect(mesh: MeshGraph, uvmap: UVMap) -> _Records:
     area_uv: list[float] = []
     aniso: list[float] = []
     status: list[str] = []
+    s1s: list[float] = []
+    s2s: list[float] = []
+    loops: list[tuple[int, int, int]] = []
+    uv_longest: list[float] = []
     for f in mesh.faces:
         for l0, l1, l2 in mesh.face_triangles(f.id):
             p0 = mesh.vertex_co(mesh.loops[l0].vertex_id)
@@ -193,7 +255,22 @@ def _collect(mesh: MeshGraph, uvmap: UVMap) -> _Records:
             area_uv.append(auv)
             aniso.append(ratio)
             status.append(st)
-    return _Records(face_id, area_3d, area_uv, aniso, status)
+            s1s.append(float(s1))
+            s2s.append(float(s2))
+            loops.append((int(l0), int(l1), int(l2)))
+            uv_longest.append(_tri_uv_longest_edge(uv0, uv1, uv2))
+    return _Records(
+        face_id, area_3d, area_uv, aniso, status, s1s, s2s, loops, uv_longest
+    )
+
+
+def collect_triangle_records(mesh: MeshGraph, uvmap: UVMap) -> _Records:
+    """Public accessor for the flat per-triangle table (see :class:`_Records`).
+
+    One pass over the mesh producing face id, 3D / UV area, anisotropy ratio, status,
+    the Jacobian singular values, the loop triple and the longest UV edge per triangle,
+    so a second metric module never has to duplicate the Jacobian code."""
+    return _collect(mesh, uvmap)
 
 
 # --- aggregation ------------------------------------------------------------------

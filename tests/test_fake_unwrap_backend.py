@@ -69,3 +69,38 @@ def test_displaced_sphere_completes(monkeypatch):
     result = run_chart_uv(obj, mesh, max_rounds=6)
     for key in ("seams", "metrics", "gate", "history", "chart_count", "conclusion"):
         assert key in result
+
+
+def test_unwrap_variant_kwargs_are_accepted_and_recorded(monkeypatch):
+    """CG5 — the same-seam re-unwrap variants must be expressible through the backend
+    interface: the three Blender 5.1 solver kwargs are accepted and recorded verbatim."""
+    mesh = build_folded_planes(n=4)
+    backend = FakeUnwrapBackend(mesh)
+    obj = backend.install(monkeypatch)
+    seams = mandatory_seam_edges(mesh, fold_angle=90.0)
+
+    backend.unwrap_and_pack(obj, seams, iterations=50, no_flip=True, fill_holes=True)
+    unwrap_call = [c for c in backend.calls if c[0] == "unwrap"][-1]
+    assert unwrap_call[4] == {"iterations": 50, "no_flip": True, "fill_holes": True}
+
+    backend.reunwrap_faces(obj, [0], iterations=30, no_flip=True)
+    re_call = [c for c in backend.calls if c[0] == "reunwrap_faces"][-1]
+    assert re_call[4] == {"iterations": 30, "no_flip": True, "fill_holes": False}
+
+    # defaults stay the pre-existing behaviour (nothing requested)
+    backend.unwrap_and_pack(obj, seams)
+    assert [c for c in backend.calls if c[0] == "unwrap"][-1][4] == {
+        "iterations": None, "no_flip": False, "fill_holes": False}
+
+
+def test_unwrap_variants_table_is_well_formed():
+    """Pure check on the CG5 variant table (no Blender, no fake backend)."""
+    from chart_uv_agent.unwrap import UNWRAP_VARIANTS
+
+    assert len(UNWRAP_VARIANTS) >= 2
+    ids = [v["id"] for v in UNWRAP_VARIANTS]
+    assert len(ids) == len(set(ids)), f"duplicate variant ids: {ids}"
+    allowed = {"CONFORMAL", "ANGLE_BASED", "MINIMUM_STRETCH"}
+    for v in UNWRAP_VARIANTS:
+        assert v["method"] in allowed, v
+        assert isinstance(v["id"], str) and v["id"]

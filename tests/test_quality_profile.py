@@ -451,3 +451,70 @@ def test_accept_candidate_zero_target_before():
     assert result["accepted"] is False
     assert result["reason"] == "insufficient_improvement"
     assert result["improvement_ratio"] == 0.0
+
+
+# --- CG16 / CG8 profile keys --------------------------------------------------------
+
+_CG_PROFILE_KEYS = (
+    "catastrophic_metric_version",
+    "anisotropy_hard_max",
+    "near_collapse_ratio",
+    "max_uv_triangle_aspect",
+    "local_area_ratio_min",
+    "local_area_ratio_max",
+    "bad_area_fraction_cap",
+    "catastrophic_repair_max_rounds",
+    "catastrophic_reunwrap_variants",
+    "min_island_width_px",
+    "min_island_area_px2",
+    "max_island_bbox_aspect",
+    "max_island_perimeter_area_ratio",
+    "max_tiny_island_area_fraction",
+)
+
+
+def test_cg16_cg8_keys_are_required_and_round_trip():
+    data = ENGINEERING_V0.to_dict()
+    for key in _CG_PROFILE_KEYS:
+        assert key in REQUIRED_PROFILE_KEYS, key
+        assert key in data, key
+    assert load_quality_profile(data) == ENGINEERING_V0
+    for key in _CG_PROFILE_KEYS:
+        partial = ENGINEERING_V0.to_dict()
+        del partial[key]
+        with pytest.raises(ValueError) as exc:
+            load_quality_profile(partial)
+        assert key in str(exc.value)
+
+
+def test_cg16_key_defaults():
+    assert ENGINEERING_V0.catastrophic_metric_version == 1
+    assert ENGINEERING_V0.anisotropy_hard_max == 8.0
+    assert ENGINEERING_V0.near_collapse_ratio == 1e-4
+    assert ENGINEERING_V0.max_uv_triangle_aspect == 40.0
+    assert ENGINEERING_V0.local_area_ratio_min == 0.04
+    assert ENGINEERING_V0.local_area_ratio_max == 25.0
+    assert ENGINEERING_V0.bad_area_fraction_cap == 0.005
+    assert ENGINEERING_V0.catastrophic_repair_max_rounds == 8
+    assert ENGINEERING_V0.catastrophic_reunwrap_variants == 3
+    # The quality cap is NOT loosened by the catastrophic hard ceiling.
+    assert ENGINEERING_V0.anisotropy_max_max == 3.0
+
+
+def test_cg8_key_defaults():
+    assert ENGINEERING_V0.min_island_width_px == 10.0
+    # The stored value is max(2 * margin_px + 2, 6) evaluated at margin_px 4.
+    assert ENGINEERING_V0.min_island_width_px == max(
+        2.0 * ENGINEERING_V0.margin_px + 2.0, 6.0
+    )
+    assert ENGINEERING_V0.min_island_area_px2 == 100.0
+    assert ENGINEERING_V0.max_island_bbox_aspect == 8.0
+    assert ENGINEERING_V0.max_island_perimeter_area_ratio == 12.0
+    assert ENGINEERING_V0.max_tiny_island_area_fraction == 0.02
+
+
+def test_cg_keys_reject_unknown_neighbour():
+    data = dict(ENGINEERING_V0.to_dict(), min_island_height_px=10.0)
+    with pytest.raises(ValueError) as exc:
+        load_quality_profile(data)
+    assert "min_island_height_px" in str(exc.value)

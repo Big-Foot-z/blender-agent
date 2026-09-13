@@ -30,6 +30,23 @@ acceptance document: ``anisotropy_global_p95_max`` / ``anisotropy_island_p95_max
 ``texel_density_outlier_tolerance``, ``texel_density_outlier_count_max``),
 ``shading_uv_policy``, and the merge-back keys (``merge_back_enabled``,
 ``merge_back_max_trials``).
+
+CG16 / CG8 (game-UV gates) add the following REQUIRED keys — engineering defaults, not a
+calibrated product bar:
+
+CG16 (catastrophic distortion, a HARD gate that is separate from the quality caps above —
+the quality gate keeps ``anisotropy_max_max`` 3.0 and CG16 adds its own 8.0 hard ceiling,
+so nothing is loosened): ``catastrophic_metric_version``, ``anisotropy_hard_max``,
+``near_collapse_ratio``, ``max_uv_triangle_aspect``, ``local_area_ratio_min``,
+``local_area_ratio_max``, ``bad_area_fraction_cap``, ``catastrophic_repair_max_rounds``,
+``catastrophic_reunwrap_variants``.
+
+CG8 (tiny / sliver island gate, expressed in PIXELS at the profile's ``texture_size_px``):
+``min_island_width_px`` (the stored value 10.0 is ``max(2 * margin_px + 2, 6)`` evaluated at
+``margin_px`` 4 — the number is frozen in the profile, not recomputed),
+``min_island_area_px2``, ``max_island_bbox_aspect``, ``max_island_perimeter_area_ratio``
+(the ratio is ``perimeter_px / sqrt(area_px2)``, so it is scale free — a square is 4.0),
+``max_tiny_island_area_fraction``.
 """
 
 from __future__ import annotations
@@ -94,6 +111,24 @@ class QualityProfile:
     sliver_island_count_max: int = 0
     island_aspect_p95_max: float = 6.0
 
+    # --- catastrophic distortion hard gate (CG16) ---
+    catastrophic_metric_version: int = 1
+    anisotropy_hard_max: float = 8.0
+    near_collapse_ratio: float = 1e-4
+    max_uv_triangle_aspect: float = 40.0
+    local_area_ratio_min: float = 0.04
+    local_area_ratio_max: float = 25.0
+    bad_area_fraction_cap: float = 0.005
+    catastrophic_repair_max_rounds: int = 8
+    catastrophic_reunwrap_variants: int = 3
+
+    # --- tiny / sliver island gate in pixels (CG8) ---
+    min_island_width_px: float = 10.0
+    min_island_area_px2: float = 100.0
+    max_island_bbox_aspect: float = 8.0
+    max_island_perimeter_area_ratio: float = 12.0
+    max_tiny_island_area_fraction: float = 0.02
+
     # --- texel density uniformity (G8) ---
     texel_density_cv_max: float = 0.15
     texel_density_outlier_tolerance: float = 0.30
@@ -157,6 +192,20 @@ REQUIRED_PROFILE_KEYS: tuple[str, ...] = (
     "sliver_uv_area_max",
     "sliver_island_count_max",
     "island_aspect_p95_max",
+    "catastrophic_metric_version",
+    "anisotropy_hard_max",
+    "near_collapse_ratio",
+    "max_uv_triangle_aspect",
+    "local_area_ratio_min",
+    "local_area_ratio_max",
+    "bad_area_fraction_cap",
+    "catastrophic_repair_max_rounds",
+    "catastrophic_reunwrap_variants",
+    "min_island_width_px",
+    "min_island_area_px2",
+    "max_island_bbox_aspect",
+    "max_island_perimeter_area_ratio",
+    "max_tiny_island_area_fraction",
     "texel_density_cv_max",
     "texel_density_outlier_tolerance",
     "texel_density_outlier_count_max",

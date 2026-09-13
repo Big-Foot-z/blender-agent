@@ -141,3 +141,41 @@ def test_edge_correspondence_and_remap_across_face_reordering():
         assert mi.edge_geometry_key(a, src) == mi.edge_geometry_key(b, dst)
         assert math.isclose(a.edges[src].dihedral_angle, b.edges[dst].dihedral_angle,
                             abs_tol=1e-9)
+
+
+# ---------------------------------------------------------------------------
+# (5) uv_hash — exact UV identity for the rollback baseline (CG7 / CG0)
+# ---------------------------------------------------------------------------
+def test_uv_hash_stable_perturbation_sensitive_and_nan_aware():
+    import numpy as np
+
+    from uv_agent.geometry.solution import UVMap
+
+    a = UVMap(4)
+    a.uv[:] = [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.25, 0.75]]
+    b = UVMap(4)
+    b.uv[:] = a.uv.copy()
+
+    # equal arrays -> equal digests, and the UVMap adapter matches the raw array
+    assert mi.uv_hash(a) == mi.uv_hash(b)
+    assert mi.uv_hash(a) == mi.uv_hash_from_array(a.uv)
+    assert mi.uv_hash(a) == mi.uv_hash_from_array(np.asarray(a.uv, dtype="<f8"))
+
+    # a 1e-12 nudge is NOT rounded away
+    c = a.copy()
+    c.uv[3, 0] += 1e-12
+    assert mi.uv_hash(c) != mi.uv_hash(a)
+
+    # NaN-aware: a NaN UV never hashes equal to a finite one, and is reproducible
+    n1 = a.copy()
+    n1.uv[2, 1] = float("nan")
+    n2 = a.copy()
+    n2.uv[2, 1] = float("nan")
+    assert mi.uv_hash(n1) != mi.uv_hash(a)
+    assert mi.uv_hash(n1) == mi.uv_hash(n2)
+
+    # the loop-count prefix keeps different lengths apart
+    short = UVMap(3)
+    short.uv[:] = a.uv[:3]
+    assert mi.uv_hash(short) != mi.uv_hash(a)
+    assert len(mi.uv_hash(a)) == 64

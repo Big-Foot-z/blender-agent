@@ -26,10 +26,13 @@ import numpy as np
 
 from uv_agent.geometry.evaluation import _point_in_triangle
 from uv_agent.geometry.mesh_graph import MeshGraph
+from uv_agent.geometry.mesh_identity import uv_hash
 from uv_agent.geometry.solution import UVMap
 
 __all__ = [
     "write_anisotropy_heatmap_png",
+    "write_heatmap_meta_json",
+    "heatmap_identity_check",
     "build_seam_overlay",
     "write_seam_overlay_png",
     "build_run_manifest",
@@ -78,6 +81,9 @@ def write_anisotropy_heatmap_png(
     vmin: float = 1.0,
     vmax: float = 3.0,
     nan_color: tuple[int, int, int] = (255, 0, 255),
+    hard_fail_faces=(),
+    hard_fail_color: tuple[int, int, int] = (0, 0, 0),
+    meta: dict | None = None,
 ) -> dict:
     """Rasterise every face into UV space, coloured by ``face_values[face]`` (G7).
 
@@ -92,10 +98,18 @@ def write_anisotropy_heatmap_png(
     point-in-triangle predicate the overlap raster uses — the heat map and the overlap
     diagnosis therefore see identical geometry.
 
+    ``+/-inf`` is treated like ``NaN`` — painted ``nan_color``, never clamped onto the
+    ramp — and counted in ``nonfinite_faces`` (``nan_faces`` stays the NaN-only count).
+    Faces listed in ``hard_fail_faces`` are painted ``hard_fail_color`` (black) whatever
+    their value is, so a triangle that failed a hard gate can never look "good" (CG4).
+
     Background is white and no island outline is drawn: the overlay layer above it owns
-    the seams. Returns ``{"path", "size", "vmin", "vmax", "nan_faces", "max_value",
-    "pixel_probe"}``; ``pixel_probe`` is the canvas colour at each face's UV centroid,
-    in face order, so a test can verify the ramp without decoding the PNG.
+    the seams. Returns ``{"path", "size", "vmin", "vmax", "nan_faces",
+    "nonfinite_faces", "hard_fail_faces", "max_value", "pixel_probe", "uv_hash",
+    "meta"}``; ``pixel_probe`` is the canvas colour at each face's UV centroid, in face
+    order, so a test can verify the ramp without decoding the PNG, and ``meta`` is the
+    caller's ``meta`` dict merged with the render identity fields so the picture and the
+    numbers can be proved to come from the same UV (CG0 / CG4).
     """
     from uv_agent.io.png import write_png
 
@@ -113,7 +127,12 @@ def write_anisotropy_heatmap_png(
     def to_px(uv) -> tuple[float, float]:
         return uv[0] * S, (1.0 - uv[1]) * S
 
+    hard_fail = {int(i) for i in (hard_fail_faces or ())}
+    hard_fail_rgb = np.array(tuple(int(c) for c in hard_fail_color), dtype=np.uint8)
+
     nan_faces = 0
+    nonfinite_faces = 0
+    hard_fail_painted = 0
     max_value = None
     for f in mesh.faces:
         v = float(values[f.id]) if f.id < values.size else float("nan")
@@ -121,8 +140,13 @@ def write_anisotropy_heatmap_png(
             max_value = v if max_value is None else max(max_value, v)
             color = np.array(_ramp_color((v - vmin) / denom), dtype=np.uint8)
         else:
-            nan_faces += 1
+            nonfinite_faces += 1
+            if math.isnan(v):
+                nan_faces += 1
             color = np.array(tuple(int(c) for c in nan_color), dtype=np.uint8)
+        if f.id in hard_fail:
+            hard_fail_painted += 1
+            color = hard_fail_rgb
         for l0, l1, l2 in mesh.face_triangles(f.id):
             tri = [to_px(uvmap.get(l0)), to_px(uvmap.get(l1)), to_px(uvmap.get(l2))]
             xs = [p[0] for p in tri]
@@ -157,15 +181,70 @@ def write_anisotropy_heatmap_png(
         probe.append([int(c) for c in canvas[iy, ix, :3]])
 
     write_png(path, canvas)
+    digest = uv_hash(uvmap)
+    out_meta = dict(meta or {})
+    out_meta.update({
+        "uv_hash": digest,
+        "size": S,
+        "vmin": vmin,
+        "vmax": vmax,
+        "nan_color": [int(c) for c in nan_color],
+        "hard_fail_color": [int(c) for c in hard_fail_color],
+    })
     return {
         "path": path,
         "size": S,
         "vmin": vmin,
         "vmax": vmax,
         "nan_faces": int(nan_faces),
+        "nonfinite_faces": int(nonfinite_faces),
+        "hard_fail_faces": int(hard_fail_painted),
         "max_value": max_value,
         "pixel_probe": probe,
+        "uv_hash": digest,
+        "meta": out_meta,
     }
+
+
+def write_heatmap_meta_json(path: str, meta: dict) -> None:
+    """Dump the heat-map identity ``meta`` block next to the PNG (JSON-safe)."""
+    import json
+
+    with open(path, "w", encoding="utf-8") as fh:
+        json.dump(json_safe(meta), fh, indent=2, sort_keys=True)
+        fh.write("\n")
+
+
+#: Fields a heat map must carry to prove it was rendered from the reported run/UV.
+_HEATMAP_IDENTITY_FIELDS = ("uv_hash", "mesh_fingerprint", "metric_version", "run_id")
+
+
+def heatmap_identity_check(
+    heatmap_meta: dict,
+    *,
+    uv_hash: str,
+    mesh_fingerprint: str,
+    metric_version,
+    run_id,
+) -> dict:
+    """Gate data identity (CG4): does the picture come from the reported run/UV?
+
+    Compares ``uv_hash`` / ``mesh_fingerprint`` / ``metric_version`` / ``run_id`` in
+    ``heatmap_meta`` against the expected values; a field missing from the meta block is
+    a mismatch, not a pass. Returns ``{"passed", "mismatches"}``.
+    """
+    expected = {
+        "uv_hash": uv_hash,
+        "mesh_fingerprint": mesh_fingerprint,
+        "metric_version": metric_version,
+        "run_id": run_id,
+    }
+    meta = heatmap_meta or {}
+    mismatches = [
+        field for field in _HEATMAP_IDENTITY_FIELDS
+        if field not in meta or meta.get(field) != expected[field]
+    ]
+    return {"passed": not mismatches, "mismatches": mismatches}
 
 
 # ---------------------------------------------------------------------------
