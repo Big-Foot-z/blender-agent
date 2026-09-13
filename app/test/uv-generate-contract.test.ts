@@ -165,6 +165,9 @@ test('summary: the game-gate evidence blocks parse as typed optional blocks', ()
       merge_back_history: 'merge_back_history.json',
       seam_overlay_png: 'seam_overlay.png',
       shading_policy: 'shading_policy.json',
+      catastrophic: 'uv_catastrophic.json',
+      repair_history: 'uv_repair_history.json',
+      heatmap_meta: 'heatmap_meta.json',
     },
     warnings: [],
     correctness: { passed: true, checks: [], min_island_gap_px: 6, min_border_gap_px: 5 },
@@ -210,6 +213,37 @@ test('summary: the game-gate evidence blocks parse as typed optional blocks', ()
       reason: 'no_removable_seam',
     },
     quality_report_passed: true,
+    // Catastrophic distortion + repair + heatmap identity (TC8; CG13/CG4).
+    catastrophic: {
+      passed: false,
+      valid: true,
+      hard_failed: true,
+      region_failed: true,
+      bad_triangle_count: 37,
+      bad_region_count: 2,
+      bad_area_fraction: 0.031,
+      max_anisotropy: 41.2,
+      max_uv_triangle_aspect: 88.5,
+      near_collapse_count: 4,
+      invalid_count: 0,
+      boundary_spike_region_count: 1,
+      self_overlap_region_count: 0,
+    },
+    repair: {
+      rounds: 2,
+      reunwrap_accepted: 1,
+      relief_accepted: 0,
+      rejected: 1,
+      reason: 'budget_exhausted',
+      bad_triangles_before: 51,
+      bad_triangles_after: 37,
+      bad_area_before: 0.048,
+      bad_area_after: 0.031,
+      island_count_before: 52,
+      island_count_after: 54,
+    },
+    heatmap_identity: { passed: false, mismatches: ['uv_hash', 'scale_policy'] },
+    uv_hash: 'a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f90',
   };
 
   // 1. the artifact keys are part of the typed artifact map.
@@ -226,6 +260,25 @@ test('summary: the game-gate evidence blocks parse as typed optional blocks', ()
   assert.equal(summary.packing!.advisory, true);
   assert.equal(summary.merge_back!.island_count_after, 52);
   assert.equal(summary.quality_report_passed, true);
+
+  // 4. the catastrophic verdict, its repair round accounting and the heatmap
+  //    identity parse as typed blocks (gates CG13/CG4) — a failing run keeps
+  //    both the hard flag AND the region flag, and the mismatching heatmap
+  //    fields are enumerable so the UI can name them.
+  assert.equal(summary.artifacts.catastrophic, 'uv_catastrophic.json');
+  assert.equal(summary.artifacts.repair_history, 'uv_repair_history.json');
+  assert.equal(summary.artifacts.heatmap_meta, 'heatmap_meta.json');
+  assert.equal(summary.catastrophic!.passed, false);
+  assert.equal(summary.catastrophic!.hard_failed, true);
+  assert.equal(summary.catastrophic!.bad_triangle_count, 37);
+  assert.equal(summary.catastrophic!.bad_region_count, 2);
+  assert.equal(summary.catastrophic!.max_uv_triangle_aspect, 88.5);
+  assert.equal(summary.repair!.rounds, 2);
+  assert.equal(summary.repair!.bad_triangles_before, 51);
+  assert.equal(summary.repair!.bad_triangles_after, 37);
+  assert.equal(summary.heatmap_identity!.passed, false);
+  assert.deepEqual(summary.heatmap_identity!.mismatches, ['uv_hash', 'scale_policy']);
+  assert.equal(summary.uv_hash!.length, 64);
 });
 
 test('seam overlay: the reason-code union covers the seven G15 codes', () => {

@@ -26,6 +26,9 @@ import {
   type CandidateSummary,
   type CandidateHistoryEntry,
   type MergeBackHistory,
+  type CatastrophicReport,
+  type RepairHistory,
+  type HeatmapMeta,
   type SeamOverlay,
   type UvGenerateRunView,
   type UvGenerateStatusDoc,
@@ -605,6 +608,12 @@ export function getUvGenerateRunView(projectDir: string, runId: string): UvGener
     // report. Optional like every other review artifact -> null when absent.
     merge_back_history: readJsonIfExists<MergeBackHistory>(join(dir, 'merge_back_history.json')),
     quality_report: readJsonIfExists<Record<string, unknown>>(join(dir, 'quality_report.json')),
+    // Catastrophic-distortion evidence (gate CG13/CG4): the full damaged-region
+    // report, the repair round trace and the heatmap measurement identity.
+    // Only an automatic run that ran the catastrophic pass emits them -> null.
+    catastrophic: readJsonIfExists<CatastrophicReport>(join(dir, 'uv_catastrophic.json')),
+    repair_history: readJsonIfExists<RepairHistory>(join(dir, 'uv_repair_history.json')),
+    heatmap_meta: readJsonIfExists<HeatmapMeta>(join(dir, 'heatmap_meta.json')),
     stdout: readTextIfExists(join(dir, 'stdout.log')),
     stderr: readTextIfExists(join(dir, 'stderr.log')),
     artifact_paths,

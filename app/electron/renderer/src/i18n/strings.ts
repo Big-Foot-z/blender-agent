@@ -607,6 +607,31 @@ export const en = {
   'generate.cr.minIslandGap': 'min island gap (px)',
   'generate.cr.minBorderGap': 'min border gap (px)',
 
+  // --- catastrophic distortion + repair (TC8; gates CG4/CG13) ------------
+  'generate.gg.catastrophic': 'catastrophic (B)',
+  'generate.gg.repair': 'repair',
+  'generate.cat.badTriangles': 'bad triangles',
+  'generate.cat.badRegions': 'bad regions',
+  'generate.cat.badArea': 'bad area',
+  'generate.cat.maxAniso': 'max anisotropy',
+  'generate.cat.maxAspect': 'max UV triangle aspect',
+  'generate.cat.nearCollapse': 'near-collapse',
+  'generate.rp.summary':
+    '{rounds} rounds · re-unwrap {reunwrap} · relief {relief} · rejected {rejected} · bad triangles {before} -> {after} · {reason}',
+  'generate.rp.none': 'no repair pass reported',
+  'generate.hm.identityOk': 'Heatmap <-> gate identity OK',
+  'generate.hm.identityMismatch': 'MISMATCH: {fields}',
+  'generate.hm.identityUnknown': 'heatmap identity not reported',
+  'generate.hm.unknownFields': 'unspecified fields',
+  'generate.hm.uvHash': 'uv hash',
+  'generate.cat.banner':
+    'Catastrophic distortion: {triangles} bad triangles in {regions} regions — not production-ready',
+  'generate.cat.region': 'region',
+  'generate.cat.island': 'island',
+  'generate.cat.faces': 'faces',
+  'generate.cat.areaFraction': 'area',
+  'generate.cat.reasons': 'reasons',
+
   // --- production export (MVP 5) ----------------------------------------
   'export.check': 'Check Export',
   'export.export': 'Export',
@@ -1288,6 +1313,31 @@ export const ko: Record<TKey, string> = {
   'generate.gg.advisory': '참고용',
   'generate.cr.minIslandGap': '최소 아일랜드 간격 (px)',
   'generate.cr.minBorderGap': '최소 경계 간격 (px)',
+
+  // --- catastrophic distortion + repair (TC8; gates CG4/CG13) ------------
+  'generate.gg.catastrophic': '치명적 왜곡 (B)',
+  'generate.gg.repair': '리페어',
+  'generate.cat.badTriangles': '불량 삼각형',
+  'generate.cat.badRegions': '불량 영역',
+  'generate.cat.badArea': '불량 면적',
+  'generate.cat.maxAniso': '최대 이방성',
+  'generate.cat.maxAspect': '최대 UV 삼각형 종횡비',
+  'generate.cat.nearCollapse': '붕괴 근접',
+  'generate.rp.summary':
+    '{rounds}라운드 · 재언랩 {reunwrap} · 릴리프 {relief} · 기각 {rejected} · 불량 삼각형 {before} -> {after} · {reason}',
+  'generate.rp.none': '리페어 패스 미보고',
+  'generate.hm.identityOk': '히트맵 <-> 게이트 동일성 OK',
+  'generate.hm.identityMismatch': '불일치: {fields}',
+  'generate.hm.identityUnknown': '히트맵 동일성 미보고',
+  'generate.hm.unknownFields': '항목 미지정',
+  'generate.hm.uvHash': 'uv 해시',
+  'generate.cat.banner':
+    '치명적 왜곡: {regions}개 영역에서 불량 삼각형 {triangles}개 — 프로덕션에 사용할 수 없습니다',
+  'generate.cat.region': '영역',
+  'generate.cat.island': '아일랜드',
+  'generate.cat.faces': '면 수',
+  'generate.cat.areaFraction': '면적',
+  'generate.cat.reasons': '사유',
 
   // --- production export (MVP 5) ----------------------------------------
   'export.check': '익스포트 확인',

@@ -978,3 +978,44 @@ test('uv generate run view: merge_back_history, quality_report and seam_overlay_
   assert.equal(s.merge_back!.reason, 'no_removable_seam');
   assert.equal(s.correctness!.min_border_gap_px, 5);
 });
+
+// The catastrophic-distortion evidence the UI needs to say "not production
+// ready" and to prove the heatmap it draws is the gate's own measurement
+// (gates CG13/CG4): the three new files reach the run view and the summary
+// carries the identity verdict + the UV hash.
+test('uv generate run view: catastrophic, repair_history and heatmap_meta are exposed', async () => {
+  const { project, objectName } = seedSeamSpecProject('uv_generate_catastrophic_evidence');
+  setUvGenerateMode(project.dir!, 'auto_generate');
+  const runner = new UvGenerateRunner({ blenderPath: null, workerRoot: workerRoot(), mock: true });
+  const started = runner.start(project.id, project.dir!, { objectName, mode: 'auto_generate' });
+  const view = await waitForTerminal(project.dir!, started.run_id);
+
+  // 1. the full damaged-region report is parsed (mock run passes -> no regions).
+  assert.ok(view.catastrophic, 'uv_catastrophic.json parsed');
+  assert.equal(view.catastrophic!.passed, true);
+  assert.equal(view.catastrophic!.bad_triangle_count, 0);
+  assert.deepEqual(view.catastrophic!.regions, []);
+
+  // 2. the repair round trace and the heatmap measurement meta are parsed.
+  assert.ok(view.repair_history, 'uv_repair_history.json parsed');
+  assert.equal(view.repair_history!.history!.length, 1);
+  assert.ok(view.heatmap_meta, 'heatmap_meta.json parsed');
+  assert.equal(view.heatmap_meta!.metric, 'anisotropy');
+
+  // 3. the evidence artifacts are addressable on disk.
+  for (const key of ['catastrophic', 'repair_history', 'heatmap_meta']) {
+    assert.ok(view.artifact_paths[key] && existsSync(view.artifact_paths[key]), `artifact ${key}`);
+  }
+
+  // 4. the summary carries the blocks the gates panel + heatmap badge read.
+  const cs = view.summary!;
+  assert.equal(cs.catastrophic!.passed, true);
+  assert.equal(cs.catastrophic!.hard_failed, false);
+  assert.equal(cs.repair!.reason, 'no_bad_triangles');
+  assert.equal(cs.heatmap_identity!.passed, true);
+  assert.deepEqual(cs.heatmap_identity!.mismatches, []);
+  assert.equal(typeof cs.uv_hash, 'string');
+  assert.match(cs.uv_hash!, /^[0-9a-f]{64}$/);
+  // the heatmap the UI draws and the gate agree on the same UV.
+  assert.equal(view.heatmap_meta!.uv_hash, cs.uv_hash);
+});

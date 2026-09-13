@@ -678,6 +678,16 @@ function mockGenerate(dir: string, runId: string, projectDir: string, job: any):
     artifacts.merge_back_history = 'merge_back_history.json';
     artifacts.shading_policy = 'shading_policy.json';
     artifacts.seam_overlay_png = 'seam_overlay.png';
+
+    // Gate CG13/CG4 evidence: the catastrophic-distortion report (passing, so
+    // no damaged regions), the repair round trace and the heatmap identity
+    // meta that ties the drawn heatmap to the gate's own measurement.
+    writeFileSync(join(dir, 'uv_catastrophic.json'), JSON.stringify(MOCK_CATASTROPHIC_REPORT, null, 2));
+    writeFileSync(join(dir, 'uv_repair_history.json'), JSON.stringify(MOCK_REPAIR_HISTORY, null, 2));
+    writeFileSync(join(dir, 'heatmap_meta.json'), JSON.stringify(MOCK_HEATMAP_META, null, 2));
+    artifacts.catastrophic = 'uv_catastrophic.json';
+    artifacts.repair_history = 'uv_repair_history.json';
+    artifacts.heatmap_meta = 'heatmap_meta.json';
   }
 
   // Gate G6: a forced non-accepted mock run produces NO handoff and no pointer.
@@ -834,6 +844,11 @@ function autoReportBlocks(lockedSeamCount: number): Record<string, unknown> {
     shading: { policy: MOCK_SHADING_POLICY.policy, passed: true, valid: true, failures: [], invalid_reasons: [] },
     merge_back: MOCK_MERGE_BACK_BLOCK,
     quality_report_passed: true,
+    // --- Catastrophic distortion (TC8; gates CG13/CG4) — passing evidence --
+    catastrophic: MOCK_CATASTROPHIC_BLOCK,
+    repair: MOCK_REPAIR_BLOCK,
+    heatmap_identity: { passed: true, mismatches: [] as string[] },
+    uv_hash: MOCK_UV_HASH,
     termination: {
       reason: 'quality_passed',
       iterations: 2,
@@ -980,6 +995,76 @@ const MOCK_MERGE_BACK_HISTORY = {
       elapsed_s: 0.18,
     },
   ],
+};
+
+// ---------------------------------------------------------------------------
+// Mock catastrophic-distortion evidence (TC8; gates CG13/CG4). A PASSING run:
+// no bad triangles, no damaged regions, and a heatmap measured from the same
+// UV hash the gate scored — so the UI's identity badge reads OK.
+// ---------------------------------------------------------------------------
+/** 64-hex digest standing in for the shipped UV layer's hash (gate CG4). */
+const MOCK_UV_HASH = 'a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f90';
+
+const MOCK_CATASTROPHIC_BLOCK = {
+  passed: true,
+  valid: true,
+  hard_failed: false,
+  region_failed: false,
+  bad_triangle_count: 0,
+  bad_region_count: 0,
+  bad_area_fraction: 0,
+  max_anisotropy: 1.6,
+  max_uv_triangle_aspect: 4.2,
+  near_collapse_count: 0,
+  invalid_count: 0,
+  boundary_spike_region_count: 0,
+  self_overlap_region_count: 0,
+};
+
+const MOCK_CATASTROPHIC_REPORT = {
+  schema_version: 1,
+  ...MOCK_CATASTROPHIC_BLOCK,
+  regions: [] as Record<string, unknown>[],
+  worst_triangles: [] as Record<string, unknown>[],
+  bad_face_ids: [] as number[],
+  uv_hash: MOCK_UV_HASH,
+};
+
+const MOCK_REPAIR_BLOCK = {
+  rounds: 1,
+  reunwrap_accepted: 0,
+  relief_accepted: 0,
+  rejected: 0,
+  reason: 'no_bad_triangles',
+  bad_triangles_before: 0,
+  bad_triangles_after: 0,
+  bad_area_before: 0,
+  bad_area_after: 0,
+  island_count_before: 52,
+  island_count_after: 52,
+};
+
+const MOCK_REPAIR_HISTORY = {
+  ...MOCK_REPAIR_BLOCK,
+  history: [
+    {
+      round: 1,
+      kind: 'scan',
+      accepted: false,
+      reason: 'no_bad_triangles',
+      bad_triangles_before: 0,
+      bad_triangles_after: 0,
+    },
+  ],
+};
+
+const MOCK_HEATMAP_META = {
+  schema_version: 1,
+  uv_hash: MOCK_UV_HASH,
+  metric: 'anisotropy',
+  scale_policy: 'gate_shared',
+  evaluation_stage: 'final',
+  identity: { passed: true, mismatches: [] as string[] },
 };
 
 const MOCK_QUALITY_REPORT = {

@@ -582,6 +582,108 @@ export interface MergeBackHistory extends MergeBackBlock {
   [k: string]: unknown;
 }
 
+// --- Catastrophic distortion / repair evidence (TC8; gates CG4/CG13/CG15) --
+// Mirrors of `compact_catastrophic_block` / `compact_repair_block` plus the
+// `heatmap_identity` / `uv_hash` keys `build_generate_summary` writes. All
+// optional on the summary so a pre-TC5 run still parses.
+
+/**
+ * Summary-sized catastrophic-distortion verdict (gate CG13): scalars only. The
+ * per-region / per-triangle arrays stay on disk in `uv_catastrophic.json`.
+ *
+ * `hard_failed` is the un-shippable class (bad triangles anywhere);
+ * `region_failed` is the softer region-only damage. `valid === false` means the
+ * pass could not be evaluated — never read as a pass.
+ */
+export interface CatastrophicBlock {
+  passed?: boolean | null;
+  valid?: boolean | null;
+  hard_failed?: boolean | null;
+  region_failed?: boolean | null;
+  bad_triangle_count?: number | null;
+  bad_region_count?: number | null;
+  bad_area_fraction?: number | null;
+  max_anisotropy?: number | null;
+  max_uv_triangle_aspect?: number | null;
+  near_collapse_count?: number | null;
+  invalid_count?: number | null;
+  boundary_spike_region_count?: number | null;
+  self_overlap_region_count?: number | null;
+}
+
+/** What the catastrophic repair loop tried and what it actually bought (CG13). */
+export interface RepairBlock {
+  rounds?: number | null;
+  reunwrap_accepted?: number | null;
+  relief_accepted?: number | null;
+  rejected?: number | null;
+  reason?: string | null;
+  bad_triangles_before?: number | null;
+  bad_triangles_after?: number | null;
+  bad_area_before?: number | null;
+  bad_area_after?: number | null;
+  island_count_before?: number | null;
+  island_count_after?: number | null;
+}
+
+/**
+ * Whether the heatmap the UI draws was produced from the SAME measurement the
+ * gate was decided on (gate CG4). A mismatch means the picture is lying about
+ * the verdict, so the UI must say so instead of showing a silent image.
+ */
+export interface HeatmapIdentityBlock {
+  passed?: boolean | null;
+  mismatches?: string[] | null;
+  [k: string]: unknown;
+}
+
+/** One damaged region row of `uv_catastrophic.json` (gate CG13 evidence list). */
+export interface CatastrophicRegion {
+  region_id: number;
+  face_ids?: number[] | null;
+  island_id?: number | null;
+  area_fraction?: number | null;
+  max_anisotropy?: number | null;
+  reasons?: string[] | null;
+  boundary_spike?: boolean | null;
+  [k: string]: unknown;
+}
+
+/** `uv_catastrophic.json` — the full report behind the summary block. */
+export interface CatastrophicReport extends CatastrophicBlock {
+  regions?: CatastrophicRegion[] | null;
+  worst_triangles?: Record<string, unknown>[] | null;
+  bad_face_ids?: number[] | null;
+  [k: string]: unknown;
+}
+
+/** One `uv_repair_history.json` round row. */
+export interface RepairHistoryEntry {
+  round?: number | null;
+  kind?: string | null;
+  accepted?: boolean | null;
+  reason?: string | null;
+  bad_triangles_before?: number | null;
+  bad_triangles_after?: number | null;
+  [k: string]: unknown;
+}
+
+/** `uv_repair_history.json` — the repair block with its full per-round trace. */
+export interface RepairHistory extends RepairBlock {
+  history?: RepairHistoryEntry[] | null;
+  [k: string]: unknown;
+}
+
+/** `heatmap_meta.json` — how the drawn heatmap was measured (gate CG4). */
+export interface HeatmapMeta {
+  uv_hash?: string | null;
+  metric?: string | null;
+  scale_policy?: string | null;
+  evaluation_stage?: string | null;
+  identity?: HeatmapIdentityBlock | null;
+  [k: string]: unknown;
+}
+
 /** Re-read of the saved file, re-measured from disk (gate G6). */
 export interface RereadAuditBlock {
   passed: boolean;
@@ -672,6 +774,10 @@ export interface GenerateArtifacts {
   merge_back_history?: string;
   seam_overlay_png?: string;
   shading_policy?: string;
+  // --- Catastrophic / repair evidence (TC8; gates CG13/CG4) — optional -----
+  catastrophic?: string;
+  repair_history?: string;
+  heatmap_meta?: string;
 }
 
 export interface UvGenerateWorkerError {
@@ -727,6 +833,15 @@ export interface UvGenerateSummary {
   merge_back?: MergeBackBlock | null;
   /** The combined game-quality verdict; null when the report was not produced. */
   quality_report_passed?: boolean | null;
+  // --- Catastrophic distortion (TC8; gates CG13/CG4) ----------------------
+  /** The un-shippable-distortion verdict; a failure blocks production export. */
+  catastrophic?: CatastrophicBlock | null;
+  /** What the catastrophic repair loop did about it. */
+  repair?: RepairBlock | null;
+  /** Whether the drawn heatmap and the gate agree on the same measurement. */
+  heatmap_identity?: HeatmapIdentityBlock | null;
+  /** 64-hex digest of the shipped UV layer — ties heatmap/gate/export together. */
+  uv_hash?: string | null;
 }
 
 // --- Candidate summary (plan §5) ------------------------------------------
@@ -896,6 +1011,12 @@ export interface UvGenerateRunView {
   merge_back_history: MergeBackHistory | null;
   /** Parsed `quality_report.json` — the raw game-gate report (gate G15). */
   quality_report: Record<string, unknown> | null;
+  /** Parsed `uv_catastrophic.json` — damaged regions/triangles (gate CG13). */
+  catastrophic?: CatastrophicReport | null;
+  /** Parsed `uv_repair_history.json` — the repair round trace (gate CG13). */
+  repair_history?: RepairHistory | null;
+  /** Parsed `heatmap_meta.json` — how the drawn heatmap was measured (CG4). */
+  heatmap_meta?: HeatmapMeta | null;
   stdout: string;
   stderr: string;
   /** Stable artifact key -> absolute path on disk, for `uvpreview://` rendering. */

@@ -16,6 +16,7 @@ import type {
   CandidateHistoryEntry,
   CandidateRow,
   CandidateSummary,
+  CatastrophicReport,
   DistortionIslandRow,
   GenerateMetrics,
   GenerateUvOptions,
@@ -834,17 +835,13 @@ function GenerateCenter(props: {
           </div>
         )}
 
-        {props.centerTab === 'heatmap' &&
-          (paths.selected_heatmap_anisotropy ? (
-            <div className="preview">
-              <img
-                alt={t('generate.tab.heatmap')}
-                src={previewUrl(paths.selected_heatmap_anisotropy)}
-              />
-            </div>
-          ) : (
-            <div className="placeholder">{t('generate.noHeatmap')}</div>
-          ))}
+        {props.centerTab === 'heatmap' && (
+          <HeatmapTab
+            summary={summary}
+            catastrophic={runView.catastrophic ?? null}
+            src={paths.selected_heatmap_anisotropy}
+          />
+        )}
 
         {props.centerTab === 'seams' && (
           <SeamOverlayPanel
@@ -854,6 +851,92 @@ function GenerateCenter(props: {
           />
         )}
       </div>
+    </div>
+  );
+}
+
+/**
+ * The anisotropy heatmap with its gate identity (gates CG4/CG13).
+ *
+ * The picture is only evidence if it was measured from the SAME UV the gate
+ * scored, so the badge states that relationship explicitly — "heatmap <-> gate
+ * identity OK", or the mismatching fields — and the run's `uv_hash` prefix is
+ * shown next to it. A failed catastrophic gate turns the tab into a red banner
+ * plus the worst damaged regions, because the layout is not shippable and the
+ * reviewer must not read the heatmap as a merely-cosmetic warning.
+ */
+function HeatmapTab(props: {
+  summary: UvGenerateRunView['summary'];
+  catastrophic: CatastrophicReport | null;
+  src?: string;
+}): JSX.Element {
+  const t = useT();
+  const identity = props.summary?.heatmap_identity ?? null;
+  const hash = props.summary?.uv_hash ?? null;
+  const cat = props.summary?.catastrophic ?? null;
+  const mismatches = identity?.mismatches ?? [];
+  const failed = cat?.passed === false;
+  const regions = (props.catastrophic?.regions ?? []).slice(0, 10);
+
+  return (
+    <div className="heatmap-tab">
+      <div className="heatmap-identity">
+        {identity ? (
+          identity.passed ? (
+            <span className="tag ok">{t('generate.hm.identityOk')}</span>
+          ) : (
+            <span className="tag bad">
+              {t('generate.hm.identityMismatch', {
+                fields: mismatches.length ? mismatches.join(', ') : t('generate.hm.unknownFields'),
+              })}
+            </span>
+          )
+        ) : (
+          <span className="tag unknown">{t('generate.hm.identityUnknown')}</span>
+        )}{' '}
+        <span className="muted small">
+          {t('generate.hm.uvHash')} {hash ? hash.slice(0, 12) : '—'}
+        </span>
+      </div>
+
+      {failed && (
+        <div className="banner error catastrophic-banner">
+          <div>
+            {t('generate.cat.banner', {
+              triangles: cat?.bad_triangle_count ?? 0,
+              regions: cat?.bad_region_count ?? 0,
+            })}
+          </div>
+          {regions.length > 0 && (
+            <table className="metrics catastrophic-regions">
+              <tbody>
+                {regions.map((r) => (
+                  <tr key={r.region_id}>
+                    <td>
+                      {t('generate.cat.region')} {r.region_id}
+                    </td>
+                    <td className="muted small">
+                      {t('generate.cat.island')} {r.island_id ?? '—'} ·{' '}
+                      {t('generate.cat.faces')} {(r.face_ids ?? []).length} ·{' '}
+                      {t('generate.cat.areaFraction')} {fmtPct(r.area_fraction)} ·{' '}
+                      {t('generate.cat.reasons')}{' '}
+                      {(r.reasons ?? []).length ? (r.reasons ?? []).join(', ') : '—'}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </div>
+      )}
+
+      {props.src ? (
+        <div className="preview">
+          <img alt={t('generate.tab.heatmap')} src={previewUrl(props.src)} />
+        </div>
+      ) : (
+        <div className="placeholder">{t('generate.noHeatmap')}</div>
+      )}
     </div>
   );
 }
@@ -1560,13 +1643,53 @@ function GameGatesSection(props: { summary: UvGenerateRunView['summary'] }): JSX
   const mb = s?.merge_back ?? null;
   const dist = s?.distortion_v2 ?? null;
   const corr = s?.correctness ?? null;
-  if (!frag && !td && !pk && !sh && !mb && !dist && !corr) {
+  const cat = s?.catastrophic ?? null;
+  const rp = s?.repair ?? null;
+  if (!frag && !td && !pk && !sh && !mb && !dist && !corr && !cat && !rp) {
     return <div className="muted">{t('generate.noGameGates')}</div>;
   }
   const fm = frag?.metrics ?? {};
   return (
     <table className="metrics gamegates">
       <tbody>
+        {/* Catastrophic distortion FIRST (gate CG13): the un-shippable class
+            outranks every other gate, so a reviewer sees it before anything. */}
+        <tr>
+          <td>{t('generate.gg.catastrophic')}</td>
+          <td>
+            <GateTag passed={cat?.passed} valid={cat?.valid} />{' '}
+            <span className="muted small">
+              {t('generate.cat.badTriangles')} {cat?.bad_triangle_count ?? '—'} ·{' '}
+              {t('generate.cat.badRegions')} {cat?.bad_region_count ?? '—'} ·{' '}
+              {t('generate.cat.badArea')} {fmtPct(cat?.bad_area_fraction)}
+            </span>
+            {cat && (
+              <div className="muted small">
+                {t('generate.cat.maxAniso')} {fmtNum(cat.max_anisotropy, 2)} ·{' '}
+                {t('generate.cat.maxAspect')} {fmtNum(cat.max_uv_triangle_aspect, 2)} ·{' '}
+                {t('generate.cat.nearCollapse')} {cat.near_collapse_count ?? '—'}
+              </div>
+            )}
+          </td>
+        </tr>
+        <tr>
+          <td>{t('generate.gg.repair')}</td>
+          <td>
+            <span className="muted small">
+              {rp
+                ? t('generate.rp.summary', {
+                    rounds: rp.rounds ?? 0,
+                    reunwrap: rp.reunwrap_accepted ?? 0,
+                    relief: rp.relief_accepted ?? 0,
+                    rejected: rp.rejected ?? 0,
+                    before: rp.bad_triangles_before ?? '—',
+                    after: rp.bad_triangles_after ?? '—',
+                    reason: rp.reason ?? '—',
+                  })
+                : t('generate.rp.none')}
+            </span>
+          </td>
+        </tr>
         {/* distortion — the existing v2 block, restated as a gate row. */}
         <tr>
           <td>{t('generate.gg.distortion')}</td>
@@ -2220,6 +2343,12 @@ function Json(props: { data: unknown; empty: string }): JSX.Element {
 function fmtNum(v: number | null | undefined, digits = 4): string {
   if (v === null || v === undefined) return '—';
   return Number(v).toFixed(digits);
+}
+
+/** A 0..1 fraction as a percent — how much UV area is catastrophically bad. */
+function fmtPct(v: number | null | undefined, digits = 2): string {
+  if (v === null || v === undefined) return '—';
+  return `${(Number(v) * 100).toFixed(digits)}%`;
 }
 
 function fmtMetric(key: keyof GenerateMetrics, v: number | boolean | null | undefined): string {
