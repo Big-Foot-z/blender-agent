@@ -86,6 +86,13 @@ CATASTROPHIC_METRIC = "catastrophic_score"
 
 #: Which catastrophic reason a repair round goes after first (plan §7 ordering) — a
 #: collapsed/invalid triangle is unrecoverable damage, an area explosion is merely ugly.
+#:
+#: The first :data:`CATASTROPHIC_SEVERE_RANKS` groups are the STRUCTURAL failures
+#: (collapse → flip → self-overlap). :func:`select_target` runs those before a
+#: ``correctness_repair`` and the merely-distorted groups (anisotropy → needle → area)
+#: after it: a layout with a pre-existing self-overlap re-measures a slightly different
+#: overlap area on every re-unwrap, so every anisotropy candidate is rejected as a
+#: correctness regression until the overlap itself is repaired.
 CATASTROPHIC_REASON_PRIORITY: tuple[tuple[str, ...], ...] = (
     ("near_collapse", "invalid"),
     ("local_flip",),
@@ -94,6 +101,10 @@ CATASTROPHIC_REASON_PRIORITY: tuple[tuple[str, ...], ...] = (
     ("needle",),
     ("area_explosion", "area_collapse"),
 )
+
+#: How many leading :data:`CATASTROPHIC_REASON_PRIORITY` groups outrank a correctness
+#: repair (collapse/invalid, local_flip, self_overlap).
+CATASTROPHIC_SEVERE_RANKS = 3
 
 
 # --------------------------------------------------------------------- budget
@@ -742,10 +753,18 @@ def _region_catastrophic(measurement: dict, faces) -> dict:
 def select_target(measurement: dict, rejected_regions: set, profile: QualityProfile):
     """The ONE island this round works on, or ``None`` when there is nothing to do (G4).
 
-    Priority: a failing per-island distortion check (worst value of the highest-priority
-    failing metric) → a failing global check, blamed on its worst island → a correctness
-    repair. Exactly one island per round, and a ``correctness_repair`` is tagged as such so
-    the history can tell it apart from a distortion split.
+    Priority (plan §7): a STRUCTURAL catastrophic region (collapse/invalid → local_flip →
+    self_overlap) → a correctness repair (overlap / orientation) → the remaining
+    catastrophic regions (anisotropy_hard → needle → area_*) → a failing per-island
+    distortion check (worst value of the highest-priority failing metric) → a failing
+    global check, blamed on its worst island. Exactly one island per round, and a
+    ``correctness_repair`` is tagged as such so the history can tell it apart from a
+    distortion split.
+
+    Correctness sits ABOVE the soft catastrophic regions on purpose: while the layout has
+    a self-overlap, its overlap area moves on every re-unwrap, so every candidate for an
+    ``anisotropy_hard`` region is rejected as ``correctness_regression`` and the loop
+    burns its whole budget without ever repairing the overlap that caused it.
 
     A face set already in ``rejected_regions`` (a region whose candidates all failed once)
     is skipped, so the loop moves on instead of re-cutting the same place forever.
@@ -765,23 +784,26 @@ def select_target(measurement: dict, rejected_regions: set, profile: QualityProf
         return {"kind": kind, "island_id": int(island_id), "faces": faces,
                 "metric": metric, "before": float(before)}
 
-    # (0) CG2/CG5: a CATASTROPHIC region outranks every average-based complaint. A needle
-    # or a collapsed face destroys the texture no matter how good the p95 looks, so it is
-    # repaired first — and counted regions before below-min ones, because a cluster large
-    # enough to be counted is the one the gate is failing on.
+    # CG2/CG5: a CATASTROPHIC region outranks every average-based complaint. A needle or
+    # a collapsed face destroys the texture no matter how good the p95 looks, so it is
+    # repaired before distortion — and counted regions before below-min ones, because a
+    # cluster large enough to be counted is the one the gate is failing on.
     catastrophic = measurement.get("catastrophic") or {}
-    regions = list(catastrophic.get("regions") or ())
-    if regions:
-        ordered = sorted(
-            regions,
-            key=lambda r: (
-                1 if bool(r.get("below_cluster_min")) else 0,
-                _catastrophic_reason_rank(r),
-                -_finite_float(r.get("area_fraction"), 0.0),
-                int(r.get("region_id", 0)),
-            ),
-        )
-        for region in ordered:
+    ordered_regions = sorted(
+        list(catastrophic.get("regions") or ()),
+        key=lambda r: (
+            1 if bool(r.get("below_cluster_min")) else 0,
+            _catastrophic_reason_rank(r),
+            -_finite_float(r.get("area_fraction"), 0.0),
+            int(r.get("region_id", 0)),
+        ),
+    )
+
+    def pick_catastrophic(*, severe: bool):
+        for region in ordered_regions:
+            rank = _catastrophic_reason_rank(region)
+            if severe != (rank < CATASTROPHIC_SEVERE_RANKS):
+                continue
             faces = frozenset(int(f) for f in (region.get("face_ids") or ()))
             if not faces or faces in rejected:
                 continue
@@ -797,6 +819,51 @@ def select_target(measurement: dict, rejected_regions: set, profile: QualityProf
                 "before": _finite_float(before, float("nan")),
                 "reasons": list(region.get("reasons") or ()),
             }
+        return None
+
+    def pick_correctness():
+        """The layout is not a valid packing: repair the overlap / flipped orientation."""
+        correctness = measurement.get("correctness") or {}
+        if correctness.get("passed", True):
+            return None
+        before = _correctness_value(measurement)
+        island_ids: list[int] = []
+        for sample in (correctness.get("overlap") or {}).get("samples") or []:
+            for key in ("island_a", "island_b"):
+                value = sample.get(key)
+                if isinstance(value, int) and value >= 0 and value not in island_ids:
+                    island_ids.append(int(value))
+        flip_faces = (correctness.get("orientation") or {}).get("local_flip_face_ids") or []
+        if flip_faces:
+            lookup: dict[int, int] = {}
+            for index, faces in enumerate(islands):
+                for fid in faces:
+                    lookup[int(fid)] = index
+            for fid in flip_faces:
+                index = lookup.get(int(fid))
+                if index is not None and index not in island_ids:
+                    island_ids.append(index)
+        for island_id in island_ids:
+            found = target("correctness_repair", island_id, CORRECTNESS_METRIC, before)
+            if found is not None:
+                return found
+        return None
+
+    # (1) structural catastrophic damage: collapse/invalid → local_flip → self_overlap.
+    found = pick_catastrophic(severe=True)
+    if found is not None:
+        return found
+
+    # (2) correctness (overlap / orientation) — see the docstring: it gates every later
+    # candidate's acceptance, so it must be repaired before the soft catastrophic regions.
+    found = pick_correctness()
+    if found is not None:
+        return found
+
+    # (3) the remaining catastrophic regions: anisotropy_hard → needle → area_*.
+    found = pick_catastrophic(severe=False)
+    if found is not None:
+        return found
 
     quality = measurement.get("quality") or {}
     failed = [c for c in (quality.get("checks") or []) if not c.get("passed", True)]
@@ -826,32 +893,7 @@ def select_target(measurement: dict, rejected_regions: set, profile: QualityProf
                 if found is not None:
                     return found
 
-    # (c) distortion is satisfied (or exhausted) but the layout is not a valid packing.
-    correctness = measurement.get("correctness") or {}
-    if not correctness.get("passed", True):
-        before = _correctness_value(measurement)
-        island_ids: list[int] = []
-        for sample in (correctness.get("overlap") or {}).get("samples") or []:
-            for key in ("island_a", "island_b"):
-                value = sample.get(key)
-                if isinstance(value, int) and value >= 0 and value not in island_ids:
-                    island_ids.append(int(value))
-        flip_faces = (correctness.get("orientation") or {}).get("local_flip_face_ids") or []
-        if flip_faces:
-            lookup: dict[int, int] = {}
-            for index, faces in enumerate(islands):
-                for fid in faces:
-                    lookup[int(fid)] = index
-            for fid in flip_faces:
-                index = lookup.get(int(fid))
-                if index is not None and index not in island_ids:
-                    island_ids.append(index)
-        for island_id in island_ids:
-            found = target("correctness_repair", island_id, CORRECTNESS_METRIC, before)
-            if found is not None:
-                return found
-
-    # (d) nothing left to target.
+    # (c) nothing left to target — correctness was already offered above at step (2).
     return None
 
 
@@ -1628,6 +1670,7 @@ def seam_length_report(mesh: MeshGraph, seams, *, mandatory, user, distortion_se
 __all__ = [
     "CATASTROPHIC_METRIC",
     "CATASTROPHIC_REASON_PRIORITY",
+    "CATASTROPHIC_SEVERE_RANKS",
     "CORRECTNESS_METRIC",
     "GAP_REPACK_FACTORS",
     "METRIC_PRIORITY",

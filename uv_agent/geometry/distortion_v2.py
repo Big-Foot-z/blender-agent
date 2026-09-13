@@ -157,7 +157,8 @@ class _Records:
 
     ``s1`` / ``s2`` are the Jacobian singular values (NaN when the triangle is not
     ``ok``), ``loops`` the ``(l0, l1, l2)`` loop-index triple the triangle came from and
-    ``uv_longest_edge`` the longest UV edge length of the triangle. They cost one pass
+    ``uv_longest_edge`` the longest UV edge length of the triangle and ``longest_3d_edge``
+    the longest 3D edge length of the same triangle. They cost one pass
     that was already being made and let the catastrophic gate
     (:mod:`uv_agent.geometry.catastrophic_distortion`) reuse this table instead of
     re-deriving the same Jacobians."""
@@ -173,6 +174,7 @@ class _Records:
         "s2",
         "loops",
         "uv_longest_edge",
+        "longest_3d_edge",
     )
 
     def __init__(
@@ -186,6 +188,7 @@ class _Records:
         s2=None,
         loops=None,
         uv_longest_edge=None,
+        longest_3d_edge=None,
     ):
         self.face_id = np.asarray(face_id, dtype=np.int64)
         self.area_3d = np.asarray(area_3d, dtype=float)
@@ -214,6 +217,11 @@ class _Records:
             if uv_longest_edge is not None
             else np.full(n, np.nan, dtype=float)
         )
+        self.longest_3d_edge = (
+            np.asarray(longest_3d_edge, dtype=float)
+            if longest_3d_edge is not None
+            else np.full(n, np.nan, dtype=float)
+        )
 
 
 def _tri_area_uv(uv0, uv1, uv2) -> float:
@@ -230,6 +238,14 @@ def _tri_uv_longest_edge(uv0, uv1, uv2) -> float:
     )
 
 
+def _tri_longest_edge_3d(p0, p1, p2) -> float:
+    return max(
+        float(np.linalg.norm(p1 - p0)),
+        float(np.linalg.norm(p2 - p1)),
+        float(np.linalg.norm(p0 - p2)),
+    )
+
+
 def _collect(mesh: MeshGraph, uvmap: UVMap) -> _Records:
     face_id: list[int] = []
     area_3d: list[float] = []
@@ -240,6 +256,7 @@ def _collect(mesh: MeshGraph, uvmap: UVMap) -> _Records:
     s2s: list[float] = []
     loops: list[tuple[int, int, int]] = []
     uv_longest: list[float] = []
+    longest_3d: list[float] = []
     for f in mesh.faces:
         for l0, l1, l2 in mesh.face_triangles(f.id):
             p0 = mesh.vertex_co(mesh.loops[l0].vertex_id)
@@ -259,8 +276,18 @@ def _collect(mesh: MeshGraph, uvmap: UVMap) -> _Records:
             s2s.append(float(s2))
             loops.append((int(l0), int(l1), int(l2)))
             uv_longest.append(_tri_uv_longest_edge(uv0, uv1, uv2))
+            longest_3d.append(_tri_longest_edge_3d(p0, p1, p2))
     return _Records(
-        face_id, area_3d, area_uv, aniso, status, s1s, s2s, loops, uv_longest
+        face_id,
+        area_3d,
+        area_uv,
+        aniso,
+        status,
+        s1s,
+        s2s,
+        loops,
+        uv_longest,
+        longest_3d,
     )
 
 
@@ -268,7 +295,7 @@ def collect_triangle_records(mesh: MeshGraph, uvmap: UVMap) -> _Records:
     """Public accessor for the flat per-triangle table (see :class:`_Records`).
 
     One pass over the mesh producing face id, 3D / UV area, anisotropy ratio, status,
-    the Jacobian singular values, the loop triple and the longest UV edge per triangle,
+    the Jacobian singular values, the loop triple and the longest UV / 3D edge per triangle,
     so a second metric module never has to duplicate the Jacobian code."""
     return _collect(mesh, uvmap)
 

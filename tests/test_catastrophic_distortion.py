@@ -169,6 +169,40 @@ def test_single_needle_triangle_is_isolated():
     assert sum(1 for v in report["per_face_hard_fail"] if v) == 1
 
 
+def test_conformally_mapped_3d_sliver_is_not_a_needle():
+    """CG2: the needle reason must describe UV damage, not an already-thin 3D triangle.
+
+    A decimated sliver whose UV map is the identity keeps its shape exactly; its uv
+    aspect ratio is huge (> 40) purely because the 3D triangle is huge-aspect too, and
+    flagging it sends the repair loop after damage that does not exist."""
+    mesh = MeshGraph.from_faces(
+        "sliver",
+        [(0.0, 0.0, 0.0), (1.0, 0.0, 0.0), (0.5, 0.002, 0.0)],
+        [(0, 1, 2)],
+    )
+    uvmap = identity_uv(mesh)
+
+    report = evaluate_catastrophic(mesh, uvmap)
+
+    # The uv aspect really is past the absolute cap - and the 3D aspect matches it.
+    assert report["max_uv_triangle_aspect"] > 40.0
+    worst_aspect = report["max_uv_triangle_aspect"]
+    assert report["needle_count"] == 0
+    assert report["bad_triangle_count"] == 0
+    assert report["regions"] == []
+    assert report["passed"] is True
+
+    # ... and dropping the 3D comparison factor to 0 brings the needle straight back,
+    # so the fixture is genuinely exercising the new term.
+    lenient = evaluate_catastrophic(
+        mesh, uvmap, thresholds=CatastrophicThresholds(needle_3d_aspect_factor=0.0)
+    )
+    assert lenient["needle_count"] == 1
+    assert lenient["worst_triangles"][0]["aspect_3d"] == pytest.approx(
+        worst_aspect, rel=1e-9
+    )
+
+
 # --- (d) UV-collapsed triangle -------------------------------------------------------
 
 

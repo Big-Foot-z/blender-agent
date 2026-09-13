@@ -66,6 +66,10 @@ class CatastrophicThresholds:
     anisotropy_warn: float = 4.0
     near_collapse_ratio: float = 1e-4  # s2 / max(s1, eps) below this = near collapse
     max_uv_triangle_aspect: float = 40.0
+    #: A needle is a UV artefact, not a thin 3D triangle: a decimated sliver whose UV map
+    #: is nearly conformal has a huge uv aspect and is NOT broken (CG2). The uv aspect must
+    #: also exceed this factor times the triangle's own 3D aspect before it counts.
+    needle_3d_aspect_factor: float = 2.0
     local_area_ratio_min: float = 1.0 / 25.0
     local_area_ratio_max: float = 25.0
     bad_area_fraction_cap: float = 0.005
@@ -90,6 +94,7 @@ class BadTriangle:
     area_uv: float
     normalized_area_ratio: float
     uv_aspect_ratio: float
+    aspect_3d: float = float("nan")
     reasons: tuple[str, ...] = ()
 
     def to_dict(self) -> dict:
@@ -105,6 +110,7 @@ class BadTriangle:
             "area_uv": _num(self.area_uv),
             "normalized_area_ratio": _num(self.normalized_area_ratio),
             "uv_aspect_ratio": _num(self.uv_aspect_ratio),
+            "aspect_3d": _num(self.aspect_3d),
             "reasons": list(self.reasons),
         }
 
@@ -181,6 +187,14 @@ def _uv_aspect_ratio(longest_edge: float, area_uv: float) -> float:
     if a <= 0.0:
         return float("inf") if le > 0.0 else float("nan")
     return (le * le) / (2.0 * a)
+
+
+def _aspect_3d(longest_edge: float, area_3d: float) -> float:
+    """The SAME shape measure as :func:`_uv_aspect_ratio`, applied to the 3D triangle.
+
+    A thin 3D triangle scores high here, which is exactly how the needle test tells a
+    UV-made needle apart from a mesh that was already a sliver before unwrapping."""
+    return _uv_aspect_ratio(longest_edge, area_3d)
 
 
 def _island_of_face(mesh: MeshGraph, island_face_ids) -> dict[int, int]:
@@ -271,6 +285,7 @@ def evaluate_catastrophic(
         s2 = float(recs.s2[i])
         aniso = float(recs.aniso[i])
         aspect = _uv_aspect_ratio(float(recs.uv_longest_edge[i]), auv)
+        aspect3 = _aspect_3d(float(recs.longest_3d_edge[i]), a3)
         ratio = (auv * scale_sq / a3) if a3 > 0.0 else float("nan")
 
         if math.isfinite(aniso):
@@ -304,8 +319,13 @@ def evaluate_catastrophic(
             reasons.append(REASON_NEAR_COLLAPSE)
         if math.isfinite(aniso) and aniso > thresholds.anisotropy_hard_max:
             reasons.append(REASON_ANISOTROPY_HARD)
+        # CG2: a needle is UV damage. The uv aspect must clear the absolute cap AND be
+        # meaningfully worse than the 3D triangle's own aspect — a conformally mapped 3D
+        # sliver keeps its shape and is not a UV failure. An unmeasurable 3D aspect (NaN)
+        # cannot exonerate anything, so the absolute cap alone decides there.
         if aspect > thresholds.max_uv_triangle_aspect and not math.isnan(aspect):
-            reasons.append(REASON_NEEDLE)
+            if math.isnan(aspect3) or aspect > thresholds.needle_3d_aspect_factor * aspect3:
+                reasons.append(REASON_NEEDLE)
         if math.isfinite(ratio):
             if ratio > thresholds.local_area_ratio_max:
                 reasons.append(REASON_AREA_EXPLOSION)
@@ -357,6 +377,7 @@ def evaluate_catastrophic(
                 area_uv=auv,
                 normalized_area_ratio=ratio,
                 uv_aspect_ratio=aspect,
+                aspect_3d=aspect3,
                 reasons=tuple(reasons),
             )
         )
@@ -616,6 +637,7 @@ _PROFILE_KEYS = (
     "anisotropy_hard_max",
     "near_collapse_ratio",
     "max_uv_triangle_aspect",
+    "needle_3d_aspect_factor",
     "local_area_ratio_min",
     "local_area_ratio_max",
     "bad_area_fraction_cap",
@@ -653,6 +675,9 @@ def thresholds_from_profile(profile_like) -> CatastrophicThresholds:
         ),
         max_uv_triangle_aspect=values.get(
             "max_uv_triangle_aspect", defaults.max_uv_triangle_aspect
+        ),
+        needle_3d_aspect_factor=values.get(
+            "needle_3d_aspect_factor", defaults.needle_3d_aspect_factor
         ),
         local_area_ratio_min=values.get(
             "local_area_ratio_min", defaults.local_area_ratio_min

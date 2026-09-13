@@ -37,7 +37,8 @@ calibrated product bar:
 CG16 (catastrophic distortion, a HARD gate that is separate from the quality caps above —
 the quality gate keeps ``anisotropy_max_max`` 3.0 and CG16 adds its own 8.0 hard ceiling,
 so nothing is loosened): ``catastrophic_metric_version``, ``anisotropy_hard_max``,
-``near_collapse_ratio``, ``max_uv_triangle_aspect``, ``local_area_ratio_min``,
+``near_collapse_ratio``, ``max_uv_triangle_aspect``, ``needle_3d_aspect_factor``,
+``local_area_ratio_min``,
 ``local_area_ratio_max``, ``bad_area_fraction_cap``, ``catastrophic_repair_max_rounds``,
 ``catastrophic_reunwrap_variants``.
 
@@ -116,6 +117,9 @@ class QualityProfile:
     anisotropy_hard_max: float = 8.0
     near_collapse_ratio: float = 1e-4
     max_uv_triangle_aspect: float = 40.0
+    #: A needle must be worse than the 3D triangle's own aspect by this factor (CG2) —
+    #: a conformally mapped 3D sliver is not a UV failure.
+    needle_3d_aspect_factor: float = 2.0
     local_area_ratio_min: float = 0.04
     local_area_ratio_max: float = 25.0
     bad_area_fraction_cap: float = 0.005
@@ -147,7 +151,9 @@ class QualityProfile:
     # --- explicit search budgets (G5) ---
     max_iterations: int = 24
     max_candidates_per_round: int = 4
-    time_budget_s: float = 600.0
+    # Engineering budget raised for 10k-face real models (a statue run needed ~1234 s);
+    # the fake-backend fixtures still finish in well under 60 s.
+    time_budget_s: float = 1800.0
     island_cap: int = 80
     min_improvement_ratio: float = 0.15
     seed: int = 0
@@ -196,6 +202,7 @@ REQUIRED_PROFILE_KEYS: tuple[str, ...] = (
     "anisotropy_hard_max",
     "near_collapse_ratio",
     "max_uv_triangle_aspect",
+    "needle_3d_aspect_factor",
     "local_area_ratio_min",
     "local_area_ratio_max",
     "bad_area_fraction_cap",

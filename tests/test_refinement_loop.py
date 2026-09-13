@@ -579,3 +579,70 @@ def test_exception_candidate_leaves_the_uv_hash_and_layer_identical(monkeypatch)
     assert R.uv_hash(obj.uv) == hash_before
     assert obj.data.uv_layers.active == layer_before
     assert result["seams"] == seams_before
+
+
+# ------------------------------------------- select_target ordering (CG5 / plan §7)
+
+
+def _ordering_measurement(*, regions, correctness_passed: bool) -> dict:
+    """A synthetic measurement carrying only what :func:`select_target` reads."""
+    correctness = {"passed": bool(correctness_passed)}
+    if not correctness_passed:
+        correctness["overlap"] = {
+            "overlap_area_total": 0.0014,
+            "samples": [{"island_a": 0, "island_b": 0}],
+        }
+    return {
+        "islands": [[0, 1, 2, 3]],
+        "catastrophic": {"regions": list(regions)},
+        "correctness": correctness,
+        "quality": {"checks": []},
+    }
+
+
+def _region(reasons, **extra) -> dict:
+    region = {
+        "region_id": 0,
+        "island_id": 0,
+        "face_ids": [1],
+        "reasons": list(reasons),
+        "area_fraction": 0.01,
+        "max_anisotropy": 12.0,
+        "max_uv_aspect_ratio": 12.0,
+        "below_cluster_min": False,
+    }
+    region.update(extra)
+    return region
+
+
+def test_select_target_repairs_correctness_before_soft_catastrophic():
+    """A pre-existing self-overlap makes every anisotropy candidate look like a
+    correctness regression, so the overlap has to be repaired first."""
+    measurement = _ordering_measurement(
+        regions=[_region(["anisotropy_hard"])], correctness_passed=False
+    )
+    target = R.select_target(measurement, set(), PROFILE)
+    assert target is not None
+    assert target["kind"] == "correctness_repair"
+    assert target["metric"] == R.CORRECTNESS_METRIC
+
+
+def test_select_target_structural_catastrophic_outranks_correctness():
+    measurement = _ordering_measurement(
+        regions=[_region(["near_collapse"])], correctness_passed=False
+    )
+    target = R.select_target(measurement, set(), PROFILE)
+    assert target is not None
+    assert target["kind"] == "catastrophic_repair"
+    assert target["reasons"] == ["near_collapse"]
+
+
+def test_select_target_soft_catastrophic_when_correctness_passes():
+    measurement = _ordering_measurement(
+        regions=[_region(["anisotropy_hard"])], correctness_passed=True
+    )
+    target = R.select_target(measurement, set(), PROFILE)
+    assert target is not None
+    assert target["kind"] == "catastrophic_repair"
+    assert target["metric"] == R.CATASTROPHIC_METRIC
+    assert target["reasons"] == ["anisotropy_hard"]

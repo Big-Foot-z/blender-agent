@@ -147,6 +147,9 @@ def test_new_profile_key_defaults():
     assert ENGINEERING_V0.shading_uv_policy == "preserve"
     assert ENGINEERING_V0.merge_back_enabled is True
     assert ENGINEERING_V0.merge_back_max_trials == 64
+    # CG14/G12: the engineering time budget covers a 10k-face real model, not just the
+    # sub-minute fixtures.
+    assert ENGINEERING_V0.time_budget_s == 1800.0
 
 
 @pytest.mark.parametrize(
@@ -460,6 +463,7 @@ _CG_PROFILE_KEYS = (
     "anisotropy_hard_max",
     "near_collapse_ratio",
     "max_uv_triangle_aspect",
+    "needle_3d_aspect_factor",
     "local_area_ratio_min",
     "local_area_ratio_max",
     "bad_area_fraction_cap",
@@ -492,6 +496,7 @@ def test_cg16_key_defaults():
     assert ENGINEERING_V0.anisotropy_hard_max == 8.0
     assert ENGINEERING_V0.near_collapse_ratio == 1e-4
     assert ENGINEERING_V0.max_uv_triangle_aspect == 40.0
+    assert ENGINEERING_V0.needle_3d_aspect_factor == 2.0
     assert ENGINEERING_V0.local_area_ratio_min == 0.04
     assert ENGINEERING_V0.local_area_ratio_max == 25.0
     assert ENGINEERING_V0.bad_area_fraction_cap == 0.005
