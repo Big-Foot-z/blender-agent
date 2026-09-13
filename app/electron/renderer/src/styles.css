@@ -125,6 +125,8 @@ table.metrics td:last-child { text-align: right; font-variant-numeric: tabular-n
 .placeholder { color: var(--muted); text-align: center; }
 
 .bottom { height: 280px; border-top: 1px solid var(--line); background: var(--panel); display: flex; flex-direction: column; }
+.bottom.collapsed { height: auto; }
+.panel-toggle { padding: 0 6px; font-size: 10px; line-height: 18px; min-width: 24px; }
 .statusrow { display: flex; align-items: center; gap: 10px; padding: 6px 12px; border-bottom: 1px solid var(--line); }
 .statuspill { font-size: 11px; padding: 2px 10px; border-radius: 10px; background: var(--line); text-transform: uppercase; }
 .statuspill.accepted { background: #2f4a35; color: var(--ok); }

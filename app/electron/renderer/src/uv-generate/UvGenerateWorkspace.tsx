@@ -2223,6 +2223,9 @@ function RunOptions(props: {
 // ---------------------------------------------------------------------------
 type BottomTab = 'summary' | 'candidate' | 'candidates' | 'p5_gate' | 'seam_report' | 'logs';
 
+/** localStorage key remembering whether the bottom report panel is collapsed. */
+const BOTTOM_COLLAPSED_KEY = 'reforge.uvGenerate.bottomCollapsed';
+
 const STATUS_TEXT: Record<string, TKey> = {
   accepted: 'generate.statusText.accepted',
   needs_user_review: 'generate.statusText.needs_user_review',
@@ -2239,11 +2242,38 @@ function GenerateBottomPanel(props: {
 }): JSX.Element {
   const t = useT();
   const [tab, setTab] = useState<BottomTab>('summary');
+  const [collapsed, setCollapsed] = useState<boolean>(() => {
+    try {
+      return window.localStorage.getItem(BOTTOM_COLLAPSED_KEY) === '1';
+    } catch {
+      return false;
+    }
+  });
+  const toggleCollapsed = useCallback(() => {
+    setCollapsed((prev) => {
+      const next = !prev;
+      try {
+        window.localStorage.setItem(BOTTOM_COLLAPSED_KEY, next ? '1' : '0');
+      } catch {
+        /* per-viewer convenience only */
+      }
+      return next;
+    });
+  }, []);
   const rv = props.runView;
   const status = props.status;
   return (
-    <footer className="bottom">
+    <footer className={collapsed ? 'bottom collapsed' : 'bottom'}>
       <div className="statusrow">
+        <button
+          type="button"
+          className="panel-toggle"
+          onClick={toggleCollapsed}
+          title={collapsed ? t('common.panel.expand') : t('common.panel.collapse')}
+          aria-expanded={!collapsed}
+        >
+          {collapsed ? '▲' : '▼'}
+        </button>
         <span className={`statuspill ${status ?? 'idle'}`}>{statusLabel(t, status)}</span>
         {status && (
           <span className="muted small">{STATUS_TEXT[status] ? t(STATUS_TEXT[status]) : statusLabel(t, status)}</span>
@@ -2257,6 +2287,7 @@ function GenerateBottomPanel(props: {
           <span className="muted small">{t('common.warningsCount', { n: rv!.summary!.warnings.length })}</span>
         )}
       </div>
+      {!collapsed && (
       <div className="reporttabs">
         <nav className="tabbar">
           <button className={tab === 'summary' ? 'active' : ''} onClick={() => setTab('summary')}>{t('common.tab.summary')}</button>
@@ -2287,6 +2318,7 @@ function GenerateBottomPanel(props: {
           )}
         </div>
       </div>
+      )}
     </footer>
   );
 }
