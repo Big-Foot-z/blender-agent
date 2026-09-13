@@ -1,0 +1,3466 @@
+{
+  "schema_version": 1,
+  "profile_id": "engineering_v0",
+  "metric_version": 2,
+  "calibrated": false,
+  "passed": false,
+  "hard_failures": [
+    "quality_profile_failed",
+    "correctness_failed",
+    "catastrophic_failed",
+    "fragmentation_failed"
+  ],
+  "quality_failures": [
+    "tiny_island_count",
+    "island_aspect_p95",
+    "packing_efficiency"
+  ],
+  "distortion_summary": {
+    "metric_version": 2,
+    "global_area_stretch_mean": 0.05967294187320298,
+    "global_area_stretch_p95": 0.2072263757390529,
+    "global_anisotropy_p95": 1.3536594425744228,
+    "global_anisotropy_max": 100.31039937373298,
+    "worst_island_id": 29,
+    "worst_island_area_stretch_p95": 9.092206471004277e-05,
+    "worst_island_anisotropy_p95": 1.8476185400945668,
+    "worst_island_anisotropy_max": 1.8476185400945668,
+    "bad_area_ratio": 0.01464339383139434,
+    "bad_area_threshold": 1.6,
+    "summary_valid": true
+  },
+  "uv_hash": "2bcd367508a175a842d97bd8bc0b96ff4df11d7a35dbc1eaef028b61d94fe944",
+  "sections": {
+    "distortion": {
+      "passed": false,
+      "valid": true,
+      "failures": [
+        "anisotropy_max",
+        "anisotropy_max",
+        "anisotropy_max",
+        "anisotropy_max",
+        "anisotropy_max",
+        "anisotropy_max",
+        "anisotropy_max",
+        "anisotropy_max",
+        "anisotropy_max",
+        "anisotropy_p95",
+        "exceed_area_fraction"
+      ],
+      "invalid_reasons": [],
+      "checks": [
+        {
+          "name": "anisotropy_p95",
+          "scope": "global",
+          "value": 1.3536594425744228,
+          "limit": 1.6,
+          "passed": true
+        },
+        {
+          "name": "anisotropy_max",
+          "scope": "global",
+          "value": 100.31039937373298,
+          "limit": 3.0,
+          "passed": false
+        },
+        {
+          "name": "area_stretch_mean",
+          "scope": "global",
+          "value": 0.05967294187320298,
+          "limit": 0.5,
+          "passed": true
+        },
+        {
+          "name": "area_stretch_p95",
+          "scope": "global",
+          "value": 0.2072263757390529,
+          "limit": 0.9,
+          "passed": true
+        },
+        {
+          "name": "exceed_area_fraction",
+          "scope": "global",
+          "value": 0.01464339383139434,
+          "limit": 0.05,
+          "passed": true
+        },
+        {
+          "name": "anisotropy_p95",
+          "scope": "island",
+          "value": 1.421032326905541,
+          "limit": 1.8,
+          "passed": true,
+          "island_id": 0
+        },
+        {
+          "name": "anisotropy_max",
+          "scope": "island",
+          "value": 6.1512471850330055,
+          "limit": 3.0,
+          "passed": false,
+          "island_id": 0
+        },
+        {
+          "name": "area_stretch_mean",
+          "scope": "island",
+          "value": 0.04642556597188563,
+          "limit": 0.6,
+          "passed": true,
+          "island_id": 0
+        },
+        {
+          "name": "area_stretch_p95",
+          "scope": "island",
+          "value": 0.16400482339210182,
+          "limit": 1.1,
+          "passed": true,
+          "island_id": 0
+        },
+        {
+          "name": "exceed_area_fraction",
+          "scope": "island",
+          "value": 0.01602242065995779,
+          "limit": 0.1,
+          "passed": true,
+          "island_id": 0
+        },
+        {
+          "name": "anisotropy_p95",
+          "scope": "island",
+          "value": 1.394799593813059,
+          "limit": 1.8,
+          "passed": true,
+          "island_id": 1
+        },
+        {
+          "name": "anisotropy_max",
+          "scope": "island",
+          "value": 2.199704609183983,
+          "limit": 3.0,
+          "passed": true,
+          "island_id": 1
+        },
+        {
+          "name": "area_stretch_mean",
+          "scope": "island",
+          "value": 0.03953655012455079,
+          "limit": 0.6,
+          "passed": true,
+          "island_id": 1
+        },
+        {
+          "name": "area_stretch_p95",
+          "scope": "island",
+          "value": 0.1705983559040749,
+          "limit": 1.1,
+          "passed": true,
+          "island_id": 1
+        },
+        {
+          "name": "exceed_area_fraction",
+          "scope": "island",
+          "value": 0.013954955534670707,
+          "limit": 0.1,
+          "passed": true,
+          "island_id": 1
+        },
+        {
+          "name": "anisotropy_p95",
+          "scope": "island",
+          "value": 1.5654437920462045,
+          "limit": 1.8,
+          "passed": true,
+          "island_id": 2
+        },
+        {
+          "name": "anisotropy_max",
+          "scope": "island",
+          "value": 8.370115642396627,
+          "limit": 3.0,
+          "passed": false,
+          "island_id": 2
+        },
+        {
+          "name": "area_stretch_mean",
+          "scope": "island",
+          "value": 0.06736356413271208,
+          "limit": 0.6,
+          "passed": true,
+          "island_id": 2
+        },
+        {
+          "name": "area_stretch_p95",
+          "scope": "island",
+          "value": 0.23466226897778447,
+          "limit": 1.1,
+          "passed": true,
+          "island_id": 2
+        },
+        {
+          "name": "exceed_area_fraction",
+          "scope": "island",
+          "value": 0.04138594567988275,
+          "limit": 0.1,
+          "passed": true,
+          "island_id": 2
+        },
+        {
+          "name": "anisotropy_p95",
+          "scope": "island",
+          "value": 1.392181283148039,
+          "limit": 1.8,
+          "passed": true,
+          "island_id": 3
+        },
+        {
+          "name": "anisotropy_max",
+          "scope": "island",
+          "value": 3.1576499896311097,
+          "limit": 3.0,
+          "passed": false,
+          "island_id": 3
+        },
+        {
+          "name": "area_stretch_mean",
+          "scope": "island",
+          "value": 0.042617681037957676,
+          "limit": 0.6,
+          "passed": true,
+          "island_id": 3
+        },
+        {
+          "name": "area_stretch_p95",
+          "scope": "island",
+          "value": 0.16614973039221342,
+          "limit": 1.1,
+          "passed": true,
+          "island_id": 3
+        },
+        {
+          "name": "exceed_area_fraction",
+          "scope": "island",
+          "value": 0.016505805508136205,
+          "limit": 0.1,
+          "passed": true,
+          "island_id": 3
+        },
+        {
+          "name": "anisotropy_p95",
+          "scope": "island",
+          "value": 1.5320799626178487,
+          "limit": 1.8,
+          "passed": true,
+          "island_id": 4
+        },
+        {
+          "name": "anisotropy_max",
+          "scope": "island",
+          "value": 24.62118694780833,
+          "limit": 3.0,
+          "passed": false,
+          "island_id": 4
+        },
+        {
+          "name": "area_stretch_mean",
+          "scope": "island",
+          "value": 0.09119013503730321,
+          "limit": 0.6,
+          "passed": true,
+          "island_id": 4
+        },
+        {
+          "name": "area_stretch_p95",
+          "scope": "island",
+          "value": 0.3477958608915164,
+          "limit": 1.1,
+          "passed": true,
+          "island_id": 4
+        },
+        {
+          "name": "exceed_area_fraction",
+          "scope": "island",
+          "value": 0.03780978737110319,
+          "limit": 0.1,
+          "passed": true,
+          "island_id": 4
+        },
+        {
+          "name": "anisotropy_p95",
+          "scope": "island",
+          "value": 1.3763248445573641,
+          "limit": 1.8,
+          "passed": true,
+          "island_id": 5
+        },
+        {
+          "name": "anisotropy_max",
+          "scope": "island",
+          "value": 16.813157992608886,
+          "limit": 3.0,
+          "passed": false,
+          "island_id": 5
+        },
+        {
+          "name": "area_stretch_mean",
+          "scope": "island",
+          "value": 0.08051259452604045,
+          "limit": 0.6,
+          "passed": true,
+          "island_id": 5
+        },
+        {
+          "name": "area_stretch_p95",
+          "scope": "island",
+          "value": 0.24632066256812096,
+          "limit": 1.1,
+          "passed": true,
+          "island_id": 5
+        },
+        {
+          "name": "exceed_area_fraction",
+          "scope": "island",
+          "value": 0.01954544719531942,
+          "limit": 0.1,
+          "passed": true,
+          "island_id": 5
+        },
+        {
+          "name": "anisotropy_p95",
+          "scope": "island",
+          "value": 1.2316674973575383,
+          "limit": 1.8,
+          "passed": true,
+          "island_id": 6
+        },
+        {
+          "name": "anisotropy_max",
+          "scope": "island",
+          "value": 1.8812516056958861,
+          "limit": 3.0,
+          "passed": true,
+          "island_id": 6
+        },
+        {
+          "name": "area_stretch_mean",
+          "scope": "island",
+          "value": 0.059870299702781446,
+          "limit": 0.6,
+          "passed": true,
+          "island_id": 6
+        },
+        {
+          "name": "area_stretch_p95",
+          "scope": "island",
+          "value": 0.14353285925726586,
+          "limit": 1.1,
+          "passed": true,
+          "island_id": 6
+        },
+        {
+          "name": "exceed_area_fraction",
+          "scope": "island",
+          "value": 0.001158936982583779,
+          "limit": 0.1,
+          "passed": true,
+          "island_id": 6
+        },
+        {
+          "name": "anisotropy_p95",
+          "scope": "island",
+          "value": 1.1498690113480325,
+          "limit": 1.8,
+          "passed": true,
+          "island_id": 7
+        },
+        {
+          "name": "anisotropy_max",
+          "scope": "island",
+          "value": 1.6888116327480587,
+          "limit": 3.0,
+          "passed": true,
+          "island_id": 7
+        },
+        {
+          "name": "area_stretch_mean",
+          "scope": "island",
+          "value": 0.03153735603352884,
+          "limit": 0.6,
+          "passed": true,
+          "island_id": 7
+        },
+        {
+          "name": "area_stretch_p95",
+          "scope": "island",
+          "value": 0.10365817915371439,
+          "limit": 1.1,
+          "passed": true,
+          "island_id": 7
+        },
+        {
+          "name": "exceed_area_fraction",
+          "scope": "island",
+          "value": 0.0006397388518270989,
+          "limit": 0.1,
+          "passed": true,
+          "island_id": 7
+        },
+        {
+          "name": "anisotropy_p95",
+          "scope": "island",
+          "value": 1.2316942840827252,
+          "limit": 1.8,
+          "passed": true,
+          "island_id": 8
+        },
+        {
+          "name": "anisotropy_max",
+          "scope": "island",
+          "value": 1.980418296150809,
+          "limit": 3.0,
+          "passed": true,
+          "island_id": 8
+        },
+        {
+          "name": "area_stretch_mean",
+          "scope": "island",
+          "value": 0.04161502751543193,
+          "limit": 0.6,
+          "passed": true,
+          "island_id": 8
+        },
+        {
+          "name": "area_stretch_p95",
+          "scope": "island",
+          "value": 0.13530786332999953,
+          "limit": 1.1,
+          "passed": true,
+          "island_id": 8
+        },
+        {
+          "name": "exceed_area_fraction",
+          "scope": "island",
+          "value": 0.0030763882190130796,
+          "limit": 0.1,
+          "passed": true,
+          "island_id": 8
+        },
+        {
+          "name": "anisotropy_p95",
+          "scope": "island",
+          "value": 1.2665796101734665,
+          "limit": 1.8,
+          "passed": true,
+          "island_id": 9
+        },
+        {
+          "name": "anisotropy_max",
+          "scope": "island",
+          "value": 1.699973191234734,
+          "limit": 3.0,
+          "passed": true,
+          "island_id": 9
+        },
+        {
+          "name": "area_stretch_mean",
+          "scope": "island",
+          "value": 0.040749348751657186,
+          "limit": 0.6,
+          "passed": true,
+          "island_id": 9
+        },
+        {
+          "name": "area_stretch_p95",
+          "scope": "island",
+          "value": 0.1455883658877428,
+          "limit": 1.1,
+          "passed": true,
+          "island_id": 9
+        },
+        {
+          "name": "exceed_area_fraction",
+          "scope": "island",
+          "value": 0.002881588038670494,
+          "limit": 0.1,
+          "passed": true,
+          "island_id": 9
+        },
+        {
+          "name": "anisotropy_p95",
+          "scope": "island",
+          "value": 1.2213917035953232,
+          "limit": 1.8,
+          "passed": true,
+          "island_id": 10
+        },
+        {
+          "name": "anisotropy_max",
+          "scope": "island",
+          "value": 1.5199608085468463,
+          "limit": 3.0,
+          "passed": true,
+          "island_id": 10
+        },
+        {
+          "name": "area_stretch_mean",
+          "scope": "island",
+          "value": 0.02928542163799719,
+          "limit": 0.6,
+          "passed": true,
+          "island_id": 10
+        },
+        {
+          "name": "area_stretch_p95",
+          "scope": "island",
+          "value": 0.08933299116521845,
+          "limit": 1.1,
+          "passed": true,
+          "island_id": 10
+        },
+        {
+          "name": "exceed_area_fraction",
+          "scope": "island",
+          "value": 0.0,
+          "limit": 0.1,
+          "passed": true,
+          "island_id": 10
+        },
+        {
+          "name": "anisotropy_p95",
+          "scope": "island",
+          "value": 1.1791972130841135,
+          "limit": 1.8,
+          "passed": true,
+          "island_id": 11
+        },
+        {
+          "name": "anisotropy_max",
+          "scope": "island",
+          "value": 1.2291916531214724,
+          "limit": 3.0,
+          "passed": true,
+          "island_id": 11
+        },
+        {
+          "name": "area_stretch_mean",
+          "scope": "island",
+          "value": 0.027200429436555765,
+          "limit": 0.6,
+          "passed": true,
+          "island_id": 11
+        },
+        {
+          "name": "area_stretch_p95",
+          "scope": "island",
+          "value": 0.09084464374628864,
+          "limit": 1.1,
+          "passed": true,
+          "island_id": 11
+        },
+        {
+          "name": "exceed_area_fraction",
+          "scope": "island",
+          "value": 0.0,
+          "limit": 0.1,
+          "passed": true,
+          "island_id": 11
+        },
+        {
+          "name": "anisotropy_p95",
+          "scope": "island",
+          "value": 1.369870752094691,
+          "limit": 1.8,
+          "passed": true,
+          "island_id": 12
+        },
+        {
+          "name": "anisotropy_max",
+          "scope": "island",
+          "value": 1.9340982282541617,
+          "limit": 3.0,
+          "passed": true,
+          "island_id": 12
+        },
+        {
+          "name": "area_stretch_mean",
+          "scope": "island",
+          "value": 0.04120016422323728,
+          "limit": 0.6,
+          "passed": true,
+          "island_id": 12
+        },
+        {
+          "name": "area_stretch_p95",
+          "scope": "island",
+          "value": 0.16073602309627,
+          "limit": 1.1,
+          "passed": true,
+          "island_id": 12
+        },
+        {
+          "name": "exceed_area_fraction",
+          "scope": "island",
+          "value": 0.01688800802992616,
+          "limit": 0.1,
+          "passed": true,
+          "island_id": 12
+        },
+        {
+          "name": "anisotropy_p95",
+          "scope": "island",
+          "value": 1.2106265264947047,
+          "limit": 1.8,
+          "passed": true,
+          "island_id": 13
+        },
+        {
+          "name": "anisotropy_max",
+          "scope": "island",
+          "value": 8.789198998153914,
+          "limit": 3.0,
+          "passed": false,
+          "island_id": 13
+        },
+        {
+          "name": "area_stretch_mean",
+          "scope": "island",
+          "value": 0.04373229036122323,
+          "limit": 0.6,
+          "passed": true,
+          "island_id": 13
+        },
+        {
+          "name": "area_stretch_p95",
+          "scope": "island",
+          "value": 0.12675104173605478,
+          "limit": 1.1,
+          "passed": true,
+          "island_id": 13
+        },
+        {
+          "name": "exceed_area_fraction",
+          "scope": "island",
+          "value": 0.000981869298973764,
+          "limit": 0.1,
+          "passed": true,
+          "island_id": 13
+        },
+        {
+          "name": "anisotropy_p95",
+          "scope": "island",
+          "value": 1.1297033817276718,
+          "limit": 1.8,
+          "passed": true,
+          "island_id": 14
+        },
+        {
+          "name": "anisotropy_max",
+          "scope": "island",
+          "value": 2.8848861990963903,
+          "limit": 3.0,
+          "passed": true,
+          "island_id": 14
+        },
+        {
+          "name": "area_stretch_mean",
+          "scope": "island",
+          "value": 0.018541448650171675,
+          "limit": 0.6,
+          "passed": true,
+          "island_id": 14
+        },
+        {
+          "name": "area_stretch_p95",
+          "scope": "island",
+          "value": 0.04591530674901481,
+          "limit": 1.1,
+          "passed": true,
+          "island_id": 14
+        },
+        {
+          "name": "exceed_area_fraction",
+          "scope": "island",
+          "value": 0.008658349594172604,
+          "limit": 0.1,
+          "passed": true,
+          "island_id": 14
+        },
+        {
+          "name": "anisotropy_p95",
+          "scope": "island",
+          "value": 1.5596697266266668,
+          "limit": 1.8,
+          "passed": true,
+          "island_id": 15
+        },
+        {
+          "name": "anisotropy_max",
+          "scope": "island",
+          "value": 100.31039937373298,
+          "limit": 3.0,
+          "passed": false,
+          "island_id": 15
+        },
+        {
+          "name": "area_stretch_mean",
+          "scope": "island",
+          "value": 0.039005150159721745,
+          "limit": 0.6,
+          "passed": true,
+          "island_id": 15
+        },
+        {
+          "name": "area_stretch_p95",
+          "scope": "island",
+          "value": 0.11794071670450726,
+          "limit": 1.1,
+          "passed": true,
+          "island_id": 15
+        },
+        {
+          "name": "exceed_area_fraction",
+          "scope": "island",
+          "value": 0.013678515943628872,
+          "limit": 0.1,
+          "passed": true,
+          "island_id": 15
+        },
+        {
+          "name": "anisotropy_p95",
+          "scope": "island",
+          "value": 1.1569368514352254,
+          "limit": 1.8,
+          "passed": true,
+          "island_id": 16
+        },
+        {
+          "name": "anisotropy_max",
+          "scope": "island",
+          "value": 4.936405495493039,
+          "limit": 3.0,
+          "passed": false,
+          "island_id": 16
+        },
+        {
+          "name": "area_stretch_mean",
+          "scope": "island",
+          "value": 0.03780232917881369,
+          "limit": 0.6,
+          "passed": true,
+          "island_id": 16
+        },
+        {
+          "name": "area_stretch_p95",
+          "scope": "island",
+          "value": 0.11429157836245951,
+          "limit": 1.1,
+          "passed": true,
+          "island_id": 16
+        },
+        {
+          "name": "exceed_area_fraction",
+          "scope": "island",
+          "value": 0.005902126951546672,
+          "limit": 0.1,
+          "passed": true,
+          "island_id": 16
+        },
+        {
+          "name": "anisotropy_p95",
+          "scope": "island",
+          "value": 1.2171459424893694,
+          "limit": 1.8,
+          "passed": true,
+          "island_id": 17
+        },
+        {
+          "name": "anisotropy_max",
+          "scope": "island",
+          "value": 1.5465231661325571,
+          "limit": 3.0,
+          "passed": true,
+          "island_id": 17
+        },
+        {
+          "name": "area_stretch_mean",
+          "scope": "island",
+          "value": 0.035215066454890954,
+          "limit": 0.6,
+          "passed": true,
+          "island_id": 17
+        },
+        {
+          "name": "area_stretch_p95",
+          "scope": "island",
+          "value": 0.09940491161778856,
+          "limit": 1.1,
+          "passed": true,
+          "island_id": 17
+        },
+        {
+          "name": "exceed_area_fraction",
+          "scope": "island",
+          "value": 0.0,
+          "limit": 0.1,
+          "passed": true,
+          "island_id": 17
+        },
+        {
+          "name": "anisotropy_p95",
+          "scope": "island",
+          "value": 1.3773041367350383,
+          "limit": 1.8,
+          "passed": true,
+          "island_id": 18
+        },
+        {
+          "name": "anisotropy_max",
+          "scope": "island",
+          "value": 2.648823685957376,
+          "limit": 3.0,
+          "passed": true,
+          "island_id": 18
+        },
+        {
+          "name": "area_stretch_mean",
+          "scope": "island",
+          "value": 0.0455701094853635,
+          "limit": 0.6,
+          "passed": true,
+          "island_id": 18
+        },
+        {
+          "name": "area_stretch_p95",
+          "scope": "island",
+          "value": 0.13696524715654795,
+          "limit": 1.1,
+          "passed": true,
+          "island_id": 18
+        },
+        {
+          "name": "exceed_area_fraction",
+          "scope": "island",
+          "value": 0.02177505190651509,
+          "limit": 0.1,
+          "passed": true,
+          "island_id": 18
+        },
+        {
+          "name": "anisotropy_p95",
+          "scope": "island",
+          "value": 1.290677006371998,
+          "limit": 1.8,
+          "passed": true,
+          "island_id": 19
+        },
+        {
+          "name": "anisotropy_max",
+          "scope": "island",
+          "value": 2.8546207517844793,
+          "limit": 3.0,
+          "passed": true,
+          "island_id": 19
+        },
+        {
+          "name": "area_stretch_mean",
+          "scope": "island",
+          "value": 0.04350664027680198,
+          "limit": 0.6,
+          "passed": true,
+          "island_id": 19
+        },
+        {
+          "name": "area_stretch_p95",
+          "scope": "island",
+          "value": 0.15912344849117482,
+          "limit": 1.1,
+          "passed": true,
+          "island_id": 19
+        },
+        {
+          "name": "exceed_area_fraction",
+          "scope": "island",
+          "value": 0.012939508962338,
+          "limit": 0.1,
+          "passed": true,
+          "island_id": 19
+        },
+        {
+          "name": "anisotropy_p95",
+          "scope": "island",
+          "value": 1.1044467890056826,
+          "limit": 1.8,
+          "passed": true,
+          "island_id": 20
+        },
+        {
+          "name": "anisotropy_max",
+          "scope": "island",
+          "value": 1.210720807204218,
+          "limit": 3.0,
+          "passed": true,
+          "island_id": 20
+        },
+        {
+          "name": "area_stretch_mean",
+          "scope": "island",
+          "value": 0.015619411475263238,
+          "limit": 0.6,
+          "passed": true,
+          "island_id": 20
+        },
+        {
+          "name": "area_stretch_p95",
+          "scope": "island",
+          "value": 0.04539819397465189,
+          "limit": 1.1,
+          "passed": true,
+          "island_id": 20
+        },
+        {
+          "name": "exceed_area_fraction",
+          "scope": "island",
+          "value": 0.0,
+          "limit": 0.1,
+          "passed": true,
+          "island_id": 20
+        },
+        {
+          "name": "anisotropy_p95",
+          "scope": "island",
+          "value": 1.0461382928281113,
+          "limit": 1.8,
+          "passed": true,
+          "island_id": 21
+        },
+        {
+          "name": "anisotropy_max",
+          "scope": "island",
+          "value": 1.062179380059323,
+          "limit": 3.0,
+          "passed": true,
+          "island_id": 21
+        },
+        {
+          "name": "area_stretch_mean",
+          "scope": "island",
+          "value": 0.007425390808248049,
+          "limit": 0.6,
+          "passed": true,
+          "island_id": 21
+        },
+        {
+          "name": "area_stretch_p95",
+          "scope": "island",
+          "value": 0.020028654285904515,
+          "limit": 1.1,
+          "passed": true,
+          "island_id": 21
+        },
+        {
+          "name": "exceed_area_fraction",
+          "scope": "island",
+          "value": 0.0,
+          "limit": 0.1,
+          "passed": true,
+          "island_id": 21
+        },
+        {
+          "name": "anisotropy_p95",
+          "scope": "island",
+          "value": 1.3730270695511142,
+          "limit": 1.8,
+          "passed": true,
+          "island_id": 22
+        },
+        {
+          "name": "anisotropy_max",
+          "scope": "island",
+          "value": 2.4026512255017676,
+          "limit": 3.0,
+          "passed": true,
+          "island_id": 22
+        },
+        {
+          "name": "area_stretch_mean",
+          "scope": "island",
+          "value": 0.07434792421268965,
+          "limit": 0.6,
+          "passed": true,
+          "island_id": 22
+        },
+        {
+          "name": "area_stretch_p95",
+          "scope": "island",
+          "value": 0.23591827075116178,
+          "limit": 1.1,
+          "passed": true,
+          "island_id": 22
+        },
+        {
+          "name": "exceed_area_fraction",
+          "scope": "island",
+          "value": 0.01669549406096402,
+          "limit": 0.1,
+          "passed": true,
+          "island_id": 22
+        },
+        {
+          "name": "anisotropy_p95",
+          "scope": "island",
+          "value": 1.0788854942628912,
+          "limit": 1.8,
+          "passed": true,
+          "island_id": 23
+        },
+        {
+          "name": "anisotropy_max",
+          "scope": "island",
+          "value": 1.487539890323166,
+          "limit": 3.0,
+          "passed": true,
+          "island_id": 23
+        },
+        {
+          "name": "area_stretch_mean",
+          "scope": "island",
+          "value": 0.009337767737957848,
+          "limit": 0.6,
+          "passed": true,
+          "island_id": 23
+        },
+        {
+          "name": "area_stretch_p95",
+          "scope": "island",
+          "value": 0.03172323067197308,
+          "limit": 1.1,
+          "passed": true,
+          "island_id": 23
+        },
+        {
+          "name": "exceed_area_fraction",
+          "scope": "island",
+          "value": 0.0,
+          "limit": 0.1,
+          "passed": true,
+          "island_id": 23
+        },
+        {
+          "name": "anisotropy_p95",
+          "scope": "island",
+          "value": 1.2201921178499788,
+          "limit": 1.8,
+          "passed": true,
+          "island_id": 24
+        },
+        {
+          "name": "anisotropy_max",
+          "scope": "island",
+          "value": 1.909766784243579,
+          "limit": 3.0,
+          "passed": true,
+          "island_id": 24
+        },
+        {
+          "name": "area_stretch_mean",
+          "scope": "island",
+          "value": 0.0347503701343879,
+          "limit": 0.6,
+          "passed": true,
+          "island_id": 24
+        },
+        {
+          "name": "area_stretch_p95",
+          "scope": "island",
+          "value": 0.12752399498692787,
+          "limit": 1.1,
+          "passed": true,
+          "island_id": 24
+        },
+        {
+          "name": "exceed_area_fraction",
+          "scope": "island",
+          "value": 0.0008338040316387265,
+          "limit": 0.1,
+          "passed": true,
+          "island_id": 24
+        },
+        {
+          "name": "anisotropy_p95",
+          "scope": "island",
+          "value": 1.0001115084658243,
+          "limit": 1.8,
+          "passed": true,
+          "island_id": 25
+        },
+        {
+          "name": "anisotropy_max",
+          "scope": "island",
+          "value": 1.0001115084658243,
+          "limit": 3.0,
+          "passed": true,
+          "island_id": 25
+        },
+        {
+          "name": "area_stretch_mean",
+          "scope": "island",
+          "value": 1.2054719930230263e-05,
+          "limit": 0.6,
+          "passed": true,
+          "island_id": 25
+        },
+        {
+          "name": "area_stretch_p95",
+          "scope": "island",
+          "value": 1.2054719930230262e-05,
+          "limit": 1.1,
+          "passed": true,
+          "island_id": 25
+        },
+        {
+          "name": "exceed_area_fraction",
+          "scope": "island",
+          "value": 0.0,
+          "limit": 0.1,
+          "passed": true,
+          "island_id": 25
+        },
+        {
+          "name": "anisotropy_p95",
+          "scope": "island",
+          "value": 1.0000184353251753,
+          "limit": 1.8,
+          "passed": true,
+          "island_id": 26
+        },
+        {
+          "name": "anisotropy_max",
+          "scope": "island",
+          "value": 1.0000184353251753,
+          "limit": 3.0,
+          "passed": true,
+          "island_id": 26
+        },
+        {
+          "name": "area_stretch_mean",
+          "scope": "island",
+          "value": 1.4145968008518226e-05,
+          "limit": 0.6,
+          "passed": true,
+          "island_id": 26
+        },
+        {
+          "name": "area_stretch_p95",
+          "scope": "island",
+          "value": 1.4145968008518226e-05,
+          "limit": 1.1,
+          "passed": true,
+          "island_id": 26
+        },
+        {
+          "name": "exceed_area_fraction",
+          "scope": "island",
+          "value": 0.0,
+          "limit": 0.1,
+          "passed": true,
+          "island_id": 26
+        },
+        {
+          "name": "anisotropy_p95",
+          "scope": "island",
+          "value": 1.3022915139155222,
+          "limit": 1.8,
+          "passed": true,
+          "island_id": 27
+        },
+        {
+          "name": "anisotropy_max",
+          "scope": "island",
+          "value": 1.4678081627056647,
+          "limit": 3.0,
+          "passed": true,
+          "island_id": 27
+        },
+        {
+          "name": "area_stretch_mean",
+          "scope": "island",
+          "value": 0.04929756862212216,
+          "limit": 0.6,
+          "passed": true,
+          "island_id": 27
+        },
+        {
+          "name": "area_stretch_p95",
+          "scope": "island",
+          "value": 0.14287946384119768,
+          "limit": 1.1,
+          "passed": true,
+          "island_id": 27
+        },
+        {
+          "name": "exceed_area_fraction",
+          "scope": "island",
+          "value": 0.0,
+          "limit": 0.1,
+          "passed": true,
+          "island_id": 27
+        },
+        {
+          "name": "anisotropy_p95",
+          "scope": "island",
+          "value": 1.0475347930854715,
+          "limit": 1.8,
+          "passed": true,
+          "island_id": 28
+        },
+        {
+          "name": "anisotropy_max",
+          "scope": "island",
+          "value": 1.087451167070484,
+          "limit": 3.0,
+          "passed": true,
+          "island_id": 28
+        },
+        {
+          "name": "area_stretch_mean",
+          "scope": "island",
+          "value": 0.010565390020851889,
+          "limit": 0.6,
+          "passed": true,
+          "island_id": 28
+        },
+        {
+          "name": "area_stretch_p95",
+          "scope": "island",
+          "value": 0.02817896425449927,
+          "limit": 1.1,
+          "passed": true,
+          "island_id": 28
+        },
+        {
+          "name": "exceed_area_fraction",
+          "scope": "island",
+          "value": 0.0,
+          "limit": 0.1,
+          "passed": true,
+          "island_id": 28
+        },
+        {
+          "name": "anisotropy_p95",
+          "scope": "island",
+          "value": 1.8476185400945668,
+          "limit": 1.8,
+          "passed": false,
+          "island_id": 29
+        },
+        {
+          "name": "anisotropy_max",
+          "scope": "island",
+          "value": 1.8476185400945668,
+          "limit": 3.0,
+          "passed": true,
+          "island_id": 29
+        },
+        {
+          "name": "area_stretch_mean",
+          "scope": "island",
+          "value": 9.092206471004277e-05,
+          "limit": 0.6,
+          "passed": true,
+          "island_id": 29
+        },
+        {
+          "name": "area_stretch_p95",
+          "scope": "island",
+          "value": 9.092206471004277e-05,
+          "limit": 1.1,
+          "passed": true,
+          "island_id": 29
+        },
+        {
+          "name": "exceed_area_fraction",
+          "scope": "island",
+          "value": 1.0,
+          "limit": 0.1,
+          "passed": false,
+          "island_id": 29
+        },
+        {
+          "name": "anisotropy_p95",
+          "scope": "island",
+          "value": 1.431720725653166,
+          "limit": 1.8,
+          "passed": true,
+          "island_id": 30
+        },
+        {
+          "name": "anisotropy_max",
+          "scope": "island",
+          "value": 1.431720725653166,
+          "limit": 3.0,
+          "passed": true,
+          "island_id": 30
+        },
+        {
+          "name": "area_stretch_mean",
+          "scope": "island",
+          "value": 0.03646273495059025,
+          "limit": 0.6,
+          "passed": true,
+          "island_id": 30
+        },
+        {
+          "name": "area_stretch_p95",
+          "scope": "island",
+          "value": 0.11526392049153016,
+          "limit": 1.1,
+          "passed": true,
+          "island_id": 30
+        },
+        {
+          "name": "exceed_area_fraction",
+          "scope": "island",
+          "value": 0.0,
+          "limit": 0.1,
+          "passed": true,
+          "island_id": 30
+        },
+        {
+          "name": "anisotropy_p95",
+          "scope": "island",
+          "value": 1.0000967618935859,
+          "limit": 1.8,
+          "passed": true,
+          "island_id": 31
+        },
+        {
+          "name": "anisotropy_max",
+          "scope": "island",
+          "value": 1.0000967618935859,
+          "limit": 3.0,
+          "passed": true,
+          "island_id": 31
+        },
+        {
+          "name": "area_stretch_mean",
+          "scope": "island",
+          "value": 6.811258744434898e-05,
+          "limit": 0.6,
+          "passed": true,
+          "island_id": 31
+        },
+        {
+          "name": "area_stretch_p95",
+          "scope": "island",
+          "value": 6.811258744434898e-05,
+          "limit": 1.1,
+          "passed": true,
+          "island_id": 31
+        },
+        {
+          "name": "exceed_area_fraction",
+          "scope": "island",
+          "value": 0.0,
+          "limit": 0.1,
+          "passed": true,
+          "island_id": 31
+        },
+        {
+          "name": "anisotropy_p95",
+          "scope": "island",
+          "value": 1.0000724952676883,
+          "limit": 1.8,
+          "passed": true,
+          "island_id": 32
+        },
+        {
+          "name": "anisotropy_max",
+          "scope": "island",
+          "value": 1.0000724952676883,
+          "limit": 3.0,
+          "passed": true,
+          "island_id": 32
+        },
+        {
+          "name": "area_stretch_mean",
+          "scope": "island",
+          "value": 1.2370808869530422e-05,
+          "limit": 0.6,
+          "passed": true,
+          "island_id": 32
+        },
+        {
+          "name": "area_stretch_p95",
+          "scope": "island",
+          "value": 1.2370808869530424e-05,
+          "limit": 1.1,
+          "passed": true,
+          "island_id": 32
+        },
+        {
+          "name": "exceed_area_fraction",
+          "scope": "island",
+          "value": 0.0,
+          "limit": 0.1,
+          "passed": true,
+          "island_id": 32
+        },
+        {
+          "name": "anisotropy_p95",
+          "scope": "island",
+          "value": 1.202382333156763,
+          "limit": 1.8,
+          "passed": true,
+          "island_id": 33
+        },
+        {
+          "name": "anisotropy_max",
+          "scope": "island",
+          "value": 2.026461987674099,
+          "limit": 3.0,
+          "passed": true,
+          "island_id": 33
+        },
+        {
+          "name": "area_stretch_mean",
+          "scope": "island",
+          "value": 0.04673216045945218,
+          "limit": 0.6,
+          "passed": true,
+          "island_id": 33
+        },
+        {
+          "name": "area_stretch_p95",
+          "scope": "island",
+          "value": 0.13110860806372093,
+          "limit": 1.1,
+          "passed": true,
+          "island_id": 33
+        },
+        {
+          "name": "exceed_area_fraction",
+          "scope": "island",
+          "value": 0.001148577144043623,
+          "limit": 0.1,
+          "passed": true,
+          "island_id": 33
+        },
+        {
+          "name": "anisotropy_p95",
+          "scope": "island",
+          "value": 1.3075645180089164,
+          "limit": 1.8,
+          "passed": true,
+          "island_id": 34
+        },
+        {
+          "name": "anisotropy_max",
+          "scope": "island",
+          "value": 2.0259398505780486,
+          "limit": 3.0,
+          "passed": true,
+          "island_id": 34
+        },
+        {
+          "name": "area_stretch_mean",
+          "scope": "island",
+          "value": 0.06108125421676465,
+          "limit": 0.6,
+          "passed": true,
+          "island_id": 34
+        },
+        {
+          "name": "area_stretch_p95",
+          "scope": "island",
+          "value": 0.2324742193752842,
+          "limit": 1.1,
+          "passed": true,
+          "island_id": 34
+        },
+        {
+          "name": "exceed_area_fraction",
+          "scope": "island",
+          "value": 0.018801563066954623,
+          "limit": 0.1,
+          "passed": true,
+          "island_id": 34
+        },
+        {
+          "name": "anisotropy_p95",
+          "scope": "island",
+          "value": 1.2404750752535978,
+          "limit": 1.8,
+          "passed": true,
+          "island_id": 35
+        },
+        {
+          "name": "anisotropy_max",
+          "scope": "island",
+          "value": 1.555770325407681,
+          "limit": 3.0,
+          "passed": true,
+          "island_id": 35
+        },
+        {
+          "name": "area_stretch_mean",
+          "scope": "island",
+          "value": 0.0248498079934998,
+          "limit": 0.6,
+          "passed": true,
+          "island_id": 35
+        },
+        {
+          "name": "area_stretch_p95",
+          "scope": "island",
+          "value": 0.08554706026857299,
+          "limit": 1.1,
+          "passed": true,
+          "island_id": 35
+        },
+        {
+          "name": "exceed_area_fraction",
+          "scope": "island",
+          "value": 0.0,
+          "limit": 0.1,
+          "passed": true,
+          "island_id": 35
+        },
+        {
+          "name": "anisotropy_p95",
+          "scope": "island",
+          "value": 1.2216720045064193,
+          "limit": 1.8,
+          "passed": true,
+          "island_id": 36
+        },
+        {
+          "name": "anisotropy_max",
+          "scope": "island",
+          "value": 1.2216720045064193,
+          "limit": 3.0,
+          "passed": true,
+          "island_id": 36
+        },
+        {
+          "name": "area_stretch_mean",
+          "scope": "island",
+          "value": 0.031732841908299704,
+          "limit": 0.6,
+          "passed": true,
+          "island_id": 36
+        },
+        {
+          "name": "area_stretch_p95",
+          "scope": "island",
+          "value": 0.08603810786283328,
+          "limit": 1.1,
+          "passed": true,
+          "island_id": 36
+        },
+        {
+          "name": "exceed_area_fraction",
+          "scope": "island",
+          "value": 0.0,
+          "limit": 0.1,
+          "passed": true,
+          "island_id": 36
+        },
+        {
+          "name": "anisotropy_p95",
+          "scope": "island",
+          "value": 1.000023897919726,
+          "limit": 1.8,
+          "passed": true,
+          "island_id": 37
+        },
+        {
+          "name": "anisotropy_max",
+          "scope": "island",
+          "value": 1.000023897919726,
+          "limit": 3.0,
+          "passed": true,
+          "island_id": 37
+        },
+        {
+          "name": "area_stretch_mean",
+          "scope": "island",
+          "value": 6.398946330465987e-06,
+          "limit": 0.6,
+          "passed": true,
+          "island_id": 37
+        },
+        {
+          "name": "area_stretch_p95",
+          "scope": "island",
+          "value": 6.398946330465987e-06,
+          "limit": 1.1,
+          "passed": true,
+          "island_id": 37
+        },
+        {
+          "name": "exceed_area_fraction",
+          "scope": "island",
+          "value": 0.0,
+          "limit": 0.1,
+          "passed": true,
+          "island_id": 37
+        },
+        {
+          "name": "anisotropy_p95",
+          "scope": "island",
+          "value": 1.0000401335466969,
+          "limit": 1.8,
+          "passed": true,
+          "island_id": 38
+        },
+        {
+          "name": "anisotropy_max",
+          "scope": "island",
+          "value": 1.0000401335466969,
+          "limit": 3.0,
+          "passed": true,
+          "island_id": 38
+        },
+        {
+          "name": "area_stretch_mean",
+          "scope": "island",
+          "value": 5.846287395619397e-06,
+          "limit": 0.6,
+          "passed": true,
+          "island_id": 38
+        },
+        {
+          "name": "area_stretch_p95",
+          "scope": "island",
+          "value": 5.846287395619397e-06,
+          "limit": 1.1,
+          "passed": true,
+          "island_id": 38
+        },
+        {
+          "name": "exceed_area_fraction",
+          "scope": "island",
+          "value": 0.0,
+          "limit": 0.1,
+          "passed": true,
+          "island_id": 38
+        },
+        {
+          "name": "anisotropy_p95",
+          "scope": "island",
+          "value": 1.0002450467886073,
+          "limit": 1.8,
+          "passed": true,
+          "island_id": 39
+        },
+        {
+          "name": "anisotropy_max",
+          "scope": "island",
+          "value": 1.0002450467886073,
+          "limit": 3.0,
+          "passed": true,
+          "island_id": 39
+        },
+        {
+          "name": "area_stretch_mean",
+          "scope": "island",
+          "value": 0.00013908464898486385,
+          "limit": 0.6,
+          "passed": true,
+          "island_id": 39
+        },
+        {
+          "name": "area_stretch_p95",
+          "scope": "island",
+          "value": 0.00013908464898486385,
+          "limit": 1.1,
+          "passed": true,
+          "island_id": 39
+        },
+        {
+          "name": "exceed_area_fraction",
+          "scope": "island",
+          "value": 0.0,
+          "limit": 0.1,
+          "passed": true,
+          "island_id": 39
+        },
+        {
+          "name": "anisotropy_p95",
+          "scope": "island",
+          "value": 1.0000308952711874,
+          "limit": 1.8,
+          "passed": true,
+          "island_id": 40
+        },
+        {
+          "name": "anisotropy_max",
+          "scope": "island",
+          "value": 1.0000308952711874,
+          "limit": 3.0,
+          "passed": true,
+          "island_id": 40
+        },
+        {
+          "name": "area_stretch_mean",
+          "scope": "island",
+          "value": 1.6724219899208256e-05,
+          "limit": 0.6,
+          "passed": true,
+          "island_id": 40
+        },
+        {
+          "name": "area_stretch_p95",
+          "scope": "island",
+          "value": 1.6724219899208256e-05,
+          "limit": 1.1,
+          "passed": true,
+          "island_id": 40
+        },
+        {
+          "name": "exceed_area_fraction",
+          "scope": "island",
+          "value": 0.0,
+          "limit": 0.1,
+          "passed": true,
+          "island_id": 40
+        },
+        {
+          "name": "anisotropy_p95",
+          "scope": "island",
+          "value": 1.0008782887406138,
+          "limit": 1.8,
+          "passed": true,
+          "island_id": 41
+        },
+        {
+          "name": "anisotropy_max",
+          "scope": "island",
+          "value": 1.0008782887406138,
+          "limit": 3.0,
+          "passed": true,
+          "island_id": 41
+        },
+        {
+          "name": "area_stretch_mean",
+          "scope": "island",
+          "value": 0.00019362374056504204,
+          "limit": 0.6,
+          "passed": true,
+          "island_id": 41
+        },
+        {
+          "name": "area_stretch_p95",
+          "scope": "island",
+          "value": 0.00019362374056504204,
+          "limit": 1.1,
+          "passed": true,
+          "island_id": 41
+        },
+        {
+          "name": "exceed_area_fraction",
+          "scope": "island",
+          "value": 0.0,
+          "limit": 0.1,
+          "passed": true,
+          "island_id": 41
+        },
+        {
+          "name": "anisotropy_p95",
+          "scope": "island",
+          "value": 1.000122628275857,
+          "limit": 1.8,
+          "passed": true,
+          "island_id": 42
+        },
+        {
+          "name": "anisotropy_max",
+          "scope": "island",
+          "value": 1.000122628275857,
+          "limit": 3.0,
+          "passed": true,
+          "island_id": 42
+        },
+        {
+          "name": "area_stretch_mean",
+          "scope": "island",
+          "value": 2.043125446377377e-05,
+          "limit": 0.6,
+          "passed": true,
+          "island_id": 42
+        },
+        {
+          "name": "area_stretch_p95",
+          "scope": "island",
+          "value": 2.043125446377377e-05,
+          "limit": 1.1,
+          "passed": true,
+          "island_id": 42
+        },
+        {
+          "name": "exceed_area_fraction",
+          "scope": "island",
+          "value": 0.0,
+          "limit": 0.1,
+          "passed": true,
+          "island_id": 42
+        },
+        {
+          "name": "anisotropy_p95",
+          "scope": "island",
+          "value": 1.0000379736363627,
+          "limit": 1.8,
+          "passed": true,
+          "island_id": 43
+        },
+        {
+          "name": "anisotropy_max",
+          "scope": "island",
+          "value": 1.0000379736363627,
+          "limit": 3.0,
+          "passed": true,
+          "island_id": 43
+        },
+        {
+          "name": "area_stretch_mean",
+          "scope": "island",
+          "value": 1.8600229036840425e-05,
+          "limit": 0.6,
+          "passed": true,
+          "island_id": 43
+        },
+        {
+          "name": "area_stretch_p95",
+          "scope": "island",
+          "value": 1.8600229036840425e-05,
+          "limit": 1.1,
+          "passed": true,
+          "island_id": 43
+        },
+        {
+          "name": "exceed_area_fraction",
+          "scope": "island",
+          "value": 0.0,
+          "limit": 0.1,
+          "passed": true,
+          "island_id": 43
+        },
+        {
+          "name": "anisotropy_p95",
+          "scope": "island",
+          "value": 1.000013502026101,
+          "limit": 1.8,
+          "passed": true,
+          "island_id": 44
+        },
+        {
+          "name": "anisotropy_max",
+          "scope": "island",
+          "value": 1.000013502026101,
+          "limit": 3.0,
+          "passed": true,
+          "island_id": 44
+        },
+        {
+          "name": "area_stretch_mean",
+          "scope": "island",
+          "value": 7.4833226350336925e-06,
+          "limit": 0.6,
+          "passed": true,
+          "island_id": 44
+        },
+        {
+          "name": "area_stretch_p95",
+          "scope": "island",
+          "value": 7.4833226350336925e-06,
+          "limit": 1.1,
+          "passed": true,
+          "island_id": 44
+        },
+        {
+          "name": "exceed_area_fraction",
+          "scope": "island",
+          "value": 0.0,
+          "limit": 0.1,
+          "passed": true,
+          "island_id": 44
+        },
+        {
+          "name": "uv_degenerate_triangles",
+          "scope": "global",
+          "value": 0.0,
+          "limit": 0.0,
+          "passed": true
+        }
+      ]
+    },
+    "catastrophic": {
+      "metric_version": 1,
+      "thresholds": {
+        "anisotropy_hard_max": 8.0,
+        "anisotropy_warn": 4.0,
+        "near_collapse_ratio": 0.0001,
+        "max_uv_triangle_aspect": 40.0,
+        "needle_3d_aspect_factor": 2.0,
+        "local_area_ratio_min": 0.04,
+        "local_area_ratio_max": 25.0,
+        "bad_area_fraction_cap": 0.005,
+        "min_cluster_area_fraction": 1e-05
+      },
+      "valid": true,
+      "hard_failed": true,
+      "region_failed": true,
+      "passed": false,
+      "bad_triangle_count": 9,
+      "bad_region_count": 3,
+      "bad_area_fraction": 5.723151376214575e-05,
+      "max_anisotropy": 100.31039937373298,
+      "max_uv_triangle_aspect": 120.41847665202147,
+      "near_collapse_count": 0,
+      "needle_count": 2,
+      "anisotropy_hard_count": 7,
+      "area_explosion_count": 2,
+      "area_collapse_count": 0,
+      "invalid_count": 0,
+      "input_defect_count": 0,
+      "warn_triangle_count": 12,
+      "boundary_spike_region_count": 0,
+      "self_overlap_region_count": 0,
+      "flip_region_count": 0,
+      "bad_face_ids": [
+        78,
+        446,
+        558,
+        2423,
+        2546,
+        8113,
+        8143,
+        8499,
+        10288
+      ],
+      "island_bad_counts": {
+        "2": 1,
+        "4": 4,
+        "5": 1,
+        "13": 1,
+        "15": 2
+      },
+      "triangle_count": 12000,
+      "region_face_ids": [
+        [
+          78
+        ],
+        [
+          446
+        ],
+        [
+          2423,
+          2546,
+          8499
+        ],
+        [
+          558
+        ],
+        [
+          10288
+        ],
+        [
+          8113
+        ],
+        [
+          8143
+        ]
+      ],
+      "checks": [
+        {
+          "name": "catastrophic_hard",
+          "passed": false
+        },
+        {
+          "name": "catastrophic_region",
+          "passed": false
+        },
+        {
+          "name": "catastrophic_valid",
+          "passed": true
+        }
+      ]
+    },
+    "repair": {
+      "rounds": 1,
+      "reunwrap_accepted": 0,
+      "relief_accepted": 0,
+      "rejected": 1,
+      "reason": "island_cap_reached",
+      "bad_triangles_before": 0,
+      "bad_triangles_after": 0,
+      "bad_area_before": 0.0,
+      "bad_area_after": 0.0,
+      "island_count_before": null,
+      "island_count_after": null,
+      "rows": [
+        {
+          "round": 0,
+          "action": "reject_region",
+          "reason": "island_cap_reached",
+          "region_id": 2,
+          "target_island": 5,
+          "before": 78.94028479800821,
+          "after": 78.94028479800821,
+          "improvement_ratio": 0.0,
+          "added_edges": [],
+          "candidate_kind": null,
+          "candidates_evaluated": 3,
+          "bad_triangles_before": 0,
+          "bad_triangles_after": 0,
+          "bad_area_before": 0.0,
+          "bad_area_after": 0.0
+        }
+      ],
+      "overrides": 0
+    },
+    "correctness": {
+      "passed": false,
+      "checks": [
+        {
+          "name": "overlap",
+          "passed": false,
+          "value": 0.00047221383545693755,
+          "limit": 1e-08
+        },
+        {
+          "name": "orientation",
+          "passed": true,
+          "value": 0,
+          "limit": 0
+        },
+        {
+          "name": "degenerate",
+          "passed": true,
+          "value": 0,
+          "limit": 0
+        },
+        {
+          "name": "bounds",
+          "passed": true,
+          "value": [
+            0.008576877415180206,
+            0.00390625,
+            0.9914231300354004,
+            0.99609375
+          ],
+          "limit": [
+            -0.0001,
+            1.0001
+          ]
+        },
+        {
+          "name": "island_gap",
+          "passed": true,
+          "value": 5.360220572239688,
+          "limit": 4.0
+        },
+        {
+          "name": "border_gap",
+          "passed": true,
+          "value": 4.0,
+          "limit": 4.0
+        }
+      ]
+    },
+    "mandatory": {
+      "mandatory_90_edges": 323,
+      "mandatory_90_missing": 0,
+      "mandatory_fold_edges": 323,
+      "mandatory_boundary_edges": 0,
+      "mandatory_non_manifold_edges": 0,
+      "mandatory_fold_missing": 0,
+      "mandatory_boundary_missing": 0,
+      "mandatory_non_manifold_missing": 0,
+      "mandatory_90_fold_edges": 323,
+      "mandatory_90_uv_unsplit": 0,
+      "uv_unsplit_edge_ids": [],
+      "passed": true
+    },
+    "fragmentation": {
+      "metrics": {
+        "island_count": 45,
+        "tiny_island_count": 23,
+        "tiny_island_area_ratio": 0.017564138458971437,
+        "sliver_island_count": 12,
+        "one_two_face_island_count": 13,
+        "one_two_face_island_ratio": 0.28888888888888886,
+        "island_aspect_p95": 42.47308775832329,
+        "zero_area_island_count": 0,
+        "below_min_area_island_count": 6,
+        "normalized_seam_length": 19.88031130953184,
+        "seam_length_total": 11600.850398057568,
+        "bbox_diagonal": 583.5346447766846,
+        "texture_size_px": 1024,
+        "min_island_width_px": 0.45163828785736304,
+        "island_area_px2_min": 1.7498732002541146
+      },
+      "passed": false,
+      "hard_passed": false,
+      "quality_passed": false,
+      "failures": [
+        "below_min_area_islands",
+        "sliver_islands",
+        "island_min_width_px",
+        "island_min_area_px2",
+        "island_bbox_aspect",
+        "island_perimeter_area_ratio"
+      ],
+      "quality_failures": [
+        "tiny_island_count",
+        "island_aspect_p95"
+      ],
+      "exempt_islands": [
+        25,
+        26,
+        29,
+        31,
+        32,
+        39,
+        40,
+        41,
+        42,
+        44
+      ],
+      "tiny_island_ids": [
+        11,
+        12,
+        14,
+        15,
+        21,
+        25,
+        26,
+        28,
+        29,
+        30,
+        31,
+        32,
+        34,
+        35,
+        36,
+        37,
+        38,
+        39,
+        40,
+        41,
+        42,
+        43,
+        44
+      ],
+      "sliver_island_ids": [
+        23,
+        25,
+        26,
+        29,
+        31,
+        32,
+        38,
+        39,
+        40,
+        41,
+        42,
+        44
+      ],
+      "checks": [
+        {
+          "name": "zero_area_islands",
+          "scope": "hard",
+          "value": 0,
+          "limit": 0,
+          "passed": true
+        },
+        {
+          "name": "below_min_area_islands",
+          "scope": "hard",
+          "value": 6,
+          "limit": 0,
+          "passed": false
+        },
+        {
+          "name": "sliver_islands",
+          "scope": "hard",
+          "value": 2,
+          "limit": 0,
+          "passed": false
+        },
+        {
+          "name": "tiny_island_count",
+          "scope": "quality",
+          "value": 23,
+          "limit": 8,
+          "passed": false
+        },
+        {
+          "name": "tiny_island_area_ratio",
+          "scope": "quality",
+          "value": 0.017564138458971437,
+          "limit": 0.05,
+          "passed": true
+        },
+        {
+          "name": "island_aspect_p95",
+          "scope": "quality",
+          "value": 42.47308775832329,
+          "limit": 6.0,
+          "passed": false
+        },
+        {
+          "name": "island_min_width_px",
+          "scope": "hard",
+          "value": 6,
+          "limit": 0,
+          "passed": false
+        },
+        {
+          "name": "island_min_area_px2",
+          "scope": "hard",
+          "value": 6,
+          "limit": 0,
+          "passed": false
+        },
+        {
+          "name": "island_bbox_aspect",
+          "scope": "hard",
+          "value": 2,
+          "limit": 0,
+          "passed": false
+        },
+        {
+          "name": "island_perimeter_area_ratio",
+          "scope": "hard",
+          "value": 3,
+          "limit": 0,
+          "passed": false
+        },
+        {
+          "name": "tiny_island_area_fraction",
+          "scope": "quality",
+          "value": 0.017564138458971437,
+          "limit": 0.02,
+          "passed": true
+        }
+      ]
+    },
+    "texel_density": {
+      "passed": true,
+      "valid": true,
+      "failures": [],
+      "density_mean": 1.2411117622872345,
+      "density_cv": 4.456492566327548e-07,
+      "outlier_count": 0,
+      "outlier_island_ids": [],
+      "unmeasurable_island_count": 0,
+      "intentional_weighting_applied": false
+    },
+    "packing": {
+      "efficiency": 0.378257024888527,
+      "limit": 0.42,
+      "passed": false,
+      "advisory": true,
+      "uv_area_total": 0.36886405803709527
+    },
+    "island_connectivity": {
+      "seam_islands": 45,
+      "uv_islands": 45,
+      "passed": true
+    },
+    "border_inset": {
+      "applied": false,
+      "scale": 1.0,
+      "translation": [
+        0.0,
+        0.0
+      ],
+      "bbox_before": [
+        0.008576877415180206,
+        0.00390625,
+        0.9914231300354004,
+        0.99609375
+      ],
+      "bbox_after": [
+        0.008576877415180206,
+        0.00390625,
+        0.9914231300354004,
+        0.99609375
+      ],
+      "border_margin_px": 4.0,
+      "border_margin_uv": 0.00390625
+    },
+    "merge_back": {
+      "enabled": true,
+      "complete": true,
+      "reason": "no_removable_seam",
+      "mode": "repair",
+      "trials": 35,
+      "accepted": 1,
+      "island_count_before": 46,
+      "island_count_after": 45,
+      "seam_length_before": 11629.202943795293,
+      "seam_length_after": 11600.850398057568,
+      "normalized_seam_length_before": 19.928898905815135,
+      "normalized_seam_length_after": 19.88031130953184,
+      "removable_remaining": 0,
+      "removed_edges": [
+        3719,
+        5382,
+        12065,
+        12085,
+        12143
+      ],
+      "stale_overrides": [],
+      "history": [
+        {
+          "trial": 1,
+          "island_a": 6,
+          "island_b": 36,
+          "edges": [
+            980,
+            2729,
+            3344,
+            4364,
+            4375,
+            4381,
+            4494,
+            5123,
+            6104,
+            6212,
+            6213,
+            6739,
+            7781,
+            9429,
+            9431,
+            9434,
+            9525,
+            11089,
+            11098,
+            11750,
+            11755,
+            12805,
+            13974,
+            13998,
+            14248,
+            14796,
+            15128,
+            15129,
+            15333,
+            15917,
+            16253,
+            17031
+          ],
+          "shared_length": 199.55725239032097,
+          "island_count_before": 46,
+          "gap_repack": null,
+          "mode": "repair",
+          "accepted": false,
+          "reason": "catastrophic_worse",
+          "hard_failures": [
+            "quality_profile_failed",
+            "correctness_failed",
+            "catastrophic_failed",
+            "fragmentation_failed"
+          ],
+          "island_count_after": 45,
+          "elapsed_s": 9.90025139998761
+        },
+        {
+          "trial": 2,
+          "island_a": 18,
+          "island_b": 19,
+          "edges": [
+            226,
+            1992,
+            3723,
+            9832,
+            10353,
+            13256,
+            13745,
+            17157
+          ],
+          "shared_length": 53.30473871525865,
+          "island_count_before": 46,
+          "gap_repack": null,
+          "mode": "repair",
+          "accepted": false,
+          "reason": "catastrophic_worse",
+          "hard_failures": [
+            "quality_profile_failed",
+            "correctness_failed",
+            "catastrophic_failed",
+            "fragmentation_failed"
+          ],
+          "island_count_after": 45,
+          "elapsed_s": 10.234499699989101
+        },
+        {
+          "trial": 3,
+          "island_a": 4,
+          "island_b": 35,
+          "edges": [
+            941,
+            1002,
+            6084,
+            6727,
+            12754,
+            12821,
+            17390
+          ],
+          "shared_length": 48.16081047009091,
+          "island_count_before": 46,
+          "gap_repack": null,
+          "mode": "repair",
+          "accepted": false,
+          "reason": "catastrophic_worse",
+          "hard_failures": [
+            "quality_profile_failed",
+            "correctness_failed",
+            "catastrophic_failed",
+            "fragmentation_failed"
+          ],
+          "island_count_after": 45,
+          "elapsed_s": 9.895763700013049
+        },
+        {
+          "trial": 4,
+          "island_a": 20,
+          "island_b": 35,
+          "edges": [
+            999,
+            1164,
+            11247
+          ],
+          "shared_length": 35.30577278916661,
+          "island_count_before": 46,
+          "gap_repack": null,
+          "mode": "repair",
+          "accepted": false,
+          "reason": "catastrophic_worse",
+          "hard_failures": [
+            "quality_profile_failed",
+            "correctness_failed",
+            "catastrophic_failed",
+            "fragmentation_failed"
+          ],
+          "island_count_after": 45,
+          "elapsed_s": 10.208796799997799
+        },
+        {
+          "trial": 5,
+          "island_a": 3,
+          "island_b": 22,
+          "edges": [
+            4833,
+            7303,
+            10400,
+            10401,
+            11516,
+            14939
+          ],
+          "shared_length": 32.839118677127324,
+          "island_count_before": 46,
+          "gap_repack": null,
+          "mode": "repair",
+          "accepted": false,
+          "reason": "catastrophic_worse",
+          "hard_failures": [
+            "quality_profile_failed",
+            "correctness_failed",
+            "catastrophic_failed",
+            "fragmentation_failed"
+          ],
+          "island_count_after": 45,
+          "elapsed_s": 10.100419900001725
+        },
+        {
+          "trial": 6,
+          "island_a": 0,
+          "island_b": 19,
+          "edges": [
+            3719,
+            5382,
+            12065,
+            12085,
+            12143
+          ],
+          "shared_length": 28.352545737725016,
+          "island_count_before": 46,
+          "gap_repack": null,
+          "mode": "repair",
+          "accepted": true,
+          "reason": "accepted_repair",
+          "hard_failures": [
+            "quality_profile_failed",
+            "correctness_failed",
+            "catastrophic_failed",
+            "fragmentation_failed"
+          ],
+          "island_count_after": 45,
+          "elapsed_s": 9.834520699980203
+        },
+        {
+          "trial": 7,
+          "island_a": 11,
+          "island_b": 12,
+          "edges": [
+            13316,
+            14351,
+            14889
+          ],
+          "shared_length": 21.42929113206569,
+          "island_count_before": 45,
+          "gap_repack": null,
+          "mode": "repair",
+          "accepted": false,
+          "reason": "catastrophic_worse",
+          "hard_failures": [
+            "quality_profile_failed",
+            "correctness_failed",
+            "catastrophic_failed",
+            "fragmentation_failed"
+          ],
+          "island_count_after": 44,
+          "elapsed_s": 9.952257600001758
+        },
+        {
+          "trial": 8,
+          "island_a": 9,
+          "island_b": 11,
+          "edges": [
+            6560,
+            8225,
+            10574,
+            13315,
+            16429,
+            16725
+          ],
+          "shared_length": 21.319464910630423,
+          "island_count_before": 45,
+          "gap_repack": null,
+          "mode": "repair",
+          "accepted": false,
+          "reason": "catastrophic_worse",
+          "hard_failures": [
+            "quality_profile_failed",
+            "correctness_failed",
+            "catastrophic_failed",
+            "fragmentation_failed"
+          ],
+          "island_count_after": 44,
+          "elapsed_s": 10.351698300015414
+        },
+        {
+          "trial": 9,
+          "island_a": 9,
+          "island_b": 28,
+          "edges": [
+            5621,
+            12262
+          ],
+          "shared_length": 11.937548157597487,
+          "island_count_before": 45,
+          "gap_repack": null,
+          "mode": "repair",
+          "accepted": false,
+          "reason": "catastrophic_worse",
+          "hard_failures": [
+            "quality_profile_failed",
+            "correctness_failed",
+            "catastrophic_failed",
+            "fragmentation_failed"
+          ],
+          "island_count_after": 44,
+          "elapsed_s": 9.854806499992264
+        },
+        {
+          "trial": 10,
+          "island_a": 16,
+          "island_b": 34,
+          "edges": [
+            6754
+          ],
+          "shared_length": 9.138186207313773,
+          "island_count_before": 45,
+          "gap_repack": null,
+          "mode": "repair",
+          "accepted": false,
+          "reason": "catastrophic_worse",
+          "hard_failures": [
+            "quality_profile_failed",
+            "correctness_failed",
+            "catastrophic_failed",
+            "fragmentation_failed"
+          ],
+          "island_count_after": 44,
+          "elapsed_s": 9.947198400011985
+        },
+        {
+          "trial": 11,
+          "island_a": 13,
+          "island_b": 36,
+          "edges": [
+            1476,
+            8397,
+            16257
+          ],
+          "shared_length": 8.880979672654146,
+          "island_count_before": 45,
+          "gap_repack": null,
+          "mode": "repair",
+          "accepted": false,
+          "reason": "catastrophic_worse",
+          "hard_failures": [
+            "quality_profile_failed",
+            "correctness_failed",
+            "catastrophic_failed",
+            "fragmentation_failed"
+          ],
+          "island_count_after": 44,
+          "elapsed_s": 9.71710229999735
+        },
+        {
+          "trial": 12,
+          "island_a": 35,
+          "island_b": 36,
+          "edges": [
+            5073,
+            11751,
+            15693
+          ],
+          "shared_length": 6.991435835830167,
+          "island_count_before": 45,
+          "gap_repack": null,
+          "mode": "repair",
+          "accepted": false,
+          "reason": "catastrophic_worse",
+          "hard_failures": [
+            "quality_profile_failed",
+            "correctness_failed",
+            "catastrophic_failed",
+            "fragmentation_failed"
+          ],
+          "island_count_after": 44,
+          "elapsed_s": 10.13536899999599
+        },
+        {
+          "trial": 13,
+          "island_a": 6,
+          "island_b": 36,
+          "edges": [
+            6741,
+            8398
+          ],
+          "shared_length": 6.429598488765418,
+          "island_count_before": 45,
+          "gap_repack": null,
+          "mode": "repair",
+          "accepted": false,
+          "reason": "catastrophic_worse",
+          "hard_failures": [
+            "quality_profile_failed",
+            "correctness_failed",
+            "catastrophic_failed",
+            "fragmentation_failed"
+          ],
+          "island_count_after": 44,
+          "elapsed_s": 9.815471300011268
+        },
+        {
+          "trial": 14,
+          "island_a": 9,
+          "island_b": 30,
+          "edges": [
+            14176
+          ],
+          "shared_length": 1.9947434781940563,
+          "island_count_before": 45,
+          "gap_repack": null,
+          "mode": "repair",
+          "accepted": false,
+          "reason": "catastrophic_worse",
+          "hard_failures": [
+            "quality_profile_failed",
+            "correctness_failed",
+            "catastrophic_failed",
+            "fragmentation_failed"
+          ],
+          "island_count_after": 44,
+          "elapsed_s": 9.984403900016332
+        },
+        {
+          "trial": 15,
+          "island_a": 5,
+          "island_b": 20,
+          "edges": [
+            312,
+            359,
+            1421,
+            2041,
+            2081,
+            2298,
+            3143,
+            3146,
+            4850,
+            5487,
+            5499,
+            5741,
+            5750,
+            7170,
+            8196,
+            8201,
+            8275,
+            8278,
+            8807,
+            8847,
+            8869,
+            8898,
+            8901,
+            9035,
+            10480,
+            12195,
+            12200,
+            13373,
+            15610,
+            15849,
+            17298
+          ],
+          "shared_length": 277.4804128035278,
+          "island_count_before": 45,
+          "gap_repack": null,
+          "mode": "repair",
+          "accepted": false,
+          "reason": "catastrophic_worse",
+          "hard_failures": [
+            "quality_profile_failed",
+            "correctness_failed",
+            "catastrophic_failed",
+            "fragmentation_failed"
+          ],
+          "island_count_after": 44,
+          "elapsed_s": 9.92320039999322
+        },
+        {
+          "trial": 16,
+          "island_a": 4,
+          "island_b": 20,
+          "edges": [
+            290,
+            305,
+            306,
+            308,
+            327,
+            333,
+            1427,
+            2099,
+            3124,
+            3126,
+            3132,
+            3734,
+            3773,
+            4854,
+            5479,
+            5530,
+            5549,
+            6510,
+            7143,
+            7146,
+            7149,
+            7162,
+            7195,
+            8806,
+            8829,
+            8830,
+            11540,
+            12171,
+            12173,
+            12208,
+            13271,
+            13292,
+            17210
+          ],
+          "shared_length": 272.89724254569046,
+          "island_count_before": 45,
+          "gap_repack": null,
+          "mode": "repair",
+          "accepted": false,
+          "reason": "catastrophic_worse",
+          "hard_failures": [
+            "quality_profile_failed",
+            "correctness_failed",
+            "catastrophic_failed",
+            "fragmentation_failed"
+          ],
+          "island_count_after": 44,
+          "elapsed_s": 10.205128000001423
+        },
+        {
+          "trial": 17,
+          "island_a": 22,
+          "island_b": 33,
+          "edges": [
+            787,
+            990,
+            1209,
+            2974,
+            3359,
+            3418,
+            3441,
+            4626,
+            4665,
+            6126,
+            6274,
+            6336,
+            6817,
+            7803,
+            7804,
+            8016,
+            8020,
+            8022,
+            9560,
+            9598,
+            9665,
+            9686,
+            9699,
+            11240,
+            11293,
+            11823,
+            12810,
+            13061,
+            13984,
+            15183,
+            16310,
+            17983
+          ],
+          "shared_length": 261.1016743611473,
+          "island_count_before": 45,
+          "gap_repack": null,
+          "mode": "repair",
+          "accepted": false,
+          "reason": "catastrophic_worse",
+          "hard_failures": [
+            "quality_profile_failed",
+            "correctness_failed",
+            "catastrophic_failed",
+            "fragmentation_failed"
+          ],
+          "island_count_after": 44,
+          "elapsed_s": 9.959726600005524
+        },
+        {
+          "trial": 18,
+          "island_a": 13,
+          "island_b": 24,
+          "edges": [
+            1526,
+            1647,
+            4315,
+            5843,
+            6097,
+            6619,
+            7495,
+            8380,
+            9145,
+            9158,
+            9415,
+            9417,
+            10732,
+            11640,
+            13774,
+            13971
+          ],
+          "shared_length": 246.13015853938717,
+          "island_count_before": 45,
+          "gap_repack": null,
+          "mode": "repair",
+          "accepted": false,
+          "reason": "catastrophic_worse",
+          "hard_failures": [
+            "quality_profile_failed",
+            "correctness_failed",
+            "catastrophic_failed",
+            "fragmentation_failed"
+          ],
+          "island_count_after": 44,
+          "elapsed_s": 9.781146199995419
+        },
+        {
+          "trial": 19,
+          "island_a": 4,
+          "island_b": 16,
+          "edges": [
+            940,
+            943,
+            2476,
+            9251,
+            9384,
+            10878,
+            11041,
+            11119,
+            11665,
+            12526,
+            12555,
+            13439,
+            13457,
+            14565,
+            16268
+          ],
+          "shared_length": 230.63077150334374,
+          "island_count_before": 45,
+          "gap_repack": null,
+          "mode": "repair",
+          "accepted": false,
+          "reason": "catastrophic_worse",
+          "hard_failures": [
+            "quality_profile_failed",
+            "correctness_failed",
+            "catastrophic_failed",
+            "fragmentation_failed"
+          ],
+          "island_count_after": 44,
+          "elapsed_s": 9.716339900012827
+        },
+        {
+          "trial": 20,
+          "island_a": 4,
+          "island_b": 7,
+          "edges": [
+            50,
+            1323,
+            1802,
+            1809,
+            3042,
+            3066,
+            3508,
+            3565,
+            3566,
+            3569,
+            6427,
+            6950,
+            6952,
+            8556,
+            8612,
+            8616,
+            9759,
+            9771,
+            10296,
+            11940,
+            11981,
+            11986,
+            11993,
+            13176,
+            14674,
+            15229,
+            16949
+          ],
+          "shared_length": 199.55978407899454,
+          "island_count_before": 45,
+          "gap_repack": null,
+          "mode": "repair",
+          "accepted": false,
+          "reason": "catastrophic_worse",
+          "hard_failures": [
+            "quality_profile_failed",
+            "correctness_failed",
+            "catastrophic_failed",
+            "fragmentation_failed"
+          ],
+          "island_count_after": 44,
+          "elapsed_s": 10.057719600008568
+        },
+        {
+          "trial": 21,
+          "island_a": 5,
+          "island_b": 7,
+          "edges": [
+            109,
+            315,
+            317,
+            1846,
+            3059,
+            3062,
+            3580,
+            3582,
+            6961,
+            8551,
+            8552,
+            8615,
+            10224,
+            10456,
+            11456,
+            11457,
+            11918,
+            12170,
+            12181,
+            14047,
+            14107,
+            16585
+          ],
+          "shared_length": 199.1908000298662,
+          "island_count_before": 45,
+          "gap_repack": null,
+          "mode": "repair",
+          "accepted": false,
+          "reason": "catastrophic_worse",
+          "hard_failures": [
+            "quality_profile_failed",
+            "correctness_failed",
+            "catastrophic_failed",
+            "fragmentation_failed"
+          ],
+          "island_count_after": 44,
+          "elapsed_s": 9.715265399980126
+        },
+        {
+          "trial": 22,
+          "island_a": 17,
+          "island_b": 20,
+          "edges": [
+            177,
+            301,
+            1416,
+            2036,
+            2053,
+            2102,
+            3141,
+            5480,
+            5546,
+            6514,
+            6521,
+            6524,
+            6525,
+            8833,
+            10493,
+            10507,
+            12176,
+            13290,
+            17497
+          ],
+          "shared_length": 181.1437778616012,
+          "island_count_before": 45,
+          "gap_repack": null,
+          "mode": "repair",
+          "accepted": false,
+          "reason": "catastrophic_worse",
+          "hard_failures": [
+            "quality_profile_failed",
+            "correctness_failed",
+            "catastrophic_failed",
+            "fragmentation_failed"
+          ],
+          "island_count_after": 44,
+          "elapsed_s": 10.016689800017048
+        },
+        {
+          "trial": 23,
+          "island_a": 0,
+          "island_b": 4,
+          "edges": [
+            1925,
+            1928,
+            2388,
+            4815,
+            5820,
+            7069,
+            8299,
+            8716,
+            9814,
+            13907,
+            14427,
+            14777,
+            14921,
+            16056,
+            16616,
+            17020
+          ],
+          "shared_length": 118.67351182062416,
+          "island_count_before": 45,
+          "gap_repack": null,
+          "mode": "repair",
+          "accepted": false,
+          "reason": "catastrophic_worse",
+          "hard_failures": [
+            "quality_profile_failed",
+            "correctness_failed",
+            "catastrophic_failed",
+            "fragmentation_failed"
+          ],
+          "island_count_after": 44,
+          "elapsed_s": 10.065413200005423
+        },
+        {
+          "trial": 24,
+          "island_a": 0,
+          "island_b": 5,
+          "edges": [
+            1473,
+            3198,
+            3892,
+            4108,
+            10817,
+            11650,
+            13352,
+            13919,
+            15290,
+            15650,
+            15874,
+            15894
+          ],
+          "shared_length": 99.43373077883412,
+          "island_count_before": 45,
+          "gap_repack": null,
+          "mode": "repair",
+          "accepted": false,
+          "reason": "catastrophic_worse",
+          "hard_failures": [
+            "quality_profile_failed",
+            "correctness_failed",
+            "catastrophic_failed",
+            "fragmentation_failed"
+          ],
+          "island_count_after": 44,
+          "elapsed_s": 10.151131399994483
+        },
+        {
+          "trial": 25,
+          "island_a": 8,
+          "island_b": 24,
+          "edges": [
+            4043,
+            4846,
+            5459,
+            7473,
+            10729,
+            12457,
+            14955,
+            16667
+          ],
+          "shared_length": 93.28217527723112,
+          "island_count_before": 45,
+          "gap_repack": null,
+          "mode": "repair",
+          "accepted": false,
+          "reason": "catastrophic_worse",
+          "hard_failures": [
+            "quality_profile_failed",
+            "correctness_failed",
+            "catastrophic_failed",
+            "fragmentation_failed"
+          ],
+          "island_count_after": 44,
+          "elapsed_s": 10.46096630001557
+        },
+        {
+          "trial": 26,
+          "island_a": 5,
+          "island_b": 13,
+          "edges": [
+            1161,
+            4572,
+            5141,
+            9578,
+            10139,
+            14017,
+            14019,
+            14027,
+            14812,
+            15741,
+            15745,
+            16863,
+            16880,
+            17420,
+            17579
+          ],
+          "shared_length": 73.41616892335115,
+          "island_count_before": 45,
+          "gap_repack": null,
+          "mode": "repair",
+          "accepted": false,
+          "reason": "catastrophic_worse",
+          "hard_failures": [
+            "quality_profile_failed",
+            "correctness_failed",
+            "catastrophic_failed",
+            "fragmentation_failed"
+          ],
+          "island_count_after": 44,
+          "elapsed_s": 10.127028999995673
+        },
+        {
+          "trial": 27,
+          "island_a": 13,
+          "island_b": 33,
+          "edges": [
+            2901,
+            3379,
+            3380,
+            4467,
+            5098,
+            6709,
+            8479,
+            8480,
+            14805
+          ],
+          "shared_length": 73.15565932075086,
+          "island_count_before": 45,
+          "gap_repack": null,
+          "mode": "repair",
+          "accepted": false,
+          "reason": "catastrophic_worse",
+          "hard_failures": [
+            "quality_profile_failed",
+            "correctness_failed",
+            "catastrophic_failed",
+            "fragmentation_failed"
+          ],
+          "island_count_after": 44,
+          "elapsed_s": 10.550327400007518
+        },
+        {
+          "trial": 28,
+          "island_a": 3,
+          "island_b": 27,
+          "edges": [
+            9177,
+            9188,
+            12494,
+            13428,
+            13434
+          ],
+          "shared_length": 58.25354255642451,
+          "island_count_before": 45,
+          "gap_repack": null,
+          "mode": "repair",
+          "accepted": false,
+          "reason": "catastrophic_worse",
+          "hard_failures": [
+            "quality_profile_failed",
+            "correctness_failed",
+            "catastrophic_failed",
+            "fragmentation_failed"
+          ],
+          "island_count_after": 44,
+          "elapsed_s": 9.761292799987132
+        },
+        {
+          "trial": 29,
+          "island_a": 7,
+          "island_b": 10,
+          "edges": [
+            1408,
+            5336,
+            5477,
+            6506,
+            8794,
+            11475,
+            12166,
+            12167
+          ],
+          "shared_length": 52.58001737744975,
+          "island_count_before": 45,
+          "gap_repack": null,
+          "mode": "repair",
+          "accepted": false,
+          "reason": "catastrophic_worse",
+          "hard_failures": [
+            "quality_profile_failed",
+            "correctness_failed",
+            "catastrophic_failed",
+            "fragmentation_failed"
+          ],
+          "island_count_after": 44,
+          "elapsed_s": 9.729971599997953
+        },
+        {
+          "trial": 30,
+          "island_a": 0,
+          "island_b": 27,
+          "edges": [
+            331,
+            12334,
+            12335,
+            13349,
+            16206,
+            17283
+          ],
+          "shared_length": 41.70795884854918,
+          "island_count_before": 45,
+          "gap_repack": null,
+          "mode": "repair",
+          "accepted": false,
+          "reason": "catastrophic_worse",
+          "hard_failures": [
+            "quality_profile_failed",
+            "correctness_failed",
+            "catastrophic_failed",
+            "fragmentation_failed"
+          ],
+          "island_count_after": 44,
+          "elapsed_s": 10.591945399995893
+        },
+        {
+          "trial": 31,
+          "island_a": 0,
+          "island_b": 2,
+          "edges": [
+            3031,
+            11897,
+            14672,
+            15210,
+            17098
+          ],
+          "shared_length": 27.538365734447225,
+          "island_count_before": 45,
+          "gap_repack": null,
+          "mode": "repair",
+          "accepted": false,
+          "reason": "catastrophic_worse",
+          "hard_failures": [
+            "quality_profile_failed",
+            "correctness_failed",
+            "catastrophic_failed",
+            "fragmentation_failed"
+          ],
+          "island_count_after": 44,
+          "elapsed_s": 10.219247600005474
+        },
+        {
+          "trial": 32,
+          "island_a": 13,
+          "island_b": 22,
+          "edges": [
+            1201,
+            3459
+          ],
+          "shared_length": 26.217897741240627,
+          "island_count_before": 45,
+          "gap_repack": null,
+          "mode": "repair",
+          "accepted": false,
+          "reason": "catastrophic_worse",
+          "hard_failures": [
+            "quality_profile_failed",
+            "correctness_failed",
+            "catastrophic_failed",
+            "fragmentation_failed"
+          ],
+          "island_count_after": 44,
+          "elapsed_s": 10.52092619999894
+        },
+        {
+          "trial": 33,
+          "island_a": 8,
+          "island_b": 20,
+          "edges": [
+            7202,
+            8903,
+            12237
+          ],
+          "shared_length": 17.07646777641771,
+          "island_count_before": 45,
+          "gap_repack": null,
+          "mode": "repair",
+          "accepted": false,
+          "reason": "catastrophic_worse",
+          "hard_failures": [
+            "quality_profile_failed",
+            "correctness_failed",
+            "catastrophic_failed",
+            "fragmentation_failed"
+          ],
+          "island_count_after": 44,
+          "elapsed_s": 10.187909600004787
+        },
+        {
+          "trial": 34,
+          "island_a": 7,
+          "island_b": 20,
+          "edges": [
+            8799
+          ],
+          "shared_length": 13.701227907086865,
+          "island_count_before": 45,
+          "gap_repack": null,
+          "mode": "repair",
+          "accepted": false,
+          "reason": "catastrophic_worse",
+          "hard_failures": [
+            "quality_profile_failed",
+            "correctness_failed",
+            "catastrophic_failed",
+            "fragmentation_failed"
+          ],
+          "island_count_after": 44,
+          "elapsed_s": 10.229002700012643
+        },
+        {
+          "trial": 35,
+          "island_a": 1,
+          "island_b": 18,
+          "edges": [
+            7036,
+            17686
+          ],
+          "shared_length": 8.076501894221277,
+          "island_count_before": 45,
+          "gap_repack": null,
+          "mode": "repair",
+          "accepted": false,
+          "reason": "catastrophic_worse",
+          "hard_failures": [
+            "quality_profile_failed",
+            "correctness_failed",
+            "catastrophic_failed",
+            "fragmentation_failed"
+          ],
+          "island_count_after": 44,
+          "elapsed_s": 10.571233399998164
+        }
+      ],
+      "elapsed_s": 353.14899859999423
+    },
+    "shading": {
+      "policy": "preserve",
+      "valid": true,
+      "passed": true,
+      "failures": [],
+      "invalid_reasons": [],
+      "sharp_edge_uv_audit": {
+        "sharp_edge_count": 0,
+        "sharp_edge_uv_unsplit": 0,
+        "unsplit_edge_ids": []
+      },
+      "tangent_checked": false,
+      "tangent_ok": null,
+      "snapshot_diff": {
+        "unchanged": true,
+        "sharp_added": [],
+        "sharp_removed": [],
+        "smooth_face_delta": 0
+      }
+    }
+  },
+  "layers": [
+    {
+      "name": "A_correctness",
+      "passed": false
+    },
+    {
+      "name": "B_catastrophic",
+      "passed": false
+    },
+    {
+      "name": "C_island_quality",
+      "passed": false
+    },
+    {
+      "name": "D_seam_economy",
+      "passed": false
+    },
+    {
+      "name": "E_game_production",
+      "passed": true
+    }
+  ]
+}

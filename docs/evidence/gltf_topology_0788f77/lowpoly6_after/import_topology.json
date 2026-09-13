@@ -1,0 +1,84 @@
+{
+  "format": "glb",
+  "merge_vertices_enabled": true,
+  "position_weld_applied": true,
+  "weld_tolerance": 5.835346447766845e-05,
+  "welded_vertex_count": 2924,
+  "pre_normalization": {
+    "vertex_count": 8920,
+    "edge_count": 20755,
+    "face_count": 12000,
+    "connected_component_count": 318,
+    "boundary_edge_count": 5510,
+    "non_manifold_edge_count": 0,
+    "duplicate_position_vertex_count": 4936,
+    "duplicate_position_group_count": 2012,
+    "bbox_diagonal": 583.5346447766846,
+    "surface_area": 251098.70229472392,
+    "expected_closed_triangle_edges": 18000,
+    "edge_excess": 2755
+  },
+  "post_normalization": {
+    "vertex_count": 5996,
+    "edge_count": 18000,
+    "face_count": 12000,
+    "connected_component_count": 1,
+    "boundary_edge_count": 0,
+    "non_manifold_edge_count": 0,
+    "duplicate_position_vertex_count": 0,
+    "duplicate_position_group_count": 0,
+    "bbox_diagonal": 583.5346447766846,
+    "surface_area": 251098.70229472392,
+    "expected_closed_triangle_edges": 18000,
+    "edge_excess": 0
+  },
+  "delta": {
+    "vertex_delta": -2924,
+    "edge_delta": -2755,
+    "boundary_edge_delta": -5510,
+    "component_delta": -317,
+    "non_manifold_delta": 0
+  },
+  "guards": {
+    "face_count_unchanged": true,
+    "no_new_non_manifold": true,
+    "displacement_within_tolerance": true
+  },
+  "policy": {
+    "merge_vertices": true,
+    "weld_tolerance_factor": 1e-07,
+    "weld_when": "glb_gltf_with_duplicate_position_boundary",
+    "guards": [
+      "face_count_unchanged",
+      "no_new_non_manifold",
+      "displacement_within_tolerance"
+    ]
+  },
+  "vertex_count": 5996,
+  "edge_count": 18000,
+  "face_count": 12000,
+  "connected_component_count": 1,
+  "boundary_edge_count": 0,
+  "non_manifold_edge_count": 0,
+  "duplicate_position_vertex_count": 0,
+  "weld_considered": true,
+  "merge_vertices_supported": true,
+  "merge_vertices_requested": true,
+  "applied_weld": {
+    "applied": true,
+    "tolerance": 5.835346447766845e-05,
+    "welded_vertex_count": 2924,
+    "vertices_before": 8920,
+    "vertices_after": 5996,
+    "faces_before": 12000,
+    "faces_after": 12000,
+    "non_manifold_before": 0,
+    "non_manifold_after": 0,
+    "max_displacement": 0.0,
+    "guards": {
+      "face_count_unchanged": true,
+      "no_new_non_manifold": true,
+      "displacement_within_tolerance": true
+    }
+  }
+}
