@@ -114,6 +114,35 @@ def _import(bpy, path: str, fmt: str) -> None:
         raise ValueError(f"unsupported format for re-open: {fmt!r}")
 
 
+def _weld_vertices_by_position(bpy, obj, *, dist: float = 1e-6) -> dict:
+    """Weld the re-read mesh's vertices by POSITION only (Gate G13).
+
+    The glTF importer's ``merge_vertices`` only merges vertices whose normals
+    match too, so every flat-shaded crease of a hard-surface asset stays split:
+    faces that share a UV-continuous edge come back topologically disconnected
+    and the re-read audit sees one island per shading group (bevel_cube: 4
+    islands exported, 54 islands re-read, ``correctness_failed`` with
+    ``island_gap`` 0). Welding by position alone rejoins the vertex/edge
+    topology; UVs are per-loop, so real UV seams stay split.
+
+    Returns ``{"applied", "vertices_before", "vertices_after", "dist"}``.
+    """
+    import bmesh  # noqa: PLC0415 - lazy: keeps the pure half importable
+
+    mesh = obj.data
+    before = len(mesh.vertices)
+    bm = bmesh.new()
+    try:
+        bm.from_mesh(mesh)
+        bmesh.ops.remove_doubles(bm, verts=bm.verts, dist=dist)
+        bm.to_mesh(mesh)
+    finally:
+        bm.free()
+    mesh.update()
+    return {"applied": True, "vertices_before": int(before),
+            "vertices_after": int(len(mesh.vertices)), "dist": float(dist)}
+
+
 def _mesh_has_normals(mesh) -> bool:
     """Best-effort: does the re-opened mesh carry usable normals?"""
     if getattr(mesh, "has_custom_normals", False):
@@ -611,12 +640,21 @@ def reread_audit(
                     "error": f"{fmt}: no mesh object after re-import"}
         obj = max(meshes, key=lambda o: len(o.data.polygons))
 
+        # glTF splits vertices on every normal discontinuity; weld by position
+        # before the mesh graph is built or the audit measures shading groups
+        # instead of UV islands (G13).
+        if fmt in ("glb", "gltf"):
+            vertex_weld = _weld_vertices_by_position(bpy, obj)
+        else:
+            vertex_weld = {"applied": False}
+
         uv_layers = [layer.name for layer in obj.data.uv_layers]
         active = obj.data.uv_layers.active
         active_name = active.name if active is not None else None
         if active_name is None:
             return {"format": fmt, "passed": False, "failures": ["uv_missing"],
                     "uv_layers": uv_layers, "active_uv_layer": None,
+                    "vertex_weld": vertex_weld,
                     "error": f"{fmt}: re-read file has no UV layer"}
 
         mesh = extract_mesh_graph(obj)
@@ -638,6 +676,7 @@ def reread_audit(
             triangulated=triangulated, expected_uv_layer=expected_uv_layer)
         audit["object_name"] = obj.name
         audit["vertex_count"] = len(obj.data.vertices)
+        audit["vertex_weld"] = vertex_weld
         if tangent_error:
             audit["tangent_error"] = tangent_error
         return audit

@@ -300,3 +300,17 @@ def test_build_reread_audit_fails_on_broken_tangent_basis():
     assert audit["passed"] is False
     assert "shading_policy_failed" in audit["failures"]
     assert "tangent_basis_failed" in audit["shading"]["failures"]
+
+
+# --- GLB re-read vertex weld (G13) -----------------------------------------
+def test_vertex_weld_helper_exported_and_audit_carries_the_key():
+    # ``reread_audit`` welds the glTF re-read by position with this helper.
+    assert callable(getattr(ev, "_weld_vertices_by_position"))
+    mesh = build_folded_planes(n=4)
+    uvmap = _folded_uvmap(mesh)
+    audit = _audit(mesh, uvmap, mesh, uvmap, fmt="glb", triangulated=True)
+    # The pure builder does not invent the key; ``reread_audit`` adds it.
+    assert "vertex_weld" not in audit
+    audit["vertex_weld"] = {"applied": True, "vertices_before": 54,
+                            "vertices_after": 8, "dist": 1e-6}
+    assert audit["passed"] is True
