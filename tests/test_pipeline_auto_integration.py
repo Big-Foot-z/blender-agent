@@ -78,6 +78,42 @@ def test_no_spec_auto_run_has_every_result_block(monkeypatch):
         assert key in result["seam_report"], key
 
 
+# ------------------------------------------------- 1b. catastrophic result block (CG2/CG3)
+
+
+def test_no_spec_auto_run_carries_the_catastrophic_block(monkeypatch):
+    mesh, _backend, obj = _sphere(monkeypatch)
+    result = run_chart_uv(obj, mesh, max_rounds=4,
+                          budget={"max_candidates_per_round": 2})
+
+    catastrophic = result["catastrophic"]
+    assert isinstance(catastrophic, dict)
+    assert isinstance(catastrophic["passed"], bool)
+
+    digest = result["uv_hash"]
+    assert isinstance(digest, str) and len(digest) == 64
+    assert all(c in "0123456789abcdef" for c in digest)
+
+    assert len(result["face_score_raw"]) == len(mesh.faces)
+
+    repair = result["repair"]
+    assert isinstance(repair, dict)
+    assert isinstance(repair["rounds"], int)
+
+    report = result["quality_report"]
+    assert isinstance(report["sections"]["catastrophic"], dict)
+    assert [layer["name"] for layer in report["layers"]] == [
+        "A_correctness", "B_catastrophic", "C_island_quality", "D_seam_economy",
+        "E_game_production"]
+    json.dumps(report)
+    json.dumps(result["face_score_raw"])
+    json.dumps(repair)
+
+    for key in ("catastrophic_bad_triangles", "catastrophic_max_anisotropy",
+                "catastrophic_bad_area_fraction"):
+        assert key in result["metrics"], key
+
+
 # ------------------------------------------------------- 2. locked / protected (G4)
 
 

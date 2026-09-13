@@ -150,6 +150,71 @@ def _termination_block(records, *, budget: dict, elapsed: float, passed: bool,
     }
 
 
+#: History rows a catastrophic repair round writes (CG2/CG5).
+_CATASTROPHIC_CUT_REASON = "catastrophic_repair"
+
+#: The history-row keys a compact repair row keeps (the full row stays in ``history``).
+_REPAIR_ROW_KEYS = (
+    "round", "action", "reason", "region_id", "target_island", "before", "after",
+    "improvement_ratio", "added_edges", "candidate_kind", "candidates_evaluated",
+    "bad_triangles_before", "bad_triangles_after", "bad_area_before", "bad_area_after",
+    "island_count_before", "island_count_after",
+)
+
+
+def build_repair_summary(history, termination_records) -> dict:
+    """What the catastrophic repair loop tried and what it actually bought (CG2/CG13).
+
+    Pure: scans the refinement ``history`` rows tagged ``cut_reason ==
+    "catastrophic_repair"`` plus the per-round ``run_refinement`` termination records.
+    ``rounds`` prefers the loop's own ``catastrophic_rounds`` counter and falls back to the
+    number of catastrophic history rows; ``reason`` is the LAST catastrophic round reason
+    (``None`` when no catastrophic round ran)."""
+    rows = [dict(r) for r in (history or ())
+            if str((r or {}).get("cut_reason", "")) == _CATASTROPHIC_CUT_REASON]
+    records = list(termination_records or ())
+
+    rounds = int(sum(int((rec or {}).get("catastrophic_rounds", 0) or 0) for rec in records))
+    if not rounds:
+        rounds = len(rows)
+
+    reason = None
+    for rec in records:
+        for entry in ((rec or {}).get("round_reasons") or ()):
+            if str((entry or {}).get("kind", "")) == _CATASTROPHIC_CUT_REASON:
+                reason = str((entry or {}).get("reason")) if entry.get("reason") is not None else None
+
+    first = rows[0] if rows else {}
+    last = rows[-1] if rows else {}
+
+    def _last_present(key):
+        for row in reversed(rows):
+            if row.get(key) is not None:
+                return row.get(key)
+        return None
+
+    def _first_present(key):
+        for row in rows:
+            if row.get(key) is not None:
+                return row.get(key)
+        return None
+
+    return {
+        "rounds": int(rounds),
+        "reunwrap_accepted": sum(1 for r in rows if str(r.get("action")) == "reunwrap"),
+        "relief_accepted": sum(1 for r in rows if str(r.get("action")) == "split"),
+        "rejected": sum(1 for r in rows if str(r.get("action")) == "reject_region"),
+        "reason": reason,
+        "bad_triangles_before": first.get("bad_triangles_before"),
+        "bad_triangles_after": last.get("bad_triangles_after"),
+        "bad_area_before": first.get("bad_area_before"),
+        "bad_area_after": last.get("bad_area_after"),
+        "island_count_before": _first_present("island_count_before"),
+        "island_count_after": _last_present("island_count_after"),
+        "rows": [{k: row[k] for k in _REPAIR_ROW_KEYS if k in row} for row in rows],
+    }
+
+
 def _auto_constraints_block(constraints, final_seams: set[int], forbidden: set[int]) -> dict:
     """G4 evidence block: what the run was told to protect and what actually shipped."""
     locked = set(constraints.locked)
@@ -185,7 +250,8 @@ def _v2_result_block(obj, mesh: MeshGraph, final_seams: set[int], *, profile, re
                      exhausted_rounds: bool,
                      island_cap: int | None = None,
                      merge_back: dict | None = None,
-                     shading: dict | None = None) -> tuple[dict, dict]:
+                     shading: dict | None = None,
+                     history=None) -> tuple[dict, dict]:
     """Final v2 measurement of the SHIPPED UV plus the G1/G2/G4/G5 report blocks.
 
     Measures the layout already on ``obj`` (never unwraps), so the numbers describe exactly
@@ -201,9 +267,17 @@ def _v2_result_block(obj, mesh: MeshGraph, final_seams: set[int], *, profile, re
                   if k not in ("uvmap", "face_anisotropy")}
     distortion_v2 = reportable["distortion_v2"]
     passed = bool(measurement["passed"])
+    repair = build_repair_summary(history, termination_records)
     block = {
         "distortion_v2": distortion_v2,
         "correctness": measurement["correctness"],
+        # CG2/CG3: the hard catastrophic verdict travels with the shipped result, together
+        # with the digest of the UVs it was measured on and the raw per-face score the
+        # heat map must be rendered from (CG4).
+        "catastrophic": measurement["catastrophic"],
+        "uv_hash": measurement["uv_hash"],
+        "face_score_raw": _jsonable(measurement.get("face_score_raw")),
+        "repair": _jsonable(repair),
         "quality": measurement["quality"],
         "mandatory_audit": measurement["mandatory_audit"],
         "fragmentation": measurement["fragmentation"],
@@ -213,7 +287,8 @@ def _v2_result_block(obj, mesh: MeshGraph, final_seams: set[int], *, profile, re
         "hard_failures": list(measurement["hard_failures"]),
         "quality_failures": list(measurement["quality_failures"]),
         "quality_report": build_quality_report(measurement, profile,
-                                               merge_back=merge_back, shading=shading),
+                                               merge_back=merge_back, shading=shading,
+                                               repair=repair),
         "uv_island_count": int(measurement["uv_island_count"]),
         "islands_disagree": bool(measurement["islands_disagree"]),
         "quality_profile": profile.to_dict(),
@@ -285,6 +360,13 @@ def _apply_v2_metrics(metrics: dict, measurement: dict) -> None:
                                              .get("efficiency", float("nan")))
     metrics["min_border_gap_px"] = float((corr.get("border_gap") or {})
                                          .get("min_gap_px", float("nan")))
+    cat = measurement.get("catastrophic") or {}
+    metrics["catastrophic_bad_triangles"] = int(cat.get("bad_triangle_count", 0) or 0)
+    metrics["catastrophic_max_anisotropy"] = float(cat.get("max_anisotropy", float("nan"))
+                                                   if cat.get("max_anisotropy") is not None
+                                                   else float("nan"))
+    metrics["catastrophic_bad_area_fraction"] = float(
+        cat.get("bad_area_fraction", 0.0) or 0.0)
     metrics["metric_version"] = 2
 
 
@@ -993,7 +1075,7 @@ def run_chart_uv(obj, mesh: MeshGraph, *, config: ChartGateConfig | None = None,
         budget=budget, elapsed=time.monotonic() - started_at, gate=gate,
         exhausted_rounds=rounds_exhausted,
         island_cap=min(int(config.island_count_max), int(budget["island_cap"])),
-        merge_back=merge_back_block, shading=shading_block)
+        merge_back=merge_back_block, shading=shading_block, history=history)
     result.update(v2_block)
     # G1 (topology/입력): the input-defect diagnosis ships with every automatic result.
     result["input_diagnostics"] = _input_diagnostics(mesh, v2_block.get("distortion_v2"))
@@ -1252,7 +1334,8 @@ def _run_user_seam_uv(obj, mesh: MeshGraph, spec, *, config: ChartGateConfig,
         candidate_history=candidate_history, termination_records=termination_records,
         budget=budget, elapsed=time.monotonic() - started_at, gate=gate,
         exhausted_rounds=False,
-        island_cap=min(int(config.island_count_max), int(budget["island_cap"])))
+        island_cap=min(int(config.island_count_max), int(budget["island_cap"])),
+        history=history)
     result.update(v2_block)
     # Same G1 input-defect diagnosis as the no-spec path.
     result["input_diagnostics"] = _input_diagnostics(mesh, v2_block.get("distortion_v2"))

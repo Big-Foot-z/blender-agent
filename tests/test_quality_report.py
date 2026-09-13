@@ -20,9 +20,14 @@ from tests.helpers.fake_blender_uv import FakeUnwrapBackend
 PROFILE = ENGINEERING_V0
 
 SECTION_KEYS = {
-    "distortion", "correctness", "mandatory", "fragmentation", "texel_density",
-    "packing", "island_connectivity", "border_inset", "merge_back", "shading",
+    "distortion", "catastrophic", "repair", "correctness", "mandatory", "fragmentation",
+    "texel_density", "packing", "island_connectivity", "border_inset", "merge_back",
+    "shading",
 }
+
+#: The five review layers, in order (CG3).
+LAYER_NAMES = ["A_correctness", "B_catastrophic", "C_island_quality", "D_seam_economy",
+               "E_game_production"]
 
 
 def _measurement(monkeypatch) -> dict:
@@ -40,7 +45,8 @@ def test_quality_report_schema_and_json_round_trip(monkeypatch):
 
     assert set(report) == {
         "schema_version", "profile_id", "metric_version", "calibrated", "passed",
-        "hard_failures", "quality_failures", "distortion_summary", "sections",
+        "hard_failures", "quality_failures", "distortion_summary", "uv_hash",
+        "sections", "layers",
     }
     assert report["schema_version"] == SCHEMA_VERSION
     assert report["profile_id"] == PROFILE.profile_id
@@ -97,3 +103,53 @@ def test_complete_blocks_do_not_add_failures(monkeypatch):
 
     assert report["hard_failures"] == list(measurement["hard_failures"])
     assert report["passed"] == bool(measurement["passed"])
+
+
+# ------------------------------------------------- CG2/CG3 catastrophic + repair + layers
+
+
+def test_catastrophic_section_and_layers(monkeypatch):
+    measurement = _measurement(monkeypatch)
+    report = build_quality_report(measurement, PROFILE)
+
+    section = report["sections"]["catastrophic"]
+    assert section["passed"] == bool(measurement["catastrophic"]["passed"]
+                                     and measurement["catastrophic"]["valid"])
+    assert [c["name"] for c in section["checks"]] == [
+        "catastrophic_hard", "catastrophic_region", "catastrophic_valid"]
+    # compact view only: no per-face arrays / regions / worst triangles in the report.
+    for dropped in ("regions", "worst_triangles", "per_face_score", "per_face_hard_fail"):
+        assert dropped not in section
+
+    assert report["uv_hash"] == measurement["uv_hash"]
+    assert [layer["name"] for layer in report["layers"]] == LAYER_NAMES
+    assert all(isinstance(layer["passed"], bool) for layer in report["layers"])
+    json.dumps(report)
+
+
+def test_repair_section_is_carried_through(monkeypatch):
+    measurement = _measurement(monkeypatch)
+    repair = {"rounds": 2, "reunwrap_accepted": 1, "relief_accepted": 1, "rejected": 0,
+              "reason": "r2_accepted", "rows": []}
+
+    assert build_quality_report(measurement, PROFILE)["sections"]["repair"] is None
+    report = build_quality_report(measurement, PROFILE, repair=repair)
+    assert report["sections"]["repair"]["rounds"] == 2
+    assert report["sections"]["repair"]["reason"] == "r2_accepted"
+
+
+def test_failing_catastrophic_section_adds_the_hard_failure(monkeypatch):
+    measurement = dict(_measurement(monkeypatch))
+    measurement["catastrophic"] = {**measurement["catastrophic"],
+                                   "passed": False, "valid": True, "hard_failed": True,
+                                   "region_failed": False}
+    # A synthetic measurement whose own hard_failures list has not been recomputed: the
+    # report must still name the failure it can see in the section.
+    measurement["hard_failures"] = [f for f in measurement["hard_failures"]
+                                    if f != "catastrophic_failed"]
+    report = build_quality_report(measurement, PROFILE)
+
+    assert report["sections"]["catastrophic"]["passed"] is False
+    assert "catastrophic_failed" in report["hard_failures"]
+    layers = {layer["name"]: layer["passed"] for layer in report["layers"]}
+    assert layers["B_catastrophic"] is False

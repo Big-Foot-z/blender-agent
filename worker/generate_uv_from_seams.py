@@ -490,7 +490,8 @@ def _render_previews(obj, mesh, final_seams, out_dir: str, *, render_size: int,
 # ---------------------------------------------------------------------------
 def _final_reread_audit(bpy, staging_blend: str, out_dir: str, mesh, final_seams,
                         *, object_data_name: str, texture_size_px: int, margin_px: float,
-                        reported_only: bool, shading_policy: str = "preserve") -> dict:
+                        reported_only: bool, shading_policy: str = "preserve",
+                        profile_dict: dict | None = None) -> dict:
     """Re-open the SAVED blend from disk and re-audit the UV it actually carries.
 
     Edge ids may be renumbered by the save/load round trip, so the original seam set is
@@ -503,9 +504,13 @@ def _final_reread_audit(bpy, staging_blend: str, out_dir: str, mesh, final_seams
     from chart_uv_agent.segmentation import mandatory_seam_audit
     from uv_agent.blender.extract import extract_mesh_graph
     from uv_agent.blender.organic_unwrap import AI_UV_LAYER, read_uvmap
+    from uv_agent.geometry.catastrophic_distortion import (
+        compact_catastrophic, evaluate_catastrophic, thresholds_from_profile,
+    )
     from uv_agent.geometry.distortion_v2 import evaluate_distortion_v2
     from uv_agent.geometry.evaluation import mandatory_seam_uv_audit
     from uv_agent.geometry.mesh_identity import edge_correspondence, remap_edge_ids
+    from uv_agent.geometry.mesh_identity import uv_hash as _uv_hash
     from uv_agent.geometry.shading_policy import sharp_edge_uv_audit
     from uv_agent.geometry.uv_correctness import compact_correctness, evaluate_correctness
 
@@ -541,6 +546,12 @@ def _final_reread_audit(bpy, staging_blend: str, out_dir: str, mesh, final_seams
         # G10: does the SAVED file still split the UVs on every sharp edge?
         sharp_audit = sharp_edge_uv_audit(mesh_r, uvmap_r)
 
+        # CG6b: the hard catastrophic gate re-measured on the RE-READ mesh/UV — a layout
+        # that only survives in memory never shipped.
+        catastrophic_r = compact_catastrophic(evaluate_catastrophic(
+            mesh_r, uvmap_r,
+            thresholds=thresholds_from_profile(profile_dict or {})))
+
         unsplit = int(uv_audit["mandatory_90_uv_unsplit"])
         missing = int(seam_audit["mandatory_90_missing"])
         sharp_unsplit = int(sharp_audit["sharp_edge_uv_unsplit"])
@@ -554,7 +565,12 @@ def _final_reread_audit(bpy, staging_blend: str, out_dir: str, mesh, final_seams
             "distortion_global": distortion_global,
             "sharp_edge_uv_audit": sharp_audit,
             "shading_policy": str(shading_policy),
+            "catastrophic": catastrophic_r,
         }
+        # Save/reload rounds the UVs to float32, so a digest mismatch is RECORDED, never a
+        # failure on its own (the correctness/catastrophic re-measurements above decide).
+        audit["uv_hash"] = _uv_hash(uvmap_r)
+        audit["uv_hash_matches_final"] = None
         if reported_only:
             audit["reported_only"] = True
             audit["passed"] = bool(corr.get("passed")) and not unmatched
@@ -562,7 +578,8 @@ def _final_reread_audit(bpy, staging_blend: str, out_dir: str, mesh, final_seams
             sharp_ok = (sharp_unsplit == 0
                         if str(shading_policy) == "require_uv_seam_on_sharp_edges" else True)
             audit["passed"] = (unsplit == 0 and missing == 0 and sharp_ok
-                               and bool(corr.get("passed")) and not unmatched)
+                               and bool(corr.get("passed")) and not unmatched
+                               and bool(catastrophic_r.get("passed")))
         return audit
     except Exception as exc:  # noqa: BLE001 - an unevaluatable audit is never a pass
         return {"passed": False, "source": source_rel, "error": str(exc)}
@@ -882,8 +899,9 @@ def _finish_run(bpy, contract, job: dict, out_dir: str, status_path: str, status
     """The shared post-engine path: identity, staging save, re-read audit, atomic
     promotion, artifacts, status classification, handoff and summary (G0/G1/G6/G7)."""
     from chart_uv_agent.reporting import (
-        build_run_manifest, build_seam_overlay, git_head_sha, json_safe,
-        write_anisotropy_heatmap_png, write_seam_overlay_png,
+        build_run_manifest, build_seam_overlay, git_head_sha, heatmap_identity_check,
+        json_safe, write_anisotropy_heatmap_png, write_heatmap_meta_json,
+        write_seam_overlay_png,
     )
     from uv_agent.blender.extract import extract_mesh_graph
     from uv_agent.blender.organic_unwrap import AI_UV_LAYER, read_uvmap
@@ -964,7 +982,10 @@ def _finish_run(bpy, contract, job: dict, out_dir: str, status_path: str, status
             object_data_name=obj.data.name, texture_size_px=texture_size_px,
             margin_px=margin_px, reported_only=not auto,
             shading_policy=str((res.get("quality_profile") or {}).get(
-                "shading_uv_policy", "preserve")))
+                "shading_uv_policy", "preserve")),
+            profile_dict=res.get("quality_profile"))
+        audit["uv_hash_matches_final"] = (
+            bool(audit.get("uv_hash")) and audit.get("uv_hash") == res.get("uv_hash"))
     else:
         audit = {"passed": False, "error": "selected_uv.blend was not saved"}
         if not auto:
@@ -1005,6 +1026,7 @@ def _finish_run(bpy, contract, job: dict, out_dir: str, status_path: str, status
                "peak_memory_mb": _peak_memory_mb()})
     _write(contract.RUN_MANIFEST_FILE, manifest)
 
+    heatmap_identity = None
     if auto:
         _write(contract.FINAL_REREAD_AUDIT_FILE, audit)
         _write(contract.CANDIDATE_HISTORY_FILE, res.get("candidate_history") or [])
@@ -1034,15 +1056,54 @@ def _finish_run(bpy, contract, job: dict, out_dir: str, status_path: str, status
                 size=texture_size_px)
         except Exception as exc:  # noqa: BLE001 - an image artifact failure is a warning (plan §13)
             warnings.append(f"seam_overlay.png render failed: {exc}")
+        # CG4: the heat map is rendered from the GATE's own per-face score (never from a
+        # second, differently-computed array), the faces the hard gate failed are painted
+        # black, and the picture carries an identity block proving it came from this run's
+        # UV. A render that did not happen can prove nothing — that is a mismatch.
+        catastrophic_report = res.get("catastrophic") or {}
         try:
+            import numpy as _np
+
             heat_uvmap = read_uvmap(obj, mesh, layer_name=AI_UV_LAYER)
-            write_anisotropy_heatmap_png(
-                mesh, heat_uvmap, per_face_anisotropy(mesh, heat_uvmap),
+            if "face_score_raw" in res:
+                face_values = _np.array(
+                    [_np.nan if v is None else float(v)
+                     for v in (res.get("face_score_raw") or ())], dtype=float)
+            else:
+                face_values = per_face_anisotropy(mesh, heat_uvmap)
+            heat = write_anisotropy_heatmap_png(
+                mesh, heat_uvmap, face_values,
                 os.path.join(out_dir, contract.SELECTED_HEATMAP_ANISOTROPY_FILE),
                 size=texture_size_px,
-                vmax=float((res.get("quality_profile") or {}).get("anisotropy_max_max", 3.0)))
+                vmax=float((res.get("quality_profile") or {}).get("anisotropy_max_max", 3.0)),
+                hard_fail_faces=(catastrophic_report.get("bad_face_ids") or []),
+                meta={
+                    "run_id": run_id,
+                    "mesh_fingerprint": identity_before.get("fingerprint"),
+                    "metric_version": catastrophic_report.get("metric_version"),
+                    "distortion_metric_version": 2,
+                    "source": "catastrophic.per_face_score",
+                })
+            try:
+                write_heatmap_meta_json(
+                    os.path.join(out_dir, contract.HEATMAP_META_FILE), heat["meta"])
+            except Exception as exc:  # noqa: BLE001 - artifact failure blocks acceptance (G6)
+                artifacts_ok = False
+                warnings.append(f"{contract.HEATMAP_META_FILE} write failed: {exc}")
+            heatmap_identity = heatmap_identity_check(
+                heat["meta"], uv_hash=res.get("uv_hash"),
+                mesh_fingerprint=identity_before.get("fingerprint"),
+                metric_version=catastrophic_report.get("metric_version"),
+                run_id=run_id)
         except Exception as exc:  # noqa: BLE001 - an image artifact failure is a warning (plan §13)
+            heatmap_identity = {"passed": False, "mismatches": ["heatmap_missing"]}
             warnings.append(f"selected_heatmap_anisotropy.png render failed: {exc}")
+
+        # CG0/§14: the full catastrophic report and the repair trace ship as artifacts.
+        if res.get("catastrophic") is not None:
+            _write(contract.CATASTROPHIC_FILE, res.get("catastrophic"))
+        if res.get("repair") is not None:
+            _write(contract.REPAIR_HISTORY_FILE, res.get("repair"))
 
     # --- normalized run reports (plan §3, §4.1; work plan §3) -------------
     gate = res.get("gate")
@@ -1086,7 +1147,9 @@ def _finish_run(bpy, contract, job: dict, out_dir: str, status_path: str, status
             texel_density=res.get("texel_density"),
             islands_disagree=res.get("islands_disagree"),
             shading=res.get("shading"),
-            merge_back=res.get("merge_back"))
+            merge_back=res.get("merge_back"),
+            catastrophic=res.get("catastrophic"),
+            heatmap_identity=heatmap_identity)
         for code in auto_gate["failures"]:
             warnings.append(f"auto gate: {code}")
         for reason in auto_gate["invalid_reasons"]:
@@ -1155,7 +1218,13 @@ def _finish_run(bpy, contract, job: dict, out_dir: str, status_path: str, status
         shading=res.get("shading"),
         merge_back=(contract.compact_merge_back_block(res.get("merge_back"))
                     if res.get("merge_back") is not None else None),
-        quality_report_passed=(res.get("quality_report") or {}).get("passed"))
+        quality_report_passed=(res.get("quality_report") or {}).get("passed"),
+        catastrophic=(contract.compact_catastrophic_block(res.get("catastrophic"))
+                      if res.get("catastrophic") is not None else None),
+        heatmap_identity=heatmap_identity,
+        uv_hash=res.get("uv_hash"),
+        repair=(contract.compact_repair_block(res.get("repair"))
+                if res.get("repair") is not None else None))
     summary["feedback_applied"] = ctx["feedback_applied"]
     summary["performance"] = {
         "elapsed_s": round(time.monotonic() - ctx["started"], 3),

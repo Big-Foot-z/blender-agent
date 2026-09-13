@@ -12,7 +12,10 @@ Layout of the document::
     schema_version / profile_id / metric_version / calibrated
     passed / hard_failures / quality_failures
     distortion_summary
+    layers                       the five review layers + their pass/fail
     sections.distortion          G3  (quality profile vs the v2 distortion report)
+    sections.catastrophic        CG2/CG3 (the hard catastrophic distortion gate)
+    sections.repair              CG2 (what the catastrophic repair loop bought)
     sections.correctness         G1/G9 (overlap, flips, degenerates, bounds, gaps)
     sections.mandatory           G2  (90° mandatory seam audit)
     sections.fragmentation       G7  (island count / dust / slivers)
@@ -34,6 +37,7 @@ no numpy scalars and no ``NaN``/``Infinity`` tokens: ``json.dumps`` accepts it a
 from __future__ import annotations
 
 from chart_uv_agent.reporting import json_safe
+from uv_agent.geometry.catastrophic_distortion import compact_catastrophic
 from uv_agent.geometry.fragmentation import compact_fragmentation
 from uv_agent.geometry.texel_density import compact_texel_density
 
@@ -83,9 +87,62 @@ def _fragmentation_section(report: dict) -> dict:
     return section
 
 
+def _catastrophic_section(report: dict) -> dict:
+    """CG2/CG3: the hard catastrophic verdict as a compact section + its three checks."""
+    report = report or {}
+    section = compact_catastrophic(report)
+    hard_failed = bool(report.get("hard_failed", False))
+    region_failed = bool(report.get("region_failed", False))
+    valid = bool(report.get("valid", False))
+    section["passed"] = bool(report.get("passed", False)) and valid
+    section["checks"] = [
+        {"name": "catastrophic_hard", "passed": not hard_failed},
+        {"name": "catastrophic_region", "passed": not region_failed},
+        {"name": "catastrophic_valid", "passed": valid},
+    ]
+    return section
+
+
+def _named_checks_pass(section: dict, names) -> bool:
+    """True when every named check in ``section['checks']`` passed (a missing check is a
+    fail — an unmeasured padding gate may never read as clean)."""
+    checks = {str(c.get("name")): bool(c.get("passed", False))
+              for c in (section or {}).get("checks") or ()}
+    return all(checks.get(name, False) for name in names)
+
+
+def _layers(sections: dict, *, mandatory_ok: bool) -> list[dict]:
+    """The five review layers (A..E), each with the pass computed from the sections."""
+    correctness = sections.get("correctness") or {}
+    catastrophic = sections.get("catastrophic") or {}
+    distortion = sections.get("distortion") or {}
+    fragmentation = sections.get("fragmentation") or {}
+    texel = sections.get("texel_density") or {}
+    merge_back = sections.get("merge_back")
+    shading = sections.get("shading")
+
+    frag_hard = fragmentation.get("hard_passed")
+    frag_hard_ok = bool(fragmentation.get("passed", False) if frag_hard is None
+                        else frag_hard)
+    return [
+        {"name": "A_correctness",
+         "passed": bool(correctness.get("passed", False)) and bool(mandatory_ok)},
+        {"name": "B_catastrophic", "passed": bool(catastrophic.get("passed", False))},
+        {"name": "C_island_quality", "passed": bool(distortion.get("passed", False))},
+        {"name": "D_seam_economy",
+         "passed": frag_hard_ok and (merge_back is None
+                                     or bool(merge_back.get("complete", True)))},
+        {"name": "E_game_production",
+         "passed": (bool(texel.get("passed", False))
+                    and _named_checks_pass(correctness, ("island_gap", "border_gap"))
+                    and (shading is None or bool(shading.get("passed", True))))},
+    ]
+
+
 def build_quality_report(measurement: dict, profile, *,
                          merge_back: dict | None = None,
-                         shading: dict | None = None) -> dict:
+                         shading: dict | None = None,
+                         repair: dict | None = None) -> dict:
     """Project ``measurement`` (+ the optional later-stage blocks) into the G15 document.
 
     Pure and side-effect free — it never measures, never unwraps and never mutates its
@@ -107,6 +164,10 @@ def build_quality_report(measurement: dict, profile, *,
 
     passed = bool(measurement.get("passed", False)) and merge_back_ok and shading_ok
 
+    catastrophic_section = _catastrophic_section(measurement.get("catastrophic") or {})
+    if not catastrophic_section["passed"] and "catastrophic_failed" not in hard_failures:
+        hard_failures.append("catastrophic_failed")
+
     report = {
         "schema_version": SCHEMA_VERSION,
         "profile_id": str(getattr(profile, "profile_id", quality.get("profile_id", ""))),
@@ -118,8 +179,11 @@ def build_quality_report(measurement: dict, profile, *,
         "hard_failures": hard_failures,
         "quality_failures": list(measurement.get("quality_failures") or []),
         "distortion_summary": (measurement.get("distortion_v2") or {}).get("summary"),
+        "uv_hash": measurement.get("uv_hash"),
         "sections": {
             "distortion": _distortion_section(quality),
+            "catastrophic": catastrophic_section,
+            "repair": repair,
             "correctness": _correctness_section(measurement.get("correctness") or {}),
             "mandatory": _mandatory_section(measurement.get("mandatory_audit") or {}),
             "fragmentation": _fragmentation_section(measurement.get("fragmentation") or {}),
@@ -135,6 +199,9 @@ def build_quality_report(measurement: dict, profile, *,
             "shading": shading,
         },
     }
+    report["layers"] = _layers(report["sections"],
+                               mandatory_ok=bool(report["sections"]["mandatory"]
+                                                 .get("passed", False)))
     return json_safe(report)
 
 
