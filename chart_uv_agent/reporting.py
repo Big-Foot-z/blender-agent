@@ -34,6 +34,7 @@ __all__ = [
     "write_heatmap_meta_json",
     "heatmap_identity_check",
     "build_seam_overlay",
+    "seam_reason_counts",
     "write_seam_overlay_png",
     "build_run_manifest",
     "git_head_sha",
@@ -478,7 +479,7 @@ def build_seam_overlay(
     if rejected:
         reason_code_counts["rejected_candidate"] = len(rejected)
 
-    return {
+    out = {
         "schema_version": SCHEMA_VERSION,
         "object_name": object_name,
         "edges": edges,
@@ -487,6 +488,54 @@ def build_seam_overlay(
         "type_counts": type_counts,
         "reason_code_counts": reason_code_counts,
     }
+    out["seam_reason_counts"] = seam_reason_counts(out, seam_types)
+    return out
+
+
+#: The fixed key set of :func:`seam_reason_counts` (``total`` excluded).
+SEAM_REASON_KEYS = (
+    "boundary_topology",
+    "mandatory_fold",
+    "user",
+    "shading",
+    "material",
+    "distortion",
+    "rejected_candidate",
+    "segmentation",
+    "welded_fold_auxiliary",
+    "overlap_repair",
+)
+
+
+def seam_reason_counts(overlay: dict, seam_types: dict | None = None) -> dict:
+    """G7: one flat, always-complete "why was this seam cut" tally for the report.
+
+    Built from a :func:`build_seam_overlay` payload, it renames the overlay's internal
+    vocabulary into the report's ("mandatory_90" reason code -> ``mandatory_fold``,
+    "distortion_added" -> ``distortion``) and adds the three engine seam *types* the
+    reason codes collapse into ``boundary_topology`` (``segmentation``,
+    ``welded_fold_auxiliary``, ``overlap_repair``), counted from ``seam_types``.
+
+    Every key is always present as an ``int`` (missing -> 0) so a reader never has to
+    distinguish "no such seam" from "field absent". ``total`` is the number of shipped
+    seam entries in the overlay (the reason-code keys partition it; the seam-type keys
+    do not, they are a second view of the same edges).
+    """
+    codes = (overlay or {}).get("reason_code_counts") or {}
+    counts = {key: 0 for key in SEAM_REASON_KEYS}
+    counts["boundary_topology"] = int(codes.get("boundary_topology", 0) or 0)
+    counts["mandatory_fold"] = int(codes.get("mandatory_90", 0) or 0)
+    counts["user"] = int(codes.get("user", 0) or 0)
+    counts["shading"] = int(codes.get("shading", 0) or 0)
+    counts["material"] = int(codes.get("material", 0) or 0)
+    counts["distortion"] = int(codes.get("distortion_added", 0) or 0)
+    counts["rejected_candidate"] = int(codes.get("rejected_candidate", 0) or 0)
+    for value in (seam_types or {}).values():
+        name = str(value)
+        if name in ("segmentation", "welded_fold_auxiliary", "overlap_repair"):
+            counts[name] += 1
+    counts["total"] = len((overlay or {}).get("edges") or ())
+    return counts
 
 
 def _reason_code(mesh: MeshGraph, eid: int, etype: str, cut_reason, *,

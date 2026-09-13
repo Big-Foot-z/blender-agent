@@ -68,6 +68,26 @@ def mandatory_seam_edges(mesh: MeshGraph, *, fold_angle: float = FOLD_ANGLE) -> 
     }
 
 
+def mandatory_edges_by_kind(mesh: MeshGraph, *,
+                            fold_angle: float = FOLD_ANGLE) -> dict[str, set[int]]:
+    """The mandatory seam set of :func:`mandatory_seam_edges`, split by WHY the edge is
+    mandatory: ``"fold"`` (a 2-face edge whose dihedral is >= ``fold_angle``),
+    ``"boundary"`` (an open edge) and ``"non_manifold"`` (>2 faces). The union of the three
+    is exactly :func:`mandatory_seam_edges`, which is why the counts may be reported
+    separately without the "mandatory" total ever changing meaning."""
+    fold: set[int] = set()
+    boundary: set[int] = set()
+    non_manifold: set[int] = set()
+    for e in mesh.edges:
+        if e.is_boundary:
+            boundary.add(e.id)
+        if e.is_non_manifold:
+            non_manifold.add(e.id)
+        if len(e.face_ids) == 2 and e.dihedral_angle >= fold_angle:
+            fold.add(e.id)
+    return {"fold": fold, "boundary": boundary, "non_manifold": non_manifold}
+
+
 def mandatory_seam_audit(mesh: MeshGraph, seams: set[int], *,
                          fold_angle: float = FOLD_ANGLE) -> dict:
     """R2 audit (MINIMAL_DISTORTION_UV_PLAN §M2): prove every ≥ ``fold_angle`` model fold
@@ -76,9 +96,17 @@ def mandatory_seam_audit(mesh: MeshGraph, seams: set[int], *,
     checker across a hard edge, which the user forbids. Returns the required/missing
     counts and the offending edge ids (pure; safe to call on the final seam set)."""
     required = mandatory_seam_edges(mesh, fold_angle=fold_angle)
-    missing = sorted(required - set(seams))
+    sset = set(seams)
+    missing = sorted(required - sset)
+    kinds = mandatory_edges_by_kind(mesh, fold_angle=fold_angle)
     return {"mandatory_90_edges": len(required),
             "mandatory_90_missing": len(missing),
+            "mandatory_fold_edges": len(kinds["fold"]),
+            "mandatory_boundary_edges": len(kinds["boundary"]),
+            "mandatory_non_manifold_edges": len(kinds["non_manifold"]),
+            "mandatory_fold_missing": len(kinds["fold"] - sset),
+            "mandatory_boundary_missing": len(kinds["boundary"] - sset),
+            "mandatory_non_manifold_missing": len(kinds["non_manifold"] - sset),
             "missing_edge_ids": missing}
 
 

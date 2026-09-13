@@ -94,7 +94,15 @@ def _reset_scene(bpy) -> None:
             bpy.data.objects.remove(o, do_unlink=True)
 
 
-def _import(bpy, path: str, fmt: str) -> None:
+def _import(bpy, path: str, fmt: str) -> dict:
+    """Import ``path`` (already reset scene) and return the import record.
+
+    glTF/GLB goes through :func:`~uv_agent.blender.topology_normalize.import_model`
+    so the ``merge_vertices`` policy is defined in exactly ONE place and shared
+    with the import side of the pipeline (G14). The record
+    (``merge_vertices_requested`` / ``_supported`` / ``_enabled``) is carried into
+    the re-read audit as evidence.
+    """
     if fmt == "fbx":
         bpy.ops.import_scene.fbx(filepath=path)
     elif fmt == "obj":
@@ -106,41 +114,30 @@ def _import(bpy, path: str, fmt: str) -> None:
         # The glTF importer keeps every triangle disconnected unless it is told to
         # weld: without ``merge_vertices`` a re-read quad mesh becomes one island
         # per triangle pair, which destroys island / fold / texel measurement (G13).
-        try:
-            bpy.ops.import_scene.gltf(filepath=path, merge_vertices=True)
-        except TypeError:  # pragma: no cover - older Blender without the argument
-            bpy.ops.import_scene.gltf(filepath=path)
+        from uv_agent.blender.topology_normalize import import_model  # noqa: PLC0415
+
+        return import_model(bpy, path, merge_vertices=True)
     else:
         raise ValueError(f"unsupported format for re-open: {fmt!r}")
+    return {"format": fmt, "merge_vertices_requested": False,
+            "merge_vertices_supported": None, "merge_vertices_enabled": False}
 
 
 def _weld_vertices_by_position(bpy, obj, *, dist: float = 1e-6) -> dict:
-    """Weld the re-read mesh's vertices by POSITION only (Gate G13).
+    """DEPRECATED thin wrapper over
+    :func:`~uv_agent.blender.topology_normalize.weld_by_position`.
 
-    The glTF importer's ``merge_vertices`` only merges vertices whose normals
-    match too, so every flat-shaded crease of a hard-surface asset stays split:
-    faces that share a UV-continuous edge come back topologically disconnected
-    and the re-read audit sees one island per shading group (bevel_cube: 4
-    islands exported, 54 islands re-read, ``correctness_failed`` with
-    ``island_gap`` 0). Welding by position alone rejoins the vertex/edge
-    topology; UVs are per-loop, so real UV seams stay split.
-
-    Returns ``{"applied", "vertices_before", "vertices_after", "dist"}``.
+    Kept for existing callers/tests; new code uses
+    :func:`~uv_agent.blender.topology_normalize.normalize_topology`, which audits
+    before and after the weld and enforces the G4/G12 guards.
     """
-    import bmesh  # noqa: PLC0415 - lazy: keeps the pure half importable
+    from uv_agent.blender.topology_normalize import weld_by_position  # noqa: PLC0415
 
-    mesh = obj.data
-    before = len(mesh.vertices)
-    bm = bmesh.new()
-    try:
-        bm.from_mesh(mesh)
-        bmesh.ops.remove_doubles(bm, verts=bm.verts, dist=dist)
-        bm.to_mesh(mesh)
-    finally:
-        bm.free()
-    mesh.update()
-    return {"applied": True, "vertices_before": int(before),
-            "vertices_after": int(len(mesh.vertices)), "dist": float(dist)}
+    weld = weld_by_position(bpy, obj, tolerance=float(dist))
+    return {"applied": bool(weld.get("applied", False)),
+            "vertices_before": int(weld.get("vertices_before", 0)),
+            "vertices_after": int(weld.get("vertices_after", 0)),
+            "dist": float(dist)}
 
 
 def _mesh_has_normals(mesh) -> bool:
@@ -677,10 +674,11 @@ def reread_audit(
     export worker always ships a structured report."""
     from uv_agent.blender.extract import extract_mesh_graph
     from uv_agent.blender.organic_unwrap import read_uvmap
+    from uv_agent.blender.topology_normalize import normalize_topology
 
     try:
         _reset_scene(bpy)
-        _import(bpy, os.path.abspath(path), fmt)
+        merge_info = _import(bpy, os.path.abspath(path), fmt)
 
         meshes = [o for o in bpy.data.objects if o.type == "MESH" and o.data is not None]
         if not meshes:
@@ -688,13 +686,16 @@ def reread_audit(
                     "error": f"{fmt}: no mesh object after re-import"}
         obj = max(meshes, key=lambda o: len(o.data.polygons))
 
-        # glTF splits vertices on every normal discontinuity; weld by position
-        # before the mesh graph is built or the audit measures shading groups
-        # instead of UV islands (G13).
-        if fmt in ("glb", "gltf"):
-            vertex_weld = _weld_vertices_by_position(bpy, obj)
-        else:
-            vertex_weld = {"applied": False}
+        # glTF splits vertices on every normal discontinuity; the shared
+        # normalization policy audits the mesh, welds by position when (and only
+        # when) the split is fake, re-audits and reports both sides (G2/G12/G14).
+        import_topology = normalize_topology(bpy, obj, fmt=fmt, merge_info=merge_info)
+        vertex_weld = {
+            "applied": bool(import_topology["position_weld_applied"]),
+            "vertices_before": int(import_topology["pre_normalization"]["vertex_count"]),
+            "vertices_after": int(import_topology["post_normalization"]["vertex_count"]),
+            "dist": float(import_topology["weld_tolerance"]),
+        }
 
         uv_layers = [layer.name for layer in obj.data.uv_layers]
         active = obj.data.uv_layers.active
@@ -702,7 +703,7 @@ def reread_audit(
         if active_name is None:
             return {"format": fmt, "passed": False, "failures": ["uv_missing"],
                     "uv_layers": uv_layers, "active_uv_layer": None,
-                    "vertex_weld": vertex_weld,
+                    "vertex_weld": vertex_weld, "import_topology": import_topology,
                     "error": f"{fmt}: re-read file has no UV layer"}
 
         mesh = extract_mesh_graph(obj)
@@ -725,6 +726,7 @@ def reread_audit(
         audit["object_name"] = obj.name
         audit["vertex_count"] = len(obj.data.vertices)
         audit["vertex_weld"] = vertex_weld
+        audit["import_topology"] = import_topology
         if tangent_error:
             audit["tangent_error"] = tangent_error
         return audit

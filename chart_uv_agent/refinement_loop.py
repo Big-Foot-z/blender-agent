@@ -391,6 +391,16 @@ def measure_layout(obj, mesh: MeshGraph, seams, *, profile: QualityProfile,
     mandatory_audit = {
         "mandatory_90_edges": int(seam_audit["mandatory_90_edges"]),
         "mandatory_90_missing": int(seam_audit["mandatory_90_missing"]),
+        # G7: "mandatory_90_*" is the UNION (fold + boundary + non-manifold); the
+        # "mandatory_<kind>_*" counts below say which kind each edge came from, so
+        # "mandatory_fold_edges" (3D folds) is never confused with the UV-side
+        # "mandatory_90_fold_edges" (folds checked for a UV split).
+        "mandatory_fold_edges": int(seam_audit["mandatory_fold_edges"]),
+        "mandatory_boundary_edges": int(seam_audit["mandatory_boundary_edges"]),
+        "mandatory_non_manifold_edges": int(seam_audit["mandatory_non_manifold_edges"]),
+        "mandatory_fold_missing": int(seam_audit["mandatory_fold_missing"]),
+        "mandatory_boundary_missing": int(seam_audit["mandatory_boundary_missing"]),
+        "mandatory_non_manifold_missing": int(seam_audit["mandatory_non_manifold_missing"]),
         "mandatory_90_fold_edges": int(uv_audit["mandatory_90_fold_edges"]),
         "mandatory_90_uv_unsplit": int(uv_audit["mandatory_90_uv_unsplit"]),
         "uv_unsplit_edge_ids": list(uv_audit["uv_unsplit_edge_ids"]),

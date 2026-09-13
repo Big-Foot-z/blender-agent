@@ -751,3 +751,140 @@ def test_compact_repair_block_on_none_and_empty():
     assert "history" not in full
     assert full["rounds"] == 3
     assert full["bad_triangles_after"] == 0
+
+
+# --- TN3: input topology normalization evidence (G1/G2/G7/G14) -------------
+def test_artifact_files_carry_the_import_topology_artifact():
+    assert contract.IMPORT_TOPOLOGY_FILE == "import_topology.json"
+    assert "import_topology" in contract.ARTIFACT_FILES
+    assert contract.ARTIFACT_FILES["import_topology"] == ("import_topology.json", False)
+
+
+def test_build_generate_summary_defaults_the_tn3_keys_to_none():
+    s = contract.build_generate_summary(
+        run_id="r", status=contract.STATUS_NEEDS_USER_REVIEW, model="m",
+        object_name="Pot", seam_spec=None, metrics=None, seam_integrity=_integrity(),
+        layout_optimization={"enabled": False}, artifacts={})
+    for key in ("import_topology", "seam_reason_counts"):
+        assert key in s
+        assert s[key] is None
+
+
+def test_build_generate_summary_carries_the_tn3_blocks():
+    topo = {"format": "glb", "merge_vertices_enabled": True, "position_weld_applied": True}
+    reasons = {"boundary_topology": 12, "mandatory_fold": 4, "user": 0, "shading": 1,
+               "material": 0, "distortion": 3, "rejected_candidate": 0}
+    s = contract.build_generate_summary(
+        run_id="r", status=contract.STATUS_ACCEPTED, model="m",
+        object_name="Pot", seam_spec=None, metrics=None, seam_integrity=_integrity(),
+        layout_optimization={"enabled": True}, artifacts={},
+        mode=contract.MODE_AUTO_GENERATE,
+        import_topology=topo, seam_reason_counts=reasons)
+    assert s["import_topology"] == topo
+    assert s["seam_reason_counts"]["mandatory_fold"] == 4
+
+
+def test_compact_import_topology_block_on_none_and_empty():
+    keys = {"format", "merge_vertices_enabled", "position_weld_applied", "weld_tolerance",
+            "welded_vertex_count", "pre_normalization", "post_normalization", "delta",
+            "weld_skip_reason"}
+    for arg in (None, {}):
+        blk = contract.compact_import_topology_block(arg)
+        assert set(blk) == keys
+        assert blk["pre_normalization"] == {k: None for k in
+                                            contract.IMPORT_TOPOLOGY_COUNT_FIELDS}
+        assert blk["post_normalization"] == {k: None for k in
+                                             contract.IMPORT_TOPOLOGY_COUNT_FIELDS}
+        assert blk["format"] is None and blk["delta"] is None
+
+
+def test_compact_import_topology_block_keeps_counts_and_drops_the_trace():
+    counts_pre = {"vertex_count": 24, "edge_count": 36, "face_count": 12,
+                  "connected_component_count": 6, "boundary_edge_count": 24,
+                  "non_manifold_edge_count": 0, "duplicate_position_vertex_count": 24,
+                  "bbox_diagonal": 1.73, "surface_area": 6.0}
+    counts_post = {"vertex_count": 8, "edge_count": 18, "face_count": 12,
+                   "connected_component_count": 1, "boundary_edge_count": 0,
+                   "non_manifold_edge_count": 0, "duplicate_position_vertex_count": 0,
+                   "bbox_diagonal": 1.73, "surface_area": 6.0}
+    blk = contract.compact_import_topology_block({
+        "format": "glb", "merge_vertices_enabled": True, "position_weld_applied": True,
+        "weld_tolerance": 1.73e-7, "welded_vertex_count": 16,
+        "pre_normalization": counts_pre, "post_normalization": counts_post,
+        "delta": {"vertex_delta": -16, "boundary_edge_delta": -24},
+        "guards": {"face_count_unchanged": True},
+        "policy": {"merge_vertices": True},
+        "applied_weld": {"applied": True, "max_displacement": 0.0}})
+    assert "guards" not in blk and "policy" not in blk and "applied_weld" not in blk
+    assert blk["pre_normalization"]["boundary_edge_count"] == 24
+    assert blk["post_normalization"]["boundary_edge_count"] == 0
+    # the compact block keeps ONLY the seven G2 count fields per side
+    assert "bbox_diagonal" not in blk["pre_normalization"]
+    assert "surface_area" not in blk["post_normalization"]
+    assert blk["welded_vertex_count"] == 16
+    assert blk["weld_skip_reason"] is None
+
+
+# --- TN3/G1: every worker's _open_model shares the import policy -----------
+class _FakeOps:
+    def __init__(self, calls):
+        self._calls = calls
+
+    class _Group:
+        def __init__(self, calls, prefix):
+            self._calls = calls
+            self._prefix = prefix
+
+        def __getattr__(self, name):
+            def _call(**kwargs):
+                self._calls.append((f"{self._prefix}.{name}", dict(kwargs)))
+            return _call
+
+    def __getattr__(self, name):
+        return _FakeOps._Group(self._calls, name)
+
+
+class _FakeBpy:
+    def __init__(self):
+        self.calls = []
+        self.ops = _FakeOps(self.calls)
+
+        class _Data:
+            objects = []
+        self.data = _Data()
+
+
+def _load_worker(name):
+    path = os.path.join(_ROOT, "worker", name)
+    spec = importlib.util.spec_from_file_location(name[:-3], path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+_WORKERS = ("generate_uv_from_seams.py", "export_production_asset.py",
+            "review_existing_uv.py", "seam_editor_worker.py")
+
+
+def test_every_worker_open_model_requests_gltf_merge_vertices():
+    for name in _WORKERS:
+        mod = _load_worker(name)
+        bpy = _FakeBpy()
+        info = mod._open_model(bpy, os.path.join(_ROOT, "model.glb"))
+        names = [c[0] for c in bpy.calls]
+        assert "wm.read_homefile" in names, (name, names)
+        gltf = [kw for n, kw in bpy.calls if n == "import_scene.gltf"]
+        assert len(gltf) == 1, (name, bpy.calls)
+        assert gltf[0]["merge_vertices"] is True, (name, gltf)
+        assert info["format"] == "glb"
+        assert info["merge_vertices_enabled"] is True
+
+
+def test_every_worker_open_model_reports_blend_without_merge():
+    for name in _WORKERS:
+        mod = _load_worker(name)
+        bpy = _FakeBpy()
+        info = mod._open_model(bpy, os.path.join(_ROOT, "model.blend"))
+        assert [c[0] for c in bpy.calls] == ["wm.open_mainfile"], (name, bpy.calls)
+        assert info == {"format": "blend", "merge_vertices_requested": False,
+                        "merge_vertices_supported": None, "merge_vertices_enabled": False}

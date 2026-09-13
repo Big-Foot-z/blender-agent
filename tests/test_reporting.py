@@ -309,6 +309,75 @@ def test_seam_overlay_reason_code_precedence_and_counts():
     json.dumps(overlay)
 
 
+def test_seam_reason_counts_maps_codes_and_types_and_rides_on_the_overlay():
+    """G7/G2: one flat, always-complete seam-reason tally on the overlay payload."""
+    from artist_uv_agent.seam_policy import material_boundary_edges
+    from chart_uv_agent.reporting import SEAM_REASON_KEYS, seam_reason_counts
+
+    mesh = _folded_with_material(n=3)
+    mat = material_boundary_edges(mesh)
+    mat_edge = sorted(mat)[0]
+    fold = sorted(e.id for e in mesh.edges if e.dihedral_angle >= 90.0)
+    mandatory = fold[0]
+    boundary_edge = sorted(e.id for e in mesh.edges if e.is_boundary)[0]
+    plain = sorted(
+        e.id for e in mesh.edges
+        if not e.is_boundary and not e.is_non_manifold
+        and e.dihedral_angle < 90.0 and e.id not in mat
+    )
+    dist_edge, locked_edge, req_edge, ghost = plain[0], plain[1], plain[2], plain[3]
+
+    seams = [mandatory, boundary_edge, dist_edge, locked_edge, req_edge, mat_edge]
+    seam_types = {
+        mandatory: "mandatory_90",
+        boundary_edge: "segmentation",
+        dist_edge: "distortion_split",
+        locked_edge: "welded_fold_auxiliary",
+        req_edge: "overlap_repair",
+        mat_edge: "segmentation",
+    }
+    candidate_history = [
+        {"round": 1, "accepted": True, "improvement_ratio": 0.3,
+         "candidate": {"added_edges": [dist_edge], "target_island": 2,
+                       "cut_reason": "distortion_repair", "cost": {"total": 1.25}}},
+        {"round": 2, "accepted": False, "reason": "below_min_improvement",
+         "candidate": {"added_edges": [ghost], "target_island": 5,
+                       "cut_reason": "distortion_repair", "cost": {"total": 9.5}}},
+    ]
+
+    overlay = build_seam_overlay(
+        mesh, seams, seam_types,
+        history=[], candidate_history=candidate_history,
+        conflicts=[], object_name="folded_planes",
+        locked=[locked_edge], user=[], required=[req_edge],
+    )
+
+    counts = overlay["seam_reason_counts"]
+    assert counts == seam_reason_counts(overlay, seam_types)
+    for key in SEAM_REASON_KEYS + ("total",):
+        assert isinstance(counts[key], int), key
+
+    codes = overlay["reason_code_counts"]
+    assert counts["mandatory_fold"] == codes["mandatory_90"] == 1
+    assert counts["boundary_topology"] == codes["boundary_topology"]
+    assert counts["distortion"] == codes.get("distortion_added", 0) == 1
+    assert counts["rejected_candidate"] == codes["rejected_candidate"] == 1
+    assert counts["material"] == codes.get("material", 0)
+    assert counts["shading"] == codes.get("shading", 0)
+    assert counts["user"] == codes.get("user", 0)
+    # the three engine seam *types* the reason codes collapse into boundary_topology
+    assert counts["segmentation"] == 2
+    assert counts["welded_fold_auxiliary"] == 1
+    assert counts["overlap_repair"] == 1
+    assert counts["total"] == len(seams)
+    json.dumps(overlay)
+
+    # missing -> 0, never absent
+    empty = seam_reason_counts({}, None)
+    assert set(empty) == set(SEAM_REASON_KEYS) | {"total"}
+    assert set(empty.values()) == {0}
+
+
 def test_seam_overlay_rejected_dedupes_to_last_record():
     mesh = build_folded_planes(n=3)
     edge = sorted(e.id for e in mesh.edges if not e.is_boundary)[0]

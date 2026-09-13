@@ -548,7 +548,7 @@ def run_chart_uv(obj, mesh: MeshGraph, *, config: ChartGateConfig | None = None,
     )
 
     from chart_uv_agent.segmentation import (
-        flood_charts, mandatory_seam_edges, split_welded_folds,
+        flood_charts, mandatory_edges_by_kind, mandatory_seam_edges, split_welded_folds,
     )
     from chart_uv_agent.shape import measure_charts
     from chart_uv_agent.shape_repair import repair_shapes, tail_round
@@ -642,6 +642,10 @@ def run_chart_uv(obj, mesh: MeshGraph, *, config: ChartGateConfig | None = None,
         tail = {"history": [], "stuck": []}
     stuck_charts = tail["stuck"]
     mandatory = mandatory_seam_edges(mesh, fold_angle=90.0)
+    # G7: the mandatory total split by WHY (fold / open boundary / non-manifold), so the
+    # report never has to guess which kind ``mandatory_90_edges`` is counting.
+    mandatory_by_kind = {k: len(v) for k, v
+                         in mandatory_edges_by_kind(mesh, fold_angle=90.0).items()}
     history: list[dict] = [{"stage": "segment", **seg.history[-1]},
                            {"stage": "region_protected_merge", "action": "region_protected_merge",
                             "enabled": region_mode == "face_recovery",
@@ -1143,6 +1147,7 @@ def run_chart_uv(obj, mesh: MeshGraph, *, config: ChartGateConfig | None = None,
     result.update(v2_block)
     # G1 (topology/입력): the input-defect diagnosis ships with every automatic result.
     result["input_diagnostics"] = _input_diagnostics(mesh, v2_block.get("distortion_v2"))
+    result["mandatory_by_kind"] = dict(mandatory_by_kind)
     result["correctness_rounds"] = correctness["history"]
     _apply_v2_metrics(metrics, v2_measurement)
     result["seam_types"] = {int(k): v for k, v in seam_types.items()}
@@ -1208,6 +1213,12 @@ def _run_user_seam_uv(obj, mesh: MeshGraph, spec, *, config: ChartGateConfig,
             mesh, locked=usr.user_seam_edges, protected=usr.user_protected_edges,
             preferred=preferred_edges or (), front_axis=front_axis)
     mandatory = set(usr.mandatory_edges) if enforce_mandatory else set()
+    # G7: same fold / boundary / non-manifold split as the no-spec path (reported from the
+    # MESH, so it describes the model even when the mandatory rule is switched off).
+    from chart_uv_agent.segmentation import mandatory_edges_by_kind
+    mandatory_by_kind = {
+        k: len(v) for k, v in mandatory_edges_by_kind(
+            mesh, fold_angle=spec.mandatory_fold_angle).items()}
     if enforce_mandatory:
         forbidden = set(base_forbidden) | usr.forbidden_edges
         final_seams = set(usr.initial_seams)
@@ -1403,6 +1414,7 @@ def _run_user_seam_uv(obj, mesh: MeshGraph, spec, *, config: ChartGateConfig,
     result.update(v2_block)
     # Same G1 input-defect diagnosis as the no-spec path.
     result["input_diagnostics"] = _input_diagnostics(mesh, v2_block.get("distortion_v2"))
+    result["mandatory_by_kind"] = dict(mandatory_by_kind)
     result["correctness_rounds"] = []
     _apply_v2_metrics(metrics, v2_measurement)
     result["seam_types"] = {int(k): v for k, v in seam_types.items()}

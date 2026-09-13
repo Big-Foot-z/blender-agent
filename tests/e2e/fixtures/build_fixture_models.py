@@ -6,10 +6,21 @@ Run inside Blender:
 
 Every fixture named by the work plan §7 "필수 fixture" list is rebuilt from
 scratch in an empty scene, normalized (object ``Fixture`` / mesh ``FixtureMesh``,
-transforms applied) and written twice: ``<name>.blend`` and ``<name>.obj``. The
-run then emits ``<out>/fixture_manifest.json`` carrying, per fixture, the file
-SHA-256s, the vertex/edge/face/loop counts and a topology+material
-``mesh_fingerprint`` — the reproducible-baseline evidence G0 asks for.
+transforms applied) and written four times: ``<name>.blend``, ``<name>.obj``,
+``<name>.glb`` and ``<name>.fbx``. The run then emits
+``<out>/fixture_manifest.json`` carrying, per fixture, the file SHA-256s, the
+vertex/edge/face/loop counts, a topology+material ``mesh_fingerprint`` and a
+``reference_topology`` block (boundary/non-manifold edge counts and the connected
+component count measured with bmesh on the .blend mesh) — the reproducible
+baseline evidence G0 asks for, plus the ground truth the glTF/FBX topology
+normalization gates (G3/G5/G7/G8) compare a re-imported mesh against.
+
+The interchange exports are deliberately lossy in different ways: the glTF
+exporter splits vertices wherever a loop-domain attribute (split normals, UV
+seams) differs, and triangulates; the FBX exporter keeps quads. The
+``reference_topology`` numbers were chosen so they survive both: boundary edge
+count, non-manifold edge count and component count are invariant under
+triangulation and under vertex splitting-then-welding.
 
 The fingerprint algorithm lives in ``fingerprint_from_arrays()``, which has NO
 ``bpy`` dependency, so a worker can recompute the exact same digest from its own
@@ -86,6 +97,60 @@ def mesh_fingerprint_from_mesh(mesh_data) -> str:
     faces = [list(p.vertices) for p in mesh_data.polygons]
     mats = [int(p.material_index) for p in mesh_data.polygons]
     return fingerprint_from_arrays(coords, faces, mats)
+
+
+def reference_topology_from_mesh(mesh_data) -> dict:
+    """Ground-truth topology of a ``bpy`` mesh, measured with bmesh.
+
+    ``boundary_edge_count``  edges carried by exactly one face,
+    ``non_manifold_edge_count``  edges carried by more than two faces,
+    ``component_count``  connected components of the vertex/edge graph (loose
+    vertices count as their own component).
+
+    All three are invariant under triangulation and under
+    split-vertices-then-weld, which is exactly why the glTF/FBX normalization
+    gates compare against them.
+    """
+    import bmesh
+
+    bm = bmesh.new()
+    try:
+        bm.from_mesh(mesh_data)
+        bm.verts.ensure_lookup_table()
+        bm.edges.ensure_lookup_table()
+        bm.faces.ensure_lookup_table()
+
+        boundary = sum(1 for e in bm.edges if len(e.link_faces) == 1)
+        non_manifold = sum(1 for e in bm.edges if len(e.link_faces) > 2)
+        wire = sum(1 for e in bm.edges if len(e.link_faces) == 0)
+
+        seen: set[int] = set()
+        components = 0
+        for v in bm.verts:
+            if v.index in seen:
+                continue
+            components += 1
+            seen.add(v.index)
+            stack = [v]
+            while stack:
+                cur = stack.pop()
+                for e in cur.link_edges:
+                    other = e.other_vert(cur)
+                    if other is not None and other.index not in seen:
+                        seen.add(other.index)
+                        stack.append(other)
+
+        return {
+            "boundary_edge_count": int(boundary),
+            "non_manifold_edge_count": int(non_manifold),
+            "wire_edge_count": int(wire),
+            "component_count": int(components),
+            "vertex_count": len(bm.verts),
+            "edge_count": len(bm.edges),
+            "face_count": len(bm.faces),
+        }
+    finally:
+        bm.free()
 
 
 def sha256_file(path: str) -> str:
@@ -305,6 +370,91 @@ def build_protected_path(bpy):
                  "protected_edges": "chosen by the test via edge id"}
 
 
+def build_split_normal_glb(bpy):
+    """A closed UV sphere with FLAT shading — the glb export splits EVERY vertex.
+
+    The ``.blend``/``.obj`` copies carry the ordinary closed sphere (boundary 0,
+    one component); the split happens only inside the ``.glb``, because the glTF
+    exporter has to duplicate a vertex per face to carry the flat split normals.
+    Normalizing that import back has to recover boundary 0 / one component.
+    """
+    bpy.ops.mesh.primitive_uv_sphere_add(segments=16, ring_count=8)
+    obj = _active_mesh_object(bpy)
+    for p in obj.data.polygons:
+        p.use_smooth = False
+    obj.data.update()
+    return obj, {"kind": "split_normal_source", "segments": 16, "ring_count": 8,
+                 "shading": "flat",
+                 "expected_glb_effect": "every vertex split by the glTF exporter",
+                 "closed": True}
+
+
+def build_split_uv_glb(bpy):
+    """A closed cube with a seamed UV map and SMOOTH shading — glb splits at UV seams.
+
+    Cube projection gives every face its own UV island, so the glTF exporter has
+    to split the loops that straddle a UV seam (and only those: the normals are
+    smooth and shared).
+    """
+    bpy.ops.mesh.primitive_cube_add(size=2)
+    obj = _active_mesh_object(bpy)
+    _select_only(bpy, obj)
+    bpy.ops.object.mode_set(mode="EDIT")
+    bpy.ops.mesh.select_all(action="SELECT")
+    bpy.ops.uv.cube_project(cube_size=1.0)
+    bpy.ops.object.mode_set(mode="OBJECT")
+    for p in obj.data.polygons:
+        p.use_smooth = True
+    obj.data.update()
+    return obj, {"kind": "split_uv_source", "size": 2, "shading": "smooth",
+                 "uv_projection": "cube_project",
+                 "expected_glb_effect": "vertices split at UV seams only",
+                 "closed": True}
+
+
+def build_two_shells(bpy):
+    """Two closed cubes 5 units apart inside ONE object (component_count == 2)."""
+    import bmesh
+    from mathutils import Matrix
+
+    bm = bmesh.new()
+    bmesh.ops.create_cube(bm, size=2.0)
+    bmesh.ops.create_cube(bm, size=2.0, matrix=Matrix.Translation((5.0, 0.0, 0.0)))
+    bm.verts.ensure_lookup_table()
+    bm.normal_update()
+    obj = _new_mesh_object(bpy, bm)
+    return obj, {"kind": "two_shells", "shell_count": 2, "shell_size": 2.0,
+                 "separation_x": 5.0, "closed": True}
+
+
+def build_open_plane(bpy):
+    """A flat 4x4 grid — a genuine open boundary that must NOT be welded away."""
+    bpy.ops.mesh.primitive_grid_add(x_subdivisions=4, y_subdivisions=4, size=2)
+    return _active_mesh_object(bpy), {"kind": "open_plane", "x_subdivisions": 4,
+                                      "y_subdivisions": 4, "size": 2,
+                                      "closed": False,
+                                      "expected": "boundary_edge_count > 0 preserved"}
+
+
+def build_non_manifold_fan(bpy):
+    """Three quads sharing one edge — a real non-manifold edge that must survive."""
+    import bmesh
+
+    bm = bmesh.new()
+    a = bm.verts.new((0.0, 0.0, 0.0))
+    b = bm.verts.new((0.0, 1.0, 0.0))
+    for wx, wz in ((1.0, 0.0), (0.0, 1.0), (-1.0, 0.0)):
+        w0 = bm.verts.new((wx, 0.0, wz))
+        w1 = bm.verts.new((wx, 1.0, wz))
+        bm.faces.new((a, w0, w1, b))
+    bm.verts.ensure_lookup_table()
+    bm.normal_update()
+    obj = _new_mesh_object(bpy, bm)
+    return obj, {"kind": "non_manifold_fan", "shared_edge_face_count": 3,
+                 "shared_edge_verts": [[0.0, 0.0, 0.0], [0.0, 1.0, 0.0]],
+                 "closed": False}
+
+
 FIXTURE_BUILDERS = [
     ("plane_grid", build_plane_grid),
     ("cube", build_cube),
@@ -317,6 +467,11 @@ FIXTURE_BUILDERS = [
     ("angle_boundary", build_angle_boundary),
     ("degenerate_input", build_degenerate_input),
     ("protected_path", build_protected_path),
+    ("split_normal_glb", build_split_normal_glb),
+    ("split_uv_glb", build_split_uv_glb),
+    ("two_shells", build_two_shells),
+    ("open_plane", build_open_plane),
+    ("non_manifold_fan", build_non_manifold_fan),
 ]
 
 
@@ -335,6 +490,28 @@ def _export_obj(bpy, obj, path: str) -> None:
     )
 
 
+def _export_glb(bpy, obj, path: str) -> None:
+    _select_only(bpy, obj)
+    bpy.ops.export_scene.gltf(
+        filepath=path,
+        export_format="GLB",
+        use_selection=True,
+        export_normals=True,
+        export_texcoords=True,
+        export_apply=False,
+    )
+
+
+def _export_fbx(bpy, obj, path: str) -> None:
+    _select_only(bpy, obj)
+    bpy.ops.export_scene.fbx(
+        filepath=path,
+        use_selection=True,
+        object_types={"MESH"},
+        mesh_smooth_type="FACE",
+    )
+
+
 def _build_one(bpy, name, builder, out_dir: str) -> dict:
     _reset_scene(bpy)
     obj, notes = builder(bpy)
@@ -345,18 +522,31 @@ def _build_one(bpy, name, builder, out_dir: str) -> dict:
 
     blend_name = f"{name}.blend"
     obj_name = f"{name}.obj"
+    glb_name = f"{name}.glb"
+    fbx_name = f"{name}.fbx"
     blend_path = os.path.join(out_dir, blend_name)
     obj_path = os.path.join(out_dir, obj_name)
+    glb_path = os.path.join(out_dir, glb_name)
+    fbx_path = os.path.join(out_dir, fbx_name)
+
+    reference_topology = reference_topology_from_mesh(mesh)
 
     bpy.ops.wm.save_as_mainfile(filepath=os.path.abspath(blend_path), copy=True)
     _export_obj(bpy, obj, os.path.abspath(obj_path))
+    _export_glb(bpy, obj, os.path.abspath(glb_path))
+    _export_fbx(bpy, obj, os.path.abspath(fbx_path))
 
     return {
         "name": name,
         "blend": blend_name,
         "obj": obj_name,
+        "glb": glb_name,
+        "fbx": fbx_name,
         "blend_sha256": sha256_file(blend_path),
         "obj_sha256": sha256_file(obj_path),
+        "glb_sha256": sha256_file(glb_path),
+        "fbx_sha256": sha256_file(fbx_path),
+        "reference_topology": reference_topology,
         "vertex_count": len(mesh.vertices),
         "edge_count": len(mesh.edges),
         "face_count": len(mesh.polygons),

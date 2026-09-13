@@ -5,8 +5,11 @@ the fixture builder runs into ``tmp_path`` — nothing is ever written into the
 repository — and the emitted ``fixture_manifest.json`` is checked against the
 files on disk:
 
-- all 11 required fixtures exist as ``.blend`` + ``.obj`` and their SHA-256s match
-  what the manifest recorded,
+- all required fixtures exist as ``.blend`` + ``.obj`` + ``.glb`` + ``.fbx`` and
+  their SHA-256s match what the manifest recorded,
+- every fixture records a ``reference_topology`` block (boundary / non-manifold
+  edge counts + connected component count) measured in Blender on the .blend
+  mesh — the ground truth the glTF/FBX normalization gates compare against,
 - the angle-boundary fixture records which fold edge carries which angle,
 - the degenerate/non-manifold fixture really carries extra geometry beyond a cube,
 - a second build reproduces every ``mesh_fingerprint`` exactly (the .blend byte
@@ -35,7 +38,34 @@ EXPECTED_FIXTURES = [
     "angle_boundary",
     "degenerate_input",
     "protected_path",
+    "split_normal_glb",
+    "split_uv_glb",
+    "two_shells",
+    "open_plane",
+    "non_manifold_fan",
 ]
+
+#: Fixtures added for the glTF/FBX topology-normalization gates, with the
+#: reference topology they must record (``None`` = "not pinned, only recorded").
+TOPOLOGY_FIXTURES = {
+    "split_normal_glb": {"boundary_edge_count": 0, "non_manifold_edge_count": 0,
+                         "component_count": 1},
+    "split_uv_glb": {"boundary_edge_count": 0, "non_manifold_edge_count": 0,
+                     "component_count": 1},
+    "two_shells": {"boundary_edge_count": 0, "non_manifold_edge_count": 0,
+                   "component_count": 2},
+    "open_plane": {"non_manifold_edge_count": 0, "component_count": 1},
+    "non_manifold_fan": {"component_count": 1},
+}
+
+REFERENCE_TOPOLOGY_KEYS = (
+    "boundary_edge_count",
+    "non_manifold_edge_count",
+    "component_count",
+    "vertex_count",
+    "edge_count",
+    "face_count",
+)
 
 
 def _sha256(path: str) -> str:
@@ -74,15 +104,32 @@ def test_fixture_manifest_matches_files_on_disk(tmp_path):
 
     for name in EXPECTED_FIXTURES:
         entry = by_name[name]
-        blend_path = os.path.join(out_dir, entry["blend"])
-        obj_path = os.path.join(out_dir, entry["obj"])
-        assert os.path.exists(blend_path), f"{name}: .blend exists"
-        assert os.path.exists(obj_path), f"{name}: .obj exists"
-        assert _sha256(blend_path) == entry["blend_sha256"], f"{name}: blend sha256"
-        assert _sha256(obj_path) == entry["obj_sha256"], f"{name}: obj sha256"
+        for kind in ("blend", "obj", "glb", "fbx"):
+            path = os.path.join(out_dir, entry[kind])
+            assert os.path.exists(path), f"{name}: .{kind} exists"
+            assert _sha256(path) == entry[f"{kind}_sha256"], f"{name}: {kind} sha256"
         for key in ("vertex_count", "edge_count", "face_count", "loop_count"):
             assert entry[key] > 0, f"{name}: {key}"
         assert len(entry["mesh_fingerprint"]) == 64, f"{name}: fingerprint is a sha256"
+
+        ref = entry["reference_topology"]
+        for key in REFERENCE_TOPOLOGY_KEYS:
+            assert key in ref, f"{name}: reference_topology.{key}"
+            assert isinstance(ref[key], int), f"{name}: reference_topology.{key} is an int"
+            assert ref[key] >= 0, f"{name}: reference_topology.{key}"
+        # The bmesh measurement and the mesh datablock agree about the basics.
+        assert ref["vertex_count"] == entry["vertex_count"], name
+        assert ref["edge_count"] == entry["edge_count"], name
+        assert ref["face_count"] == entry["face_count"], name
+        assert ref["component_count"] >= 1, name
+
+    # The glTF/FBX normalization fixtures carry the topology those gates expect.
+    for name, expected in TOPOLOGY_FIXTURES.items():
+        ref = by_name[name]["reference_topology"]
+        for key, value in expected.items():
+            assert ref[key] == value, f"{name}: reference_topology.{key} == {value} (got {ref})"
+    assert by_name["open_plane"]["reference_topology"]["boundary_edge_count"] > 0
+    assert by_name["non_manifold_fan"]["reference_topology"]["non_manifold_edge_count"] >= 1
 
     # angle_boundary records which fold edge carries which angle (G1 boundary evidence).
     folds = by_name["angle_boundary"]["notes"]["folds"]
@@ -109,6 +156,10 @@ def test_fixture_build_is_deterministic(tmp_path):
     counts_b = {f["name"]: (f["vertex_count"], f["edge_count"], f["face_count"], f["loop_count"])
                 for f in second["fixtures"]}
     assert counts_a == counts_b
+
+    topo_a = {f["name"]: f["reference_topology"] for f in first["fixtures"]}
+    topo_b = {f["name"]: f["reference_topology"] for f in second["fixtures"]}
+    assert topo_a == topo_b, "reference topology is reproducible across builds"
 
 
 @requires_blender

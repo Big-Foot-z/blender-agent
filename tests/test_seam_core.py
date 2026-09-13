@@ -57,6 +57,35 @@ def test_fold_edge_is_mandatory():
     assert any("mandatory_fold" in r for r in d.reasons)
 
 
+def test_mandatory_audit_splits_fold_boundary_and_non_manifold():
+    """G7: ``mandatory_90_*`` is a UNION; the per-kind counts say what it is made of."""
+    from chart_uv_agent.segmentation import (
+        mandatory_edges_by_kind, mandatory_seam_audit, mandatory_seam_edges,
+    )
+
+    mesh = build_folded_planes(n=6)
+    kinds = mandatory_edges_by_kind(mesh, fold_angle=90.0)
+    union = kinds["fold"] | kinds["boundary"] | kinds["non_manifold"]
+    assert union == mandatory_seam_edges(mesh, fold_angle=90.0)
+    # the fixture is two open grids joined along one 90-degree fold row
+    assert kinds["fold"] == {e.id for e in mesh.edges
+                             if len(e.face_ids) == 2 and e.dihedral_angle >= 90.0}
+    assert kinds["boundary"] == {e.id for e in mesh.edges if e.is_boundary}
+    assert kinds["fold"] and kinds["boundary"]
+    assert kinds["non_manifold"] == set()
+
+    audit = mandatory_seam_audit(mesh, set(kinds["boundary"]), fold_angle=90.0)
+    assert audit["mandatory_90_edges"] == len(union)
+    assert audit["mandatory_fold_edges"] == len(kinds["fold"])
+    assert audit["mandatory_boundary_edges"] == len(kinds["boundary"])
+    assert audit["mandatory_non_manifold_edges"] == 0
+    # only the boundary edges were supplied as seams
+    assert audit["mandatory_fold_missing"] == len(kinds["fold"])
+    assert audit["mandatory_boundary_missing"] == 0
+    assert audit["mandatory_non_manifold_missing"] == 0
+    assert audit["mandatory_90_missing"] == len(union - kinds["boundary"])
+
+
 def test_boundary_edge_is_mandatory():
     mesh = fixtures.build_grid_plane(4, 4)
     b = next(e.id for e in mesh.edges if e.is_boundary)

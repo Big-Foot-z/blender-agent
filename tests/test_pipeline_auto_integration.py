@@ -73,6 +73,19 @@ def test_no_spec_auto_run_has_every_result_block(monkeypatch):
     assert mandatory, "fixture must have 90-degree fold edges"
     assert mandatory <= set(result["seams"])
     assert result["mandatory_audit"]["mandatory_90_missing"] == 0
+    # G7: the mandatory total is reported split by kind, and the audit says how many of
+    # the union are 3D folds (never confused with the UV-side mandatory_90_fold_edges).
+    by_kind = result["mandatory_by_kind"]
+    assert set(by_kind) == {"fold", "boundary", "non_manifold"}
+    assert all(isinstance(v, int) for v in by_kind.values())
+    assert by_kind["fold"] + by_kind["boundary"] + by_kind["non_manifold"] >= len(mandatory)
+    audit = result["mandatory_audit"]
+    assert audit["mandatory_fold_edges"] == by_kind["fold"]
+    assert audit["mandatory_boundary_edges"] == by_kind["boundary"]
+    assert audit["mandatory_non_manifold_edges"] == by_kind["non_manifold"]
+    assert audit["mandatory_fold_missing"] == 0
+    assert audit["mandatory_boundary_missing"] == 0
+    assert audit["mandatory_non_manifold_missing"] == 0
     assert isinstance(result["auto_passed"], bool)
     # The report carries the G4/G5 evidence blocks.
     for key in ("constraints", "termination", "seam_length"):

@@ -1,0 +1,29 @@
+{
+  "before": {
+    "fingerprint": "c6a66992cdd1dbc5c5ae306c8ed865d362584807a023aab19e75fe165d517fb0",
+    "vertex_count": 8920,
+    "edge_count": 20755,
+    "face_count": 12000,
+    "loop_count": 36000,
+    "material_indices_hash": "59326290b8afea0b8e28518574284ec6ccabdd4bbc3d983d6184980106262001",
+    "model_sha256": "6253a4d31568fc546c26c3298a830736ff29813d93c8e884a85db40e6f100b07"
+  },
+  "after": {
+    "fingerprint": "c6a66992cdd1dbc5c5ae306c8ed865d362584807a023aab19e75fe165d517fb0",
+    "vertex_count": 8920,
+    "edge_count": 20755,
+    "face_count": 12000,
+    "loop_count": 36000,
+    "material_indices_hash": "59326290b8afea0b8e28518574284ec6ccabdd4bbc3d983d6184980106262001",
+    "model_sha256": "6253a4d31568fc546c26c3298a830736ff29813d93c8e884a85db40e6f100b07"
+  },
+  "diff": {
+    "unchanged": true,
+    "before_sha256": "c6a66992cdd1dbc5c5ae306c8ed865d362584807a023aab19e75fe165d517fb0",
+    "after_sha256": "c6a66992cdd1dbc5c5ae306c8ed865d362584807a023aab19e75fe165d517fb0",
+    "vertex_count": 8920,
+    "face_count": 12000,
+    "loop_count": 36000,
+    "differences": []
+  }
+}

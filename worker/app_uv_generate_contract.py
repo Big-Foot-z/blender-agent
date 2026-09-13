@@ -277,6 +277,10 @@ SHADING_POLICY_FILE = "shading_policy.json"
 CATASTROPHIC_FILE = "uv_catastrophic.json"
 REPAIR_HISTORY_FILE = "uv_repair_history.json"
 HEATMAP_META_FILE = "heatmap_meta.json"
+# Input topology normalization evidence (G1/G2/G14). Written by EVERY generate run,
+# whatever the source format: the audit is what proves the mesh we measured is the
+# mesh the importer produced.
+IMPORT_TOPOLOGY_FILE = "import_topology.json"
 REQUIRED_PREVIEWS = (
     "baseline_uv_layout.png",
     "baseline_checker_front.png",
@@ -314,6 +318,7 @@ ARTIFACT_FILES: dict[str, tuple[str, bool]] = {
     "catastrophic": (CATASTROPHIC_FILE, False),
     "repair_history": (REPAIR_HISTORY_FILE, False),
     "heatmap_meta": (HEATMAP_META_FILE, False),
+    "import_topology": (IMPORT_TOPOLOGY_FILE, False),
 }
 
 
@@ -1223,6 +1228,45 @@ def compact_repair_block(rep: dict | None) -> dict:
     }
 
 
+#: The G2 audit count fields repeated in the compact pre/post blocks. Kept as a
+#: literal here (not imported) so the contract module stays stand-alone; it mirrors
+#: ``uv_agent.blender.topology_normalize.TOPOLOGY_FIELDS``.
+IMPORT_TOPOLOGY_COUNT_FIELDS = (
+    "vertex_count",
+    "edge_count",
+    "face_count",
+    "connected_component_count",
+    "boundary_edge_count",
+    "non_manifold_edge_count",
+    "duplicate_position_vertex_count",
+)
+
+
+def compact_import_topology_block(rep: dict | None) -> dict:
+    """The summary-sized input-normalization block (G2/G14).
+
+    Keeps the pre/post G2 counts, the delta and the weld decision; the full report
+    (guards, policy, the raw weld trace) stays on disk in ``import_topology.json``.
+    """
+    r = rep or {}
+
+    def _counts(block) -> dict:
+        b = block or {}
+        return {key: b.get(key) for key in IMPORT_TOPOLOGY_COUNT_FIELDS}
+
+    return {
+        "format": r.get("format"),
+        "merge_vertices_enabled": r.get("merge_vertices_enabled"),
+        "position_weld_applied": r.get("position_weld_applied"),
+        "weld_tolerance": r.get("weld_tolerance"),
+        "welded_vertex_count": r.get("welded_vertex_count"),
+        "pre_normalization": _counts(r.get("pre_normalization")),
+        "post_normalization": _counts(r.get("post_normalization")),
+        "delta": r.get("delta"),
+        "weld_skip_reason": r.get("weld_skip_reason"),
+    }
+
+
 # ---------------------------------------------------------------------------
 # Summary builder (plan §4.1 — the renderer's primary input, §3 "primary input")
 # ---------------------------------------------------------------------------
@@ -1265,6 +1309,8 @@ def build_generate_summary(
     heatmap_identity: dict | None = None,
     uv_hash: str | None = None,
     repair: dict | None = None,
+    import_topology: dict | None = None,
+    seam_reason_counts: dict | None = None,
 ) -> dict:
     """Assemble ``uv_generate_summary.json`` (plan §4.1).
 
@@ -1320,6 +1366,10 @@ def build_generate_summary(
         "heatmap_identity": heatmap_identity,
         "uv_hash": uv_hash,
         "repair": repair,
+        # G2/G14: what the importer + normalization did to the mesh we measured.
+        "import_topology": import_topology,
+        # G7: the flat "why was this seam cut" tally (mandatory kinds always present).
+        "seam_reason_counts": seam_reason_counts,
     }
 
 

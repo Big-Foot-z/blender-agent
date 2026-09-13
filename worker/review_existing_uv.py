@@ -55,29 +55,29 @@ def _ensure_importable() -> None:
             sys.path.insert(0, p)
 
 
-def _open_model(bpy, path: str) -> None:
-    """Open a ``.blend`` or import a model into a fresh scene (plan §5.2)."""
+def _open_model(bpy, path: str) -> dict:
+    """Open a ``.blend`` or import a model into a fresh scene (plan §5.2; G1/G14).
+
+    Non-``.blend`` input goes through the ONE shared importer
+    (:func:`uv_agent.blender.topology_normalize.import_model`) so the glTF
+    ``merge_vertices=True`` policy is identical on every entry point. Returns the
+    importer's ``merge_info``; callers that ignore it keep working.
+    """
+    _ensure_importable()
+    from uv_agent.blender.topology_normalize import import_model
+
     ext = os.path.splitext(path)[1].lower()
     if ext == ".blend":
         bpy.ops.wm.open_mainfile(filepath=path)
-        return
+        return {"format": "blend", "merge_vertices_requested": False,
+                "merge_vertices_supported": None, "merge_vertices_enabled": False}
     # Start from an empty scene so only the imported model is summarized/reviewed.
     try:
         bpy.ops.wm.read_homefile(use_empty=True)
     except Exception:  # noqa: BLE001 - best-effort; default scene is acceptable
         for o in list(bpy.data.objects):
             bpy.data.objects.remove(o, do_unlink=True)
-    if ext == ".fbx":
-        bpy.ops.import_scene.fbx(filepath=path)
-    elif ext == ".obj":
-        if hasattr(bpy.ops.wm, "obj_import"):
-            bpy.ops.wm.obj_import(filepath=path)
-        else:  # pragma: no cover - legacy Blender
-            bpy.ops.import_scene.obj(filepath=path)
-    elif ext in (".glb", ".gltf"):
-        bpy.ops.import_scene.gltf(filepath=path)
-    else:
-        raise ValueError(f"unsupported model format: {ext or '(none)'}")
+    return import_model(bpy, path, merge_vertices=True)
 
 
 def _mesh_objects(bpy) -> list:
@@ -89,6 +89,58 @@ def _resolve_object(bpy, object_name):
     if obj is None or obj.type != "MESH":
         obj = next((o for o in _mesh_objects(bpy)), None)
     return obj
+
+
+#: Input-topology evidence file, same name as the generate worker writes (G6/G14).
+IMPORT_TOPOLOGY_FILE = "import_topology.json"
+
+
+def _normalize_opened_model(bpy, model_path: str, merge_info: dict | None,
+                            object_name=None) -> dict:
+    """Normalize the just-opened model ONCE, BEFORE any mesh extraction (G6/G14).
+
+    One normalized topology = one fingerprint / edge-id space across every UV-path
+    worker, so this runs on the same resolved object the review will measure. Never
+    raises: an unevaluatable normalization is recorded as ``{"error": ...}`` and the
+    worker keeps going (the contract output still gets written).
+    """
+    _ensure_importable()
+    try:
+        from uv_agent.blender.topology_normalize import (
+            format_from_path, normalize_topology,
+        )
+
+        obj = _resolve_object(bpy, object_name)
+        if obj is None:
+            return {"error": "no mesh object to normalize"}
+        return normalize_topology(bpy, obj, fmt=format_from_path(model_path),
+                                  merge_info=merge_info)
+    except Exception as exc:  # noqa: BLE001 - normalization evidence, never fatal
+        print(f"review_existing_uv: topology normalization failed: {exc}", file=sys.stderr)
+        return {"error": str(exc)}
+
+
+def _compact_import_topology(report: dict | None) -> dict:
+    """Summary-sized normalization block (G14: the ONE compaction, shared)."""
+    rep = dict(report or {})
+    if "error" in rep and "format" not in rep:
+        return {"error": rep["error"]}
+    try:
+        from app_uv_generate_contract import compact_import_topology_block  # type: ignore
+
+        return compact_import_topology_block(rep)
+    except Exception:  # noqa: BLE001 - fall back to the raw report
+        return rep
+
+
+def _write_import_topology(contract, out_dir: str | None, report: dict | None) -> None:
+    """Write ``import_topology.json`` next to the worker's other output."""
+    if not out_dir or report is None:
+        return
+    try:
+        contract.write_json(os.path.join(out_dir, IMPORT_TOPOLOGY_FILE), report)
+    except Exception as exc:  # noqa: BLE001 - evidence write is best-effort
+        print(f"review_existing_uv: import_topology write failed: {exc}", file=sys.stderr)
 
 
 def _model_label(job: dict) -> str | None:
@@ -103,13 +155,16 @@ def _model_label(job: dict) -> str | None:
 # ---------------------------------------------------------------------------
 # inspect_uv_layers (plan §5.1)
 # ---------------------------------------------------------------------------
-def _run_inspect(bpy, contract, job: dict) -> int:
+def _run_inspect(bpy, contract, job: dict, import_topology: dict | None = None) -> int:
     from uv_agent.blender.uv_extract import object_uv_summary
 
     out_path = job.get("out")
     if not out_path:
         print("inspect_uv_layers requires --job with an 'out' path", file=sys.stderr)
         return 2
+
+    _write_import_topology(contract, os.path.dirname(os.path.abspath(out_path)),
+                           import_topology)
 
     objects = [object_uv_summary(o) for o in _mesh_objects(bpy)]
     any_uv = any(o["has_uv"] for o in objects)
@@ -120,6 +175,7 @@ def _run_inspect(bpy, contract, job: dict) -> int:
         "project_id": job.get("project_id"),
         "model": _model_label(job),
         "objects": objects,
+        "import_topology": _compact_import_topology(import_topology),
         "recommended_next_step": (
             contract.NEXT_REVIEW_EXISTING_UV if any_uv
             else contract.NEXT_OPEN_SEAM_OR_GENERATE
@@ -134,7 +190,8 @@ def _run_inspect(bpy, contract, job: dict) -> int:
 # ---------------------------------------------------------------------------
 # review_existing_uv (plan §5.2, §6, §7)
 # ---------------------------------------------------------------------------
-def _run_review(bpy, contract, job: dict, status_path: str, status: dict) -> int:
+def _run_review(bpy, contract, job: dict, status_path: str, status: dict,
+                import_topology: dict | None = None) -> int:
     from uv_agent.blender.review_render import render_checker_views
     from uv_agent.blender.uv_extract import extract_mesh_graph_with_uv, list_uv_layers
     from uv_agent.geometry.uv_review import (
@@ -147,6 +204,11 @@ def _run_review(bpy, contract, job: dict, status_path: str, status: dict) -> int
     requested_layer = job.get("uv_layer")
     options = job.get("options") or {}
     model_label = _model_label(job)
+
+    # G6/G14: the normalization evidence lands in the run folder before anything
+    # can fail; the mesh below is extracted from the ALREADY normalized object.
+    _write_import_topology(contract, out_dir, import_topology)
+    topology_block = _compact_import_topology(import_topology)
 
     obj = _resolve_object(bpy, requested_object)
     if obj is None:
@@ -176,6 +238,7 @@ def _run_review(bpy, contract, job: dict, status_path: str, status: dict) -> int
     if uvmap is None or resolved_layer is None:
         summary = contract.no_uv_summary(
             run_id=run_id, model=model_label, object_name=obj.name)
+        summary["import_topology"] = topology_block
         contract.write_json(os.path.join(out_dir, "uv_review_summary.json"), summary)
         contract.write_json(os.path.join(out_dir, "uv_layers.json"), list_uv_layers(obj))
         contract.finalize_status(status, status=contract.STATUS_NO_UV, artifacts={})
@@ -258,6 +321,7 @@ def _run_review(bpy, contract, job: dict, status_path: str, status: dict) -> int
         issues=issues,
         warnings=warnings,
     )
+    summary["import_topology"] = topology_block
     contract.write_json(os.path.join(out_dir, "uv_review_summary.json"), summary)
 
     contract.finalize_status(status, status=contract.STATUS_ACCEPTED, artifacts=artifacts)
@@ -317,7 +381,7 @@ def main() -> int:
     # --- inspect path: write result to job["out"], no run folder ----------
     if command == contract.CMD_INSPECT_UV_LAYERS:
         try:
-            _open_model(bpy, model)
+            merge_info = _open_model(bpy, model)
         except Exception as exc:  # noqa: BLE001 - structured import failure (plan §10)
             if job.get("out"):
                 contract.write_json(job["out"], contract.error_envelope(
@@ -325,7 +389,9 @@ def main() -> int:
                     project_id=job.get("project_id"), model=_model_label(job)))
             print(f"inspect_uv_layers: open/import failed: {exc}", file=sys.stderr)
             return 3
-        return _run_inspect(bpy, contract, job)
+        import_topology = _normalize_opened_model(
+            bpy, model, merge_info, job.get("object_name"))
+        return _run_inspect(bpy, contract, job, import_topology)
 
     # --- review path: full run-folder lifecycle ---------------------------
     out_dir = job.get("out_dir") or os.path.join("out", job.get("run_id", "review_run"))
@@ -341,8 +407,10 @@ def main() -> int:
     contract.write_json(status_path, status)
 
     try:
-        _open_model(bpy, model)
-        return _run_review(bpy, contract, job, status_path, status)
+        merge_info = _open_model(bpy, model)
+        import_topology = _normalize_opened_model(
+            bpy, model, merge_info, job.get("object_name"))
+        return _run_review(bpy, contract, job, status_path, status, import_topology)
     except Exception as exc:  # noqa: BLE001 - any failure becomes a structured status
         tb = traceback.format_exc()
         err = {"code": "exception", "message": str(exc), "traceback": tb}

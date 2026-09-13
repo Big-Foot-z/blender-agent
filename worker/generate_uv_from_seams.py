@@ -93,28 +93,28 @@ def _repo_root() -> str:
     return os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
-def _open_model(bpy, path: str) -> None:
-    """Open a ``.blend`` or import a model into a fresh scene (plan §4.1 import set)."""
+def _open_model(bpy, path: str) -> dict:
+    """Open a ``.blend`` or import a model into a fresh scene (plan §4.1; G1/G14).
+
+    Every non-``.blend`` input goes through the ONE shared importer
+    (:func:`uv_agent.blender.topology_normalize.import_model`), so the glTF
+    ``merge_vertices=True`` policy is applied identically on every entry point.
+    Returns the importer's ``merge_info``; callers that ignore it keep working.
+    """
+    _ensure_importable()
+    from uv_agent.blender.topology_normalize import import_model
+
     ext = os.path.splitext(path)[1].lower()
     if ext == ".blend":
         bpy.ops.wm.open_mainfile(filepath=path)
-        return
+        return {"format": "blend", "merge_vertices_requested": False,
+                "merge_vertices_supported": None, "merge_vertices_enabled": False}
     try:
         bpy.ops.wm.read_homefile(use_empty=True)
     except Exception:  # noqa: BLE001 - best-effort; default scene is acceptable
         for o in list(bpy.data.objects):
             bpy.data.objects.remove(o, do_unlink=True)
-    if ext == ".fbx":
-        bpy.ops.import_scene.fbx(filepath=path)
-    elif ext == ".obj":
-        if hasattr(bpy.ops.wm, "obj_import"):
-            bpy.ops.wm.obj_import(filepath=path)
-        else:  # pragma: no cover - legacy Blender
-            bpy.ops.import_scene.obj(filepath=path)
-    elif ext in (".glb", ".gltf"):
-        bpy.ops.import_scene.gltf(filepath=path)
-    else:
-        raise ValueError(f"unsupported model format: {ext or '(none)'}")
+    return import_model(bpy, path, merge_vertices=True)
 
 
 def _mesh_objects(bpy) -> list:
@@ -597,8 +597,9 @@ def _final_reread_audit(bpy, staging_blend: str, out_dir: str, mesh, final_seams
 # generate_uv_from_seams (plan §4.1, §10; work plan §3)
 # ---------------------------------------------------------------------------
 def _run_generate(bpy, contract, job: dict, out_dir: str, status_path: str, status: dict,
-                  *, mode: str, options: dict) -> int:
+                  *, mode: str, options: dict, merge_info: dict | None = None) -> int:
     from uv_agent.blender.extract import extract_mesh_graph
+    from uv_agent.blender.topology_normalize import format_from_path, normalize_topology
     from uv_agent.geometry.mesh_identity import mesh_identity
     from uv_agent.geometry.shading_policy import shading_snapshot
 
@@ -628,7 +629,17 @@ def _run_generate(bpy, contract, job: dict, out_dir: str, status_path: str, stat
         return _fail("object_not_found",
                      f"no mesh object to generate (requested {job.get('object_name')!r})")
 
-    # --- G0: the approved low-poly's identity BEFORE anything touches it ---
+    # --- G1/G2/G14: input topology normalization BEFORE anything measures the mesh.
+    # The audit runs for EVERY format (the weld itself is gated to glb/gltf inside
+    # normalize_topology), so every run carries the evidence.
+    try:
+        import_topology = normalize_topology(
+            bpy, obj, fmt=format_from_path(job.get("model") or ""), merge_info=merge_info)
+    except Exception as exc:  # noqa: BLE001 - an unevaluatable audit is recorded, never fatal
+        import_topology = {"error": str(exc)}
+        print(f"generate_uv_from_seams: topology normalization failed: {exc}", file=sys.stderr)
+
+    # --- G0/G6: the approved low-poly's identity, on the NORMALIZED mesh ---
     mesh = extract_mesh_graph(obj)
     identity_before = mesh_identity(mesh, model_path=job.get("model"))
 
@@ -647,6 +658,7 @@ def _run_generate(bpy, contract, job: dict, out_dir: str, status_path: str, stat
         "obj": obj,
         "mesh": mesh,
         "identity_before": identity_before,
+        "import_topology": import_topology,
         "shading_before": shading_before,
         "feedback_applied": feedback_applied,
         "feedback_inputs": feedback_inputs,
@@ -888,6 +900,36 @@ def _run_auto(bpy, contract, job: dict, out_dir: str, status_path: str, status: 
         p5_extra={})
 
 
+#: G7 report key -> the overlay's internal ``reason_code_counts`` key.
+_SEAM_REASON_CODE_MAP = {
+    "boundary_topology": "boundary_topology",
+    "mandatory_fold": "mandatory_90",
+    "user": "user",
+    "shading": "shading",
+    "material": "material",
+    "distortion": "distortion_added",
+    "rejected_candidate": "rejected_candidate",
+}
+
+
+def _seam_reason_counts(overlay: dict | None) -> dict | None:
+    """G7: the flat "why was this seam cut" tally for the summary.
+
+    Prefers the overlay's own ``seam_reason_counts`` (the engine's canonical block);
+    an older overlay that only carries ``reason_code_counts`` is translated here so
+    the mandatory kinds are never missing from the report.
+    """
+    if not overlay:
+        return None
+    ready = overlay.get("seam_reason_counts")
+    if isinstance(ready, dict):
+        return dict(ready)
+    codes = overlay.get("reason_code_counts")
+    if not isinstance(codes, dict):
+        return None
+    return {key: int(codes.get(src, 0) or 0) for key, src in _SEAM_REASON_CODE_MAP.items()}
+
+
 def _finish_run(bpy, contract, job: dict, out_dir: str, status_path: str, status: dict,
                 ctx: dict, *, res: dict, final_seams, metrics: dict,
                 seam_source, seam_spec_label, seam_integrity_block: dict,
@@ -1009,6 +1051,10 @@ def _finish_run(bpy, contract, job: dict, out_dir: str, status_path: str, status
         pass
 
     # --- evidence artifacts (G0/G1/G3/G5/G7) ------------------------------
+    # G2/G14: the input normalization audit ships in BOTH modes — the fingerprint
+    # above was computed on the mesh this report describes.
+    import_topology = dict(ctx.get("import_topology") or {})
+    _write(contract.IMPORT_TOPOLOGY_FILE, import_topology)
     _write(contract.DISTORTION_V2_FILE, distortion_v2)
     _write(contract.CORRECTNESS_FILE, res.get("correctness") or {})
     _write(contract.QUALITY_PROFILE_FILE, res.get("quality_profile") or {})
@@ -1024,9 +1070,19 @@ def _finish_run(bpy, contract, job: dict, out_dir: str, status_path: str, status
         started_at=status.get("started_at"),
         extra={"elapsed_s": round(time.monotonic() - ctx["started"], 3),
                "peak_memory_mb": _peak_memory_mb()})
+    # G6/G14: the manifest names BOTH ends of the import — the source file's hash and
+    # the fingerprint of the normalized mesh — plus the import options that produced it.
+    manifest["source_asset_hash"] = identity_before.get("model_sha256")
+    manifest["normalized_mesh_fingerprint"] = identity_before.get("fingerprint")
+    manifest["import_options"] = {
+        "merge_vertices": import_topology.get("merge_vertices_enabled"),
+        "position_weld_applied": import_topology.get("position_weld_applied"),
+        "weld_tolerance": import_topology.get("weld_tolerance"),
+    }
     _write(contract.RUN_MANIFEST_FILE, manifest)
 
     heatmap_identity = None
+    overlay = None
     if auto:
         _write(contract.FINAL_REREAD_AUDIT_FILE, audit)
         _write(contract.CANDIDATE_HISTORY_FILE, res.get("candidate_history") or [])
@@ -1224,7 +1280,10 @@ def _finish_run(bpy, contract, job: dict, out_dir: str, status_path: str, status
         heatmap_identity=heatmap_identity,
         uv_hash=res.get("uv_hash"),
         repair=(contract.compact_repair_block(res.get("repair"))
-                if res.get("repair") is not None else None))
+                if res.get("repair") is not None else None),
+        import_topology=(contract.compact_import_topology_block(import_topology)
+                         if import_topology else None),
+        seam_reason_counts=_seam_reason_counts(overlay))
     summary["feedback_applied"] = ctx["feedback_applied"]
     summary["performance"] = {
         "elapsed_s": round(time.monotonic() - ctx["started"], 3),
@@ -1347,13 +1406,13 @@ def main() -> int:
     import bpy  # only available inside Blender
 
     try:
-        _open_model(bpy, model)
+        merge_info = _open_model(bpy, model)
     except Exception as exc:  # noqa: BLE001 - structured import failure
         return _early_fail({"code": "import_failed", "message": f"open/import failed: {exc}"}, rc=3)
 
     try:
         return _run_generate(bpy, contract, job, out_dir, status_path, status,
-                             mode=mode, options=options)
+                             mode=mode, options=options, merge_info=merge_info)
     except Exception as exc:  # noqa: BLE001 - any failure becomes a structured status
         tb = traceback.format_exc()
         contract.finalize_status(status, status=contract.STATUS_FAILED,

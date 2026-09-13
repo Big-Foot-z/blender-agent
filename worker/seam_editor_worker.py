@@ -65,28 +65,28 @@ def _ensure_importable() -> None:
             sys.path.insert(0, p)
 
 
-def _open_model(bpy, path: str) -> None:
-    """Open a ``.blend`` or import a model into a fresh scene (plan §5 import set)."""
+def _open_model(bpy, path: str) -> dict:
+    """Open a ``.blend`` or import a model into a fresh scene (plan §5; G1/G14).
+
+    Non-``.blend`` input goes through the ONE shared importer
+    (:func:`uv_agent.blender.topology_normalize.import_model`) so the glTF
+    ``merge_vertices=True`` policy is identical on every entry point. Returns the
+    importer's ``merge_info``; callers that ignore it keep working.
+    """
+    _ensure_importable()
+    from uv_agent.blender.topology_normalize import import_model
+
     ext = os.path.splitext(path)[1].lower()
     if ext == ".blend":
         bpy.ops.wm.open_mainfile(filepath=path)
-        return
+        return {"format": "blend", "merge_vertices_requested": False,
+                "merge_vertices_supported": None, "merge_vertices_enabled": False}
     try:
         bpy.ops.wm.read_homefile(use_empty=True)
     except Exception:  # noqa: BLE001 - best-effort; default scene is acceptable
         for o in list(bpy.data.objects):
             bpy.data.objects.remove(o, do_unlink=True)
-    if ext == ".fbx":
-        bpy.ops.import_scene.fbx(filepath=path)
-    elif ext == ".obj":
-        if hasattr(bpy.ops.wm, "obj_import"):
-            bpy.ops.wm.obj_import(filepath=path)
-        else:  # pragma: no cover - legacy Blender
-            bpy.ops.import_scene.obj(filepath=path)
-    elif ext in (".glb", ".gltf"):
-        bpy.ops.import_scene.gltf(filepath=path)
-    else:
-        raise ValueError(f"unsupported model format: {ext or '(none)'}")
+    return import_model(bpy, path, merge_vertices=True)
 
 
 def _mesh_objects(bpy) -> list:
@@ -98,6 +98,57 @@ def _resolve_object(bpy, object_name):
     if obj is None or obj.type != "MESH":
         obj = next((o for o in _mesh_objects(bpy)), None)
     return obj
+
+
+#: Input-topology evidence file, same name as the generate worker writes (G6/G14).
+IMPORT_TOPOLOGY_FILE = "import_topology.json"
+
+
+def _normalize_opened_model(bpy, model_path: str, merge_info: dict | None,
+                            object_name=None) -> dict:
+    """Normalize the just-opened model ONCE, BEFORE any mesh extraction (G6/G14).
+
+    Edge ids handed to the seam editor must come from the SAME normalized topology
+    every other UV-path worker measures. Never raises: an unevaluatable
+    normalization is recorded as ``{"error": ...}`` and the worker keeps going.
+    """
+    _ensure_importable()
+    try:
+        from uv_agent.blender.topology_normalize import (
+            format_from_path, normalize_topology,
+        )
+
+        obj = _resolve_object(bpy, object_name)
+        if obj is None:
+            return {"error": "no mesh object to normalize"}
+        return normalize_topology(bpy, obj, fmt=format_from_path(model_path),
+                                  merge_info=merge_info)
+    except Exception as exc:  # noqa: BLE001 - normalization evidence, never fatal
+        print(f"seam_editor_worker: topology normalization failed: {exc}", file=sys.stderr)
+        return {"error": str(exc)}
+
+
+def _compact_import_topology(report: dict | None) -> dict:
+    """Summary-sized normalization block (G14: the ONE compaction, shared)."""
+    rep = dict(report or {})
+    if "error" in rep and "format" not in rep:
+        return {"error": rep["error"]}
+    try:
+        from app_uv_generate_contract import compact_import_topology_block  # type: ignore
+
+        return compact_import_topology_block(rep)
+    except Exception:  # noqa: BLE001 - fall back to the raw report
+        return rep
+
+
+def _write_import_topology(contract, out_dir: str | None, report: dict | None) -> None:
+    """Write ``import_topology.json`` next to the worker's other output."""
+    if not out_dir or report is None:
+        return
+    try:
+        contract.write_json(os.path.join(out_dir, IMPORT_TOPOLOGY_FILE), report)
+    except Exception as exc:  # noqa: BLE001 - evidence write is best-effort
+        print(f"seam_editor_worker: import_topology write failed: {exc}", file=sys.stderr)
 
 
 def _model_label(job: dict) -> str | None:
@@ -119,7 +170,8 @@ def _status_input(job: dict) -> dict:
 # ---------------------------------------------------------------------------
 # export_edge_geometry (plan §5.1)
 # ---------------------------------------------------------------------------
-def _run_export_edge_geometry(bpy, contract, job, out_dir, status_path, status) -> int:
+def _run_export_edge_geometry(bpy, contract, job, out_dir, status_path, status,
+                              import_topology=None) -> int:
     from uv_agent.blender.extract import extract_mesh_graph
     from uv_agent.geometry.edge_geometry import (
         build_edge_geometry, edge_geometry_size_warnings, mesh_signature,
@@ -147,6 +199,7 @@ def _run_export_edge_geometry(bpy, contract, job, out_dir, status_path, status) 
         "command": contract.CMD_EXPORT_EDGE_GEOMETRY,
         "object_name": obj.name,
         "mesh_signature": signature,
+        "import_topology": import_topology,
         "artifacts": artifacts,
         "warnings": warnings,
     }
@@ -160,7 +213,8 @@ def _run_export_edge_geometry(bpy, contract, job, out_dir, status_path, status) 
 # ---------------------------------------------------------------------------
 # extract_uv_boundary_as_seams (plan §6.4)
 # ---------------------------------------------------------------------------
-def _run_extract_uv_boundary(bpy, contract, job, out_dir, status_path, status) -> int:
+def _run_extract_uv_boundary(bpy, contract, job, out_dir, status_path, status,
+                             import_topology=None) -> int:
     from uv_agent.blender.uv_extract import extract_mesh_graph_with_uv
     from uv_agent.geometry.uv_boundary import extract_uv_boundary_seams
 
@@ -185,6 +239,7 @@ def _run_extract_uv_boundary(bpy, contract, job, out_dir, status_path, status) -
             "path": None,
             "object_name": obj.name,
             "uv_layer": requested_layer,
+            "import_topology": import_topology,
             "warnings": ["UV layer not found or empty."],
         }
         contract.write_json(os.path.join(out_dir, "boundary_extract_report.json"), result)
@@ -218,6 +273,7 @@ def _run_extract_uv_boundary(bpy, contract, job, out_dir, status_path, status) -
         "user_seam_count": len(boundary.seam_edges),
         "user_protected_count": 0,
         "spec": spec,
+        "import_topology": import_topology,
         "report": boundary.report(),
     }
     contract.write_json(os.path.join(out_dir, "boundary_extract_report.json"), result)
@@ -244,7 +300,8 @@ def _edge_count_for_object(bpy, object_name) -> tuple[int | None, str | None]:
     return mesh.edge_count, obj.name
 
 
-def _run_validate_spec(bpy, contract, job, out_dir, status_path, status) -> int:
+def _run_validate_spec(bpy, contract, job, out_dir, status_path, status,
+                       import_topology=None) -> int:
     spec = job.get("spec") or {}
     edge_count, resolved_name = _edge_count_for_object(bpy, job.get("object_name"))
     validation = contract.normalize_and_validate_spec(
@@ -254,6 +311,7 @@ def _run_validate_spec(bpy, contract, job, out_dir, status_path, status) -> int:
         "status": contract.STATUS_ACCEPTED,
         "command": contract.CMD_VALIDATE_USER_SEAM_SPEC,
         "object_name": resolved_name,
+        "import_topology": import_topology,
         "validation": validation,
     }
     contract.write_json(os.path.join(out_dir, "seam_spec_validation.json"), result)
@@ -268,7 +326,7 @@ def _run_validate_spec(bpy, contract, job, out_dir, status_path, status) -> int:
 # ---------------------------------------------------------------------------
 # load / save (plan §6.1, §6.2) — single-result-file commands (no run folder)
 # ---------------------------------------------------------------------------
-def _run_load_spec(bpy, contract, job) -> int:
+def _run_load_spec(bpy, contract, job, import_topology=None) -> int:
     out = job.get("out")
     path = job.get("path")
     if not path or not os.path.exists(path):
@@ -292,6 +350,7 @@ def _run_load_spec(bpy, contract, job) -> int:
             "conflicts": validation["conflicts"],
             "object_mismatch": validation["object_mismatch"],
         },
+        "import_topology": import_topology,
     }
     if out:
         contract.write_json(out, result)
@@ -299,7 +358,7 @@ def _run_load_spec(bpy, contract, job) -> int:
     return 0
 
 
-def _run_save_spec(bpy, contract, job) -> int:
+def _run_save_spec(bpy, contract, job, import_topology=None) -> int:
     out = job.get("out")
     out_path = job.get("out_path")
     spec = job.get("spec") or {}
@@ -326,6 +385,7 @@ def _run_save_spec(bpy, contract, job) -> int:
             "invalid_edges": validation["invalid_edges"],
             "conflicts": validation["conflicts"],
         },
+        "import_topology": import_topology,
     }
     if out:
         contract.write_json(out, result)
@@ -395,7 +455,7 @@ def main() -> int:
     contract.write_json(status_path, status)
 
     try:
-        _open_model(bpy, model)
+        merge_info = _open_model(bpy, model)
     except Exception as exc:  # noqa: BLE001 - structured import failure
         err = {"code": "import_failed", "message": f"open/import failed: {exc}"}
         contract.finalize_status(status, status=contract.STATUS_FAILED, error=err)
@@ -403,13 +463,22 @@ def main() -> int:
         print(f"seam_editor_worker: open/import failed: {exc}", file=sys.stderr)
         return 3
 
+    # G6/G14: normalize ONCE, before any extract_mesh_graph* reads edge ids.
+    import_topology = _normalize_opened_model(
+        bpy, model, merge_info, job.get("object_name"))
+    _write_import_topology(contract, out_dir, import_topology)
+    topology_block = _compact_import_topology(import_topology)
+
     try:
         if command == contract.CMD_EXPORT_EDGE_GEOMETRY:
-            return _run_export_edge_geometry(bpy, contract, job, out_dir, status_path, status)
+            return _run_export_edge_geometry(bpy, contract, job, out_dir, status_path, status,
+                                             topology_block)
         if command == contract.CMD_EXTRACT_UV_BOUNDARY:
-            return _run_extract_uv_boundary(bpy, contract, job, out_dir, status_path, status)
+            return _run_extract_uv_boundary(bpy, contract, job, out_dir, status_path, status,
+                                            topology_block)
         if command == contract.CMD_VALIDATE_USER_SEAM_SPEC:
-            return _run_validate_spec(bpy, contract, job, out_dir, status_path, status)
+            return _run_validate_spec(bpy, contract, job, out_dir, status_path, status,
+                                      topology_block)
         return 2
     except Exception as exc:  # noqa: BLE001 - any failure becomes a structured status
         tb = traceback.format_exc()
@@ -423,15 +492,22 @@ def main() -> int:
 def _dispatch_simple(bpy, contract, job, command, fn) -> int:
     """Open the model and run a single-result-file command (load/save)."""
     try:
-        _open_model(bpy, job["model"])
+        merge_info = _open_model(bpy, job["model"])
     except Exception as exc:  # noqa: BLE001
         if job.get("out"):
             contract.write_json(job["out"], contract.error_envelope(
                 command, f"open/import failed: {exc}", code="import_failed"))
         print(f"seam_editor_worker: open/import failed: {exc}", file=sys.stderr)
         return 3
+
+    # G6/G14: normalize ONCE, before the spec is validated against mesh edge ids.
+    import_topology = _normalize_opened_model(
+        bpy, job["model"], merge_info, job.get("object_name"))
+    out = job.get("out")
+    _write_import_topology(contract, os.path.dirname(os.path.abspath(out)) if out else None,
+                           import_topology)
     try:
-        return fn(bpy, contract, job)
+        return fn(bpy, contract, job, _compact_import_topology(import_topology))
     except Exception as exc:  # noqa: BLE001
         tb = traceback.format_exc()
         if job.get("out"):

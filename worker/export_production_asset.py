@@ -63,28 +63,28 @@ def _ensure_importable() -> None:
             sys.path.insert(0, p)
 
 
-def _open_model(bpy, path: str) -> None:
-    """Open the selected UV ``.blend`` (or import a model) into a fresh scene."""
+def _open_model(bpy, path: str) -> dict:
+    """Open the selected UV ``.blend`` (or import a model) into a fresh scene (G1/G14).
+
+    Non-``.blend`` input goes through the ONE shared importer
+    (:func:`uv_agent.blender.topology_normalize.import_model`) so the glTF
+    ``merge_vertices=True`` policy is identical on every entry point. Returns the
+    importer's ``merge_info``; callers that ignore it keep working.
+    """
+    _ensure_importable()
+    from uv_agent.blender.topology_normalize import import_model
+
     ext = os.path.splitext(path)[1].lower()
     if ext == ".blend":
         bpy.ops.wm.open_mainfile(filepath=os.path.abspath(path))
-        return
+        return {"format": "blend", "merge_vertices_requested": False,
+                "merge_vertices_supported": None, "merge_vertices_enabled": False}
     try:
         bpy.ops.wm.read_homefile(use_empty=True)
     except Exception:  # noqa: BLE001 - best-effort; default scene is acceptable
         for o in list(bpy.data.objects):
             bpy.data.objects.remove(o, do_unlink=True)
-    if ext == ".fbx":
-        bpy.ops.import_scene.fbx(filepath=path)
-    elif ext == ".obj":
-        if hasattr(bpy.ops.wm, "obj_import"):
-            bpy.ops.wm.obj_import(filepath=path)
-        else:  # pragma: no cover - legacy Blender
-            bpy.ops.import_scene.obj(filepath=path)
-    elif ext in (".glb", ".gltf"):
-        bpy.ops.import_scene.gltf(filepath=path)
-    else:
-        raise ValueError(f"unsupported model format: {ext or '(none)'}")
+    return import_model(bpy, path, merge_vertices=True)
 
 
 def _status_input(job: dict) -> dict:
