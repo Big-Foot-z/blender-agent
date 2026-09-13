@@ -16,6 +16,7 @@ from chart_uv_agent.gate import ChartGateConfig
 from chart_uv_agent.pipeline import run_chart_uv
 from chart_uv_agent.segmentation import mandatory_seam_edges
 from tests.helpers.fake_blender_uv import FakeUnwrapBackend
+from uv_agent.geometry.mesh_graph import MeshGraph
 
 #: Keys the automatic result block must always carry (G1/G2 "auto 결과 블록").
 AUTO_KEYS = (
@@ -343,14 +344,17 @@ def test_input_diagnostics_flags_a_zero_area_face(monkeypatch):
 
 
 def test_island_cap_termination_reason(monkeypatch):
-    """G5: the island cap reached BEFORE any candidate could be evaluated must be reported
-    as ``island_cap``, never as ``max_rounds`` / ``no_improving_candidate``."""
+    """G5: a run stopped by the island cap must be reported as ``island_cap``, never as
+    ``max_rounds`` / ``no_improving_candidate``.
+
+    CG5: this fixture is ALSO catastrophic at the cap, so the seam-free R1 re-unwrap is
+    now attempted (candidates are evaluated); only the seam-adding candidates are blocked,
+    and the termination reason is unchanged."""
     mesh, _backend, obj = _sphere(monkeypatch)
     result = run_chart_uv(obj, mesh, max_rounds=3,
                           budget={"island_cap": 1, "max_candidates_per_round": 2})
 
     termination = result["termination"]
-    assert termination["candidates_evaluated"] == 0, termination
     assert termination["reason"] == "island_cap", termination
 
 
@@ -604,3 +608,77 @@ def test_two_runs_agree_on_the_seams_and_the_merge_back_history(monkeypatch):
     assert second["merge_back"]["removed_edges"] == first["merge_back"]["removed_edges"]
     assert _without_timings(second["merge_back"]["history"]) == \
         _without_timings(first["merge_back"]["history"])
+
+
+# ------------------- 13. CG5: catastrophic repair still runs at the island cap
+
+
+def _needle_grid(monkeypatch, *, inject_needle: bool, n: int = 4):
+    """A flat ``n x n`` quad grid (ONE chart, no fold seams) behind the fake backend.
+
+    With ``inject_needle`` the unwrap always collapses one UV corner of a middle face
+    (the CG5 pattern from ``tests/test_catastrophic_repair.py``), so every layout the
+    pipeline measures fails the hard catastrophic gate; the R1 re-unwrap repairs it.
+    """
+    coords = [(i / n, j / n, 0.0) for i in range(n + 1) for j in range(n + 1)]
+
+    def vid(i: int, j: int) -> int:
+        return i * (n + 1) + j
+
+    faces = [[vid(i, j), vid(i + 1, j), vid(i + 1, j + 1), vid(i, j + 1)]
+             for i in range(n) for j in range(n)]
+    mesh = MeshGraph.from_faces("flat_grid", coords, faces)
+
+    backend = FakeUnwrapBackend(mesh)
+    obj = backend.install(monkeypatch)
+    loops = [int(li) for li in mesh.faces[5].loop_indices]
+    state = {"reunwrapped": False}
+
+    def inject(o) -> None:
+        o.uv.uv[loops[0]] = o.uv.uv[loops[1]]
+
+    real_unwrap = backend.unwrap_and_pack
+    real_reunwrap = backend.reunwrap_faces
+
+    def unwrap_and_pack(o, seams, **kwargs):
+        out = real_unwrap(o, seams, **kwargs)
+        if inject_needle and not state["reunwrapped"]:
+            inject(o)
+        return out
+
+    def reunwrap_faces(o, face_ids, **kwargs):
+        out = real_reunwrap(o, face_ids, **kwargs)
+        state["reunwrapped"] = True
+        return out
+
+    monkeypatch.setattr("chart_uv_agent.unwrap.unwrap_and_pack", unwrap_and_pack)
+    monkeypatch.setattr("chart_uv_agent.unwrap.reunwrap_faces", reunwrap_faces)
+    return mesh, backend, obj
+
+
+def test_catastrophic_repair_runs_even_at_the_island_cap(monkeypatch):
+    """CG5: a catastrophic failure at the island cap must still reach the refinement
+    loop — the R1 re-unwrap adds no seam, so the cap cannot forbid it."""
+    mesh, _backend, obj = _needle_grid(monkeypatch, inject_needle=True)
+    result = run_chart_uv(obj, mesh, max_rounds=3,
+                          budget={"island_cap": 1, "max_candidates_per_round": 2})
+
+    assert result["uv_island_count"] >= 1
+    reunwraps = [c for c in result["candidate_history"] if c.get("kind") == "reunwrap"]
+    assert reunwraps, result["candidate_history"]
+
+    termination = result["termination"]
+    assert (termination["reason"] != "island_cap"
+            or termination["candidates_evaluated"] > 0), termination
+
+
+def test_clean_run_at_the_island_cap_still_stops_without_candidates(monkeypatch):
+    """The control: no catastrophic failure at the cap ⇒ the old skip is unchanged."""
+    mesh, _backend, obj = _needle_grid(monkeypatch, inject_needle=False)
+    result = run_chart_uv(obj, mesh, max_rounds=3,
+                          budget={"island_cap": 1, "max_candidates_per_round": 2})
+
+    termination = result["termination"]
+    assert termination["candidates_evaluated"] == 0, termination
+    assert termination["reason"] in {"island_cap", "quality_passed"}, termination
+    assert not [c for c in result["candidate_history"] if c.get("kind") == "reunwrap"]

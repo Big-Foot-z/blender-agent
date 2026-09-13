@@ -814,16 +814,26 @@ def run_chart_uv(obj, mesh: MeshGraph, *, config: ChartGateConfig | None = None,
         # failure is a refinement target too, so a run that fails the frozen profile can
         # never terminate with "no candidate was ever evaluated" (G4/G5).
         v2_needed = False
+        # CG5: a CATASTROPHIC failure must still be repaired when the island cap is already
+        # reached — the R1 re-unwrap adds no seam, so the cap cannot forbid it. Resolved off
+        # the already-cached round measurement, only while ``v2_needed`` is evaluated.
+        cat_failed = False
         if use_refinement_loop and not changed:
             v2_needed = not _round_v2()["passed"]
             rec["v2_passed"] = not v2_needed
+            cat_failed = bool(((_round_v2().get("catastrophic") or {}).get("passed") is False))
         # The cap that actually applies is the STRICTER of the gate cap and the refinement
         # budget's ``island_cap`` — refining past the budget cap would produce islands the
         # refinement loop itself would refuse (G5).
         refine_island_cap = min(int(config.island_count_max), int(budget["island_cap"]))
         if use_refinement_loop and not changed and (global_over or worst_over or v2_needed) \
-                and len(charts) < refine_island_cap:
+                and (len(charts) < refine_island_cap or cat_failed):
             before_seams = set(seams)
+            if len(charts) >= refine_island_cap:
+                # Entered ONLY because of the catastrophic failure (CG5). ``run_refinement``
+                # itself blocks the seam-adding candidates at the cap, so the same budget is
+                # passed through unchanged.
+                rec["refinement_at_cap"] = True
             ref = refinement_loop.run_refinement(
                 obj, mesh, seams, constraints=constraints, profile=profile,
                 budget={**budget, "max_iterations": 1}, margin=pack_margin, regions=regions,
@@ -841,7 +851,7 @@ def run_chart_uv(obj, mesh: MeshGraph, *, config: ChartGateConfig | None = None,
             else:
                 rec["refinement_reason"] = ref["termination"]["reason"]
         elif use_refinement_loop and not changed and (global_over or worst_over or v2_needed) \
-                and len(charts) >= refine_island_cap:
+                and len(charts) >= refine_island_cap and not cat_failed:
             # Refinement was skipped because the island cap is already reached — recorded so
             # the round history says WHY nothing was refined (G5).
             if not rec.get("reason"):
