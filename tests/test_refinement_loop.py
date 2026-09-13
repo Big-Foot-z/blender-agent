@@ -428,3 +428,67 @@ def test_candidate_records_carry_the_cut_reason_and_the_cut_cost(monkeypatch):
     assert rows
     for row in rows:
         assert row["cut_reason"] in ("distortion_repair", "correctness_repair")
+
+
+# --------------------------------------- 10. gap-only failures are re-packed (G9/G11)
+
+
+def _gap_audit_failing(monkeypatch, times: int):
+    """Make ``island_gap_audit`` report a failure for its first ``times`` calls."""
+    from uv_agent.geometry import uv_correctness
+
+    real = uv_correctness.island_gap_audit
+    state = {"calls": 0}
+
+    def failing(*args, **kwargs):
+        report = dict(real(*args, **kwargs))
+        state["calls"] += 1
+        if state["calls"] <= times:
+            report.update({"passed": False, "min_gap_px": 1.0})
+        else:
+            report.update({"passed": True})
+        return report
+
+    monkeypatch.setattr(uv_correctness, "island_gap_audit", failing)
+    return state
+
+
+def test_repack_for_gap_repacks_until_the_gap_passes(monkeypatch):
+    """G9/G11: a placement-ONLY failure is repaired by re-packing wider — never by a cut."""
+    mesh, backend, obj, seams, _constraints = _sphere(monkeypatch)
+    R.unwrap_and_measure(obj, mesh, seams, profile=PROFILE, margin=0.005,
+                         stage="merge_back")
+
+    _gap_audit_failing(monkeypatch, 2)
+    backend.calls.clear()
+    history: list = []
+    measurement = R.repack_for_gap(obj, mesh, seams, profile=PROFILE, pack_margin=0.005,
+                                   history=history)
+
+    assert measurement["gap_repack"] == {"attempts": 2, "passed": True}
+    assert measurement["correctness"]["island_gap"]["passed"] is True
+    assert len(history) == 1, history
+    row = history[0]
+    assert row["stage"] == "gap_repack"
+    assert row["attempts"] == 2
+    assert row["passed"] is True
+    assert "min_gap_px" in row and "min_border_gap_px" in row
+
+    repacks = [c for c in backend.calls if c[0] == "repack"]
+    assert [float(c[2]) for c in repacks] == [0.005 * 1.5, 0.005 * 2.0]
+    assert not [c for c in backend.calls if c[0] == "unwrap"], "a gap is never re-cut"
+
+
+def test_repack_for_gap_does_nothing_when_no_placement_check_fails(monkeypatch):
+    mesh, backend, obj, seams, _constraints = _sphere(monkeypatch)
+    R.unwrap_and_measure(obj, mesh, seams, profile=PROFILE, margin=0.005,
+                         stage="merge_back")
+
+    backend.calls.clear()
+    history: list = []
+    measurement = R.repack_for_gap(obj, mesh, seams, profile=PROFILE, pack_margin=0.005,
+                                   history=history)
+
+    assert "gap_repack" not in measurement
+    assert history == []
+    assert not [c for c in backend.calls if c[0] == "repack"]

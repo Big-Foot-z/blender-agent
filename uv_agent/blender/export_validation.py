@@ -13,6 +13,7 @@ edges, and UV/vertex fingerprints that survive triangulation and face reordering
 
 ``bpy`` is imported lazily, so the pure helpers (:func:`uv_layer_warnings`,
 :func:`count_warnings`, :func:`normals_warning`, :func:`uv_corner_fingerprint`,
+:func:`uv_corners_match`,
 :func:`source_matched_fold_audit`, :func:`build_reread_audit`) unit-test without
 Blender.
 """
@@ -102,7 +103,13 @@ def _import(bpy, path: str, fmt: str) -> None:
         else:  # pragma: no cover - legacy Blender
             bpy.ops.import_scene.obj(filepath=path)
     elif fmt in ("glb", "gltf"):
-        bpy.ops.import_scene.gltf(filepath=path)
+        # The glTF importer keeps every triangle disconnected unless it is told to
+        # weld: without ``merge_vertices`` a re-read quad mesh becomes one island
+        # per triangle pair, which destroys island / fold / texel measurement (G13).
+        try:
+            bpy.ops.import_scene.gltf(filepath=path, merge_vertices=True)
+        except TypeError:  # pragma: no cover - older Blender without the argument
+            bpy.ops.import_scene.gltf(filepath=path)
     else:
         raise ValueError(f"unsupported format for re-open: {fmt!r}")
 
@@ -261,6 +268,71 @@ def uv_corner_fingerprint(mesh, uvmap, *, ndigits: int = 5) -> dict:
         ))
     text = [" ".join(format(c, "." + str(ndigits) + "f") for c in row) for row in sorted(rows)]
     return {"sha256": _sha256_rows(text), "corner_count": len(rows)}
+
+
+#: Absolute tolerance for the fall-back corner comparison of :func:`uv_corners_match`.
+UV_CORNER_ATOL = 5e-4
+
+
+def _unique_corner_rows(mesh, uvmap, *, ndigits: int = 5):
+    """Unique ``(x, y, z, u, v)`` corner rows as a float array (dedup by rounding)."""
+    import numpy as np
+
+    rows: dict[tuple, tuple] = {}
+    for loop in mesh.loops:
+        x, y, z = mesh.vertices[loop.vertex_id].co
+        u, v = uvmap.get(loop.index)
+        raw = (float(x), float(y), float(z), float(u), float(v))
+        rows.setdefault(tuple(_round_value(c, ndigits) for c in raw), raw)
+    if not rows:
+        return np.zeros((0, 5), dtype=float)
+    return np.asarray(list(rows.values()), dtype=float)
+
+
+def _lexsorted(rows):
+    """Stable lexicographic order on 4-digit-rounded keys (float noise cannot reorder)."""
+    import numpy as np
+
+    if rows.shape[0] == 0:
+        return rows
+    keys = np.round(rows, 4)
+    order = np.lexsort(tuple(keys[:, i] for i in range(keys.shape[1] - 1, -1, -1)))
+    return rows[order]
+
+
+def uv_corners_match(source_mesh, source_uvmap, reread_mesh, reread_uvmap, *,
+                     atol: float = UV_CORNER_ATOL) -> dict:
+    """Do two layouts carry the SAME UV corner set, exactly or within ``atol``?
+
+    The 5-digit hash of :func:`uv_corner_fingerprint` is tried first (cheap, and
+    the common case). A format round trip can legitimately perturb UVs below the
+    digest's resolution — glTF stores UVs as float32 and flips V — so on a hash
+    mismatch the unique corner rows of both meshes are compared numerically:
+    equal counts, sorted lexicographically on 4-digit keys, ``np.allclose(atol)``.
+
+    Returns ``{"match", "method": "hash"|"tolerance", "max_abs_error",
+    "corner_count_source", "corner_count_reread"}``."""
+    import numpy as np
+
+    src_fp = uv_corner_fingerprint(source_mesh, source_uvmap)
+    re_fp = uv_corner_fingerprint(reread_mesh, reread_uvmap)
+    if src_fp["sha256"] == re_fp["sha256"]:
+        return {"match": True, "method": "hash", "max_abs_error": None,
+                "corner_count_source": int(src_fp["corner_count"]),
+                "corner_count_reread": int(re_fp["corner_count"])}
+
+    src_rows = _unique_corner_rows(source_mesh, source_uvmap)
+    re_rows = _unique_corner_rows(reread_mesh, reread_uvmap)
+    out = {"match": False, "method": "tolerance", "max_abs_error": None,
+           "corner_count_source": int(src_rows.shape[0]),
+           "corner_count_reread": int(re_rows.shape[0])}
+    if src_rows.shape[0] != re_rows.shape[0]:
+        return out
+    a = _lexsorted(src_rows)
+    b = _lexsorted(re_rows)
+    out["max_abs_error"] = float(np.max(np.abs(a - b))) if a.shape[0] else 0.0
+    out["match"] = bool(np.allclose(a, b, rtol=0.0, atol=atol))
+    return out
 
 
 def vertex_position_fingerprint(mesh, *, ndigits: int = 4) -> str:
@@ -422,8 +494,11 @@ def build_reread_audit(
 
     src_fp = uv_corner_fingerprint(source_mesh, source_uvmap)
     re_fp = uv_corner_fingerprint(reread_mesh, reread_uvmap)
+    corners = uv_corners_match(source_mesh, source_uvmap, reread_mesh, reread_uvmap)
     uv_fingerprint = {"source": src_fp, "reread": re_fp,
-                      "match": bool(src_fp["sha256"] == re_fp["sha256"])}
+                      "match": bool(corners["match"]),
+                      "method": corners["method"],
+                      "max_abs_error": corners["max_abs_error"]}
     src_vfp = vertex_position_fingerprint(source_mesh)
     re_vfp = vertex_position_fingerprint(reread_mesh)
     vertex_fingerprint = {"source": src_vfp, "reread": re_vfp,

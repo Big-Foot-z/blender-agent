@@ -188,6 +188,8 @@ def test_auto_generate_all_fixtures(fixtures, tmp_path):
             mand = summary.get("mandatory_audit") or {}
             corr = summary.get("correctness") or {}
             audit = summary.get("final_reread_audit")
+            frag = summary.get("fragmentation") or {}
+            frag_metrics = frag.get("metrics") or {}
             row.update({
                 "status": status.get("status"),
                 "status_error": status.get("error"),
@@ -204,6 +206,8 @@ def test_auto_generate_all_fixtures(fixtures, tmp_path):
                     "passed": corr.get("passed"),
                     "failed_checks": [c.get("name") for c in (corr.get("checks") or [])
                                       if not c.get("passed")],
+                    "min_island_gap_px": corr.get("min_island_gap_px"),
+                    "min_border_gap_px": corr.get("min_border_gap_px"),
                 },
                 "final_reread_audit": {
                     "present": audit is not None,
@@ -221,6 +225,25 @@ def test_auto_generate_all_fixtures(fixtures, tmp_path):
                 "termination": _pick(summary.get("termination"), "reason", "iterations",
                                      "candidates_evaluated", "elapsed_s"),
                 "performance": summary.get("performance"),
+                "quality_report_passed": summary.get("quality_report_passed"),
+                "merge_back": _pick(summary.get("merge_back"), "complete", "reason", "trials",
+                                    "accepted", "island_count_before", "island_count_after",
+                                    "removable_remaining"),
+                "fragmentation": {
+                    "passed": frag.get("passed"),
+                    "failures": frag.get("failures"),
+                    "quality_failures": frag.get("quality_failures"),
+                    "metrics": _pick(frag_metrics, "island_count", "tiny_island_count",
+                                     "tiny_island_area_ratio", "sliver_island_count",
+                                     "one_two_face_island_count", "island_aspect_p95",
+                                     "normalized_seam_length"),
+                },
+                "texel_density": _pick(summary.get("texel_density"), "passed", "density_cv",
+                                       "outlier_count", "outlier_island_ids"),
+                "packing": _pick(summary.get("packing"), "efficiency", "limit", "passed"),
+                "shading": _pick(summary.get("shading"), "policy", "passed", "valid", "failures"),
+                "distortion_v2_summary": (summary.get("distortion_v2") or {}).get("summary"),
+                "artifacts_present": sorted(k for k in (summary.get("artifacts") or {})),
             })
             rows.append(row)
     finally:
@@ -255,6 +278,19 @@ def test_auto_generate_all_fixtures(fixtures, tmp_path):
         if row["status"] == "accepted":
             assert row["correctness"]["passed"] is True, row
             assert row["final_reread_audit"]["passed"] is True, row
+            merge_back = row["merge_back"] or {}
+            assert merge_back.get("complete") is True, row
+            assert merge_back.get("reason") != "skipped_quality_failed", row
+            assert (row["fragmentation"] or {}).get("passed") is True, row
+            assert (row["texel_density"] or {}).get("passed") is True, row
+            assert (row["shading"] or {}).get("passed") is True, row
+            assert row["quality_report_passed"] is True, row
+            border_gap = row["correctness"].get("min_border_gap_px")
+            assert isinstance(border_gap, (int, float)) and not isinstance(border_gap, bool), row
+            assert float(border_gap) >= 4 - 1e-6, row
+            for key in ("quality_report", "merge_back_history", "seam_overlay",
+                        "seam_overlay_png", "shading_policy"):
+                assert key in (row["artifacts_present"] or []), (key, row)
         else:
             gate = row["auto_gate"] or {}
             assert gate.get("failures") or gate.get("invalid_reasons"), row
@@ -321,6 +357,8 @@ def test_determinism_three_runs(fixtures, tmp_path, fixture_name):
             proc = _run(job, tmp_path, tag=f"job_det_{fixture_name}_{i}", timeout=600)
             p5 = _read_optional(out_dir, "p5_gate.json") or {}
             summary = _read_optional(out_dir, "uv_generate_summary.json") or {}
+            mb_history = _read_optional(out_dir, "merge_back_history.json") or {}
+            mb = summary.get("merge_back") or {}
             runs.append({
                 "run_id": job["run_id"],
                 "exit_code": proc.returncode,
@@ -328,6 +366,17 @@ def test_determinism_three_runs(fixtures, tmp_path, fixture_name):
                 "seams": p5.get("seams"),
                 "final_island_count": p5.get("final_island_count"),
                 "distortion_global": (summary.get("distortion_v2") or {}).get("global"),
+                "merge_back_accepted": mb.get("accepted"),
+                "merge_back_removed_edges": sorted(
+                    int(e) for e in (mb_history.get("removed_edges") or [])),
+                "merge_back_history": [
+                    {"edges": [int(e) for e in (rec.get("edges") or [])],
+                     "accepted": bool(rec.get("accepted"))}
+                    for rec in (mb_history.get("history") or [])
+                ],
+                "fragmentation_island_count": (
+                    (summary.get("fragmentation") or {}).get("metrics") or {}
+                ).get("island_count"),
             })
     finally:
         _write_evidence(f"test_determinism_three_runs_{fixture_name}", evidence)
@@ -337,6 +386,10 @@ def test_determinism_three_runs(fixtures, tmp_path, fixture_name):
         assert other["exit_code"] == base["exit_code"] == 0, evidence
         assert other["seams"] == base["seams"], evidence
         assert other["final_island_count"] == base["final_island_count"], evidence
+        assert other["merge_back_accepted"] == base["merge_back_accepted"], evidence
+        assert other["merge_back_removed_edges"] == base["merge_back_removed_edges"], evidence
+        assert other["merge_back_history"] == base["merge_back_history"], evidence
+        assert other["fragmentation_island_count"] == base["fragmentation_island_count"], evidence
         a, b = base["distortion_global"] or {}, other["distortion_global"] or {}
         assert set(a) == set(b), evidence
         for key, va in a.items():

@@ -140,6 +140,55 @@ def test_uv_corner_fingerprint_invariant_under_triangulation():
     assert ev.vertex_position_fingerprint(quads) == ev.vertex_position_fingerprint(tris)
 
 
+def _perturbed_uvmap(mesh: MeshGraph, base: UVMap, *, delta: float) -> UVMap:
+    """Every UV shifted by ``delta`` — the shape a float32 round trip leaves behind."""
+    out = UVMap(len(mesh.loops))
+    for loop in mesh.loops:
+        u, v = base.get(loop.index)
+        out.set(loop.index, u + delta, v + delta)
+    return out
+
+
+def test_uv_corners_match_identical_layout_uses_hash():
+    mesh = build_grid_plane(4, 4)
+    uvmap = _grid_uvmap(mesh)
+    res = ev.uv_corners_match(mesh, uvmap, mesh, uvmap)
+    assert res["match"] is True
+    assert res["method"] == "hash"
+    assert res["max_abs_error"] is None
+    assert res["corner_count_source"] == res["corner_count_reread"] == len(mesh.vertices)
+
+
+def test_uv_corners_match_tolerates_float32_scale_drift():
+    mesh = build_grid_plane(4, 4)
+    # Sit the layout on a 5-digit rounding boundary so a 1e-6 drift — the scale of
+    # float32 UV storage — actually changes the digest and exercises the fall-back.
+    base = _perturbed_uvmap(mesh, _grid_uvmap(mesh), delta=4.5e-6)
+    res = ev.uv_corners_match(mesh, base, mesh, _perturbed_uvmap(mesh, base, delta=1e-6))
+    assert res["match"] is True
+    assert res["method"] == "tolerance"
+    assert abs(res["max_abs_error"] - 1e-6) < 1e-9
+
+
+def test_uv_corners_match_rejects_real_uv_movement():
+    mesh = build_grid_plane(4, 4)
+    base = _grid_uvmap(mesh)
+    res = ev.uv_corners_match(mesh, base, mesh, _perturbed_uvmap(mesh, base, delta=1e-3))
+    assert res["match"] is False
+    assert res["method"] == "tolerance"
+    assert res["max_abs_error"] > 5e-4
+
+
+def test_uv_corners_match_rejects_corner_count_mismatch():
+    mesh = build_grid_plane(4, 4)
+    smaller = build_grid_plane(3, 3)
+    res = ev.uv_corners_match(mesh, _grid_uvmap(mesh), smaller, _grid_uvmap(smaller))
+    assert res["match"] is False
+    assert res["method"] == "tolerance"
+    assert res["max_abs_error"] is None
+    assert res["corner_count_source"] != res["corner_count_reread"]
+
+
 def test_uv_corner_fingerprint_changes_when_one_uv_moves():
     quads = build_grid_plane(4, 4)
     base = ev.uv_corner_fingerprint(quads, _grid_uvmap(quads))

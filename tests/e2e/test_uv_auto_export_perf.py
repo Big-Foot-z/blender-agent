@@ -2,13 +2,19 @@
 G8 (performance: 3 runs on fixed hardware, median/max time + peak memory).
 
 - ``test_auto_uv_then_export_reread`` runs the ``auto_generate`` UV worker on the
-  Suzanne fixture (a model with NO UV), ships the selected ``.blend`` through
+  ``bevel_cube`` fixture (a hard-surface model with NO UV that the gate ACCEPTS —
+  G13's positive path needs an accepted asset), asserts the export worker's own
+  ``export_reread_report.json`` passes for every format, ships the selected ``.blend`` through
   ``worker/export_production_asset.py`` as FBX + GLB, then RE-READS each exported
   file inside Blender (``tests/e2e/fixtures/reread_export.py``) and asserts the
   G1 rule still holds on the shipped artifact: exactly ONE UV layer exists (so the
   audit cannot read a leftover original map), ``mandatory_90_uv_unsplit == 0``, UVs
   are in bounds, and the topology matches the source ``.blend`` by face count or —
   for triangulating formats like GLB — by triangle count.
+- ``test_export_refuses_a_non_accepted_uv_result`` is the negative half of G13:
+  suzanne's automatic layout ends ``needs_user_review``, and exporting it must end
+  ``failed`` with ``reread_audit_failed`` on every format (evidence
+  ``uv_export_refused.json``).
 - ``test_performance_three_runs`` runs the automatic path 3x on suzanne and 3x on
   torus and records ``summary.performance`` (``elapsed_s`` / ``peak_memory_mb``)
   plus the host-measured wall time, with median/max. No time threshold is asserted
@@ -201,13 +207,13 @@ def test_auto_uv_then_export_reread(fixtures, tmp_path):
     project = str(tmp_path)
     run_dir = str(tmp_path / "run")
     os.makedirs(run_dir, exist_ok=True)
-    fixture = fixtures["by_name"]["suzanne"]
-    evidence: dict = {"fixture": "suzanne",
+    fixture = fixtures["by_name"]["bevel_cube"]
+    evidence: dict = {"fixture": "bevel_cube",
                       "fixture_face_count": fixture["face_count"],
                       "fixture_vertex_count": fixture["vertex_count"]}
 
     # 1. automatic UV on a model with NO UV and NO seam spec.
-    proc, wall_s = _run_uv(_uv_job(_model(fixtures, "suzanne"), run_dir, project,
+    proc, wall_s = _run_uv(_uv_job(_model(fixtures, "bevel_cube"), run_dir, project,
                                    "uv_auto_export_e2e"), tmp_path, "uv_job")
     evidence["uv_run"] = {"returncode": proc.returncode, "wall_s": round(wall_s, 3)}
     assert proc.returncode == 0, _tail(proc)
@@ -219,22 +225,21 @@ def test_auto_uv_then_export_reread(fixtures, tmp_path):
     evidence["uv_mandatory_audit"] = summary.get("mandatory_audit")
     evidence["uv_final_reread_audit"] = summary.get("final_reread_audit")
 
-    shipped = os.path.join(project, "work", "uv", "selected_uv.blend")
-    shipped_summary = os.path.join(project, "work", "uv", "selected_uv_summary.json")
-    if status["status"] == "accepted":
-        export_model = shipped
-        export_summary = shipped_summary
-        evidence["export_input"] = "work/uv/selected_uv.blend"
-    else:
-        # needs_user_review never ships to work/uv (G6); the run directory's own
-        # selected_uv.blend is the reviewed candidate, so export THAT and say so.
-        assert status["status"] == "needs_user_review", status
-        export_model = os.path.join(run_dir, "selected_uv.blend")
-        export_summary = os.path.join(run_dir, "uv_generate_summary.json")
-        evidence["export_input"] = "run/selected_uv.blend"
-        evidence["export_input_note"] = (
-            "UV run ended needs_user_review, not accepted; the run directory's "
-            "selected_uv.blend was exported instead of the work/uv handoff copy.")
+    # G13's positive path needs an ACCEPTED asset: only an accepted run ships to
+    # work/uv (G6), and only an accepted layout can be expected to survive the
+    # re-read audit (a needs_user_review layout carries the same defects into the
+    # exported file — that is the refusal test below).
+    if status["status"] != "accepted":
+        _write_evidence("uv_export_reread.json", evidence)
+        raise AssertionError(json.dumps(
+            {"reason": "bevel_cube auto UV did not reach accepted",
+             "uv_status": status["status"], "summary_status": summary.get("status"),
+             "gate": summary.get("gate"), "failures": summary.get("failures"),
+             "mandatory_audit": summary.get("mandatory_audit")}, indent=2, default=str))
+
+    export_model = os.path.join(project, "work", "uv", "selected_uv.blend")
+    export_summary = os.path.join(project, "work", "uv", "selected_uv_summary.json")
+    evidence["export_input"] = "work/uv/selected_uv.blend"
     assert os.path.exists(export_model), f"no selected_uv.blend at {export_model}"
 
     # 2. production export (FBX + GLB). MVP 4 AI review is skipped by design.
@@ -256,6 +261,20 @@ def test_auto_uv_then_export_reread(fixtures, tmp_path):
     for fmt in formats:
         assert fmt in manifest["files"], fmt
         assert os.path.exists(os.path.join(export_dir, manifest["files"][fmt])), fmt
+
+    # 2b. the worker's OWN re-read audit must pass for every shipped format (G13).
+    reread_report = _read(os.path.join(export_dir, "export_reread_report.json"))
+    evidence["export_reread_report"] = reread_report
+    report_failures = {
+        fmt: list((reread_report.get("formats", {}).get(fmt) or {}).get("failures") or [])
+        for fmt in formats}
+    evidence["export_reread_failures"] = report_failures
+    if any(report_failures.values()) or not reread_report.get("passed"):
+        _write_evidence("uv_export_reread.json", evidence)
+    assert not any(report_failures.values()) and reread_report.get("passed") is True, \
+        json.dumps({"reread_report_passed": reread_report.get("passed"),
+                    "failed_formats": reread_report.get("failed_formats"),
+                    "per_format_failures": report_failures}, indent=2, default=str)
 
     # 3. re-read every exported file and audit it (G9 / G1 on the shipped artifact).
     rereads: dict[str, dict] = {}
@@ -306,6 +325,73 @@ def test_auto_uv_then_export_reread(fixtures, tmp_path):
                 f"{data.get('triangle_count')} vs source "
                 f"{data.get('source_triangle_count')}")
     assert not failures, json.dumps({"failures": failures, "reread": rereads}, indent=2)
+
+
+# ---------------------------------------------------------------------------
+# G13 — a NON-ACCEPTED UV result must be refused by the export re-read audit
+# ---------------------------------------------------------------------------
+@requires_blender
+def test_export_refuses_a_non_accepted_uv_result(fixtures, tmp_path):
+    """Suzanne's automatic layout ends ``needs_user_review``; exporting it must FAIL.
+
+    The defects that blocked acceptance (overlap / orientation / island gap) travel
+    into the exported file, so the export worker's re-read audit has to refuse every
+    format with ``reread_audit_failed`` rather than ship an unapproved asset."""
+    project = str(tmp_path)
+    run_dir = str(tmp_path / "run")
+    os.makedirs(run_dir, exist_ok=True)
+    fixture = fixtures["by_name"]["suzanne"]
+    evidence: dict = {"fixture": "suzanne",
+                      "fixture_face_count": fixture["face_count"],
+                      "fixture_vertex_count": fixture["vertex_count"]}
+
+    proc, wall_s = _run_uv(_uv_job(_model(fixtures, "suzanne"), run_dir, project,
+                                   "uv_refuse_export_e2e"), tmp_path, "uv_refuse_job")
+    evidence["uv_run"] = {"returncode": proc.returncode, "wall_s": round(wall_s, 3)}
+    assert proc.returncode == 0, _tail(proc)
+
+    status = _read(os.path.join(run_dir, "status.json"))
+    summary = _read(os.path.join(run_dir, "uv_generate_summary.json"))
+    evidence["uv_status"] = status["status"]
+    evidence["uv_mandatory_audit"] = summary.get("mandatory_audit")
+    evidence["uv_final_reread_audit"] = summary.get("final_reread_audit")
+    assert status["status"] in ("needs_user_review", "accepted"), status
+    if status["status"] == "accepted":
+        _write_evidence("uv_export_refused.json", evidence)
+        pytest.skip("suzanne auto UV was ACCEPTED on this build; there is no "
+                    "non-accepted result to refuse in this run")
+
+    # needs_user_review never ships to work/uv (G6): the run directory's own
+    # selected_uv.blend is the reviewed candidate, and it is what we try to export.
+    export_model = os.path.join(run_dir, "selected_uv.blend")
+    export_summary = os.path.join(run_dir, "uv_generate_summary.json")
+    evidence["export_input"] = "run/selected_uv.blend"
+    assert os.path.exists(export_model), f"no selected_uv.blend at {export_model}"
+
+    export_dir = str(tmp_path / "exports" / "export_refused")
+    os.makedirs(export_dir, exist_ok=True)
+    formats = ["fbx", "glb"]
+    eproc = _run_export(_export_job(export_model, export_summary, export_dir, formats),
+                        tmp_path, "export_refuse_job")
+    evidence["export_returncode"] = eproc.returncode
+    assert eproc.returncode == 0, _tail(eproc)
+
+    estatus = _read(os.path.join(export_dir, "status.json"))
+    result = _read(os.path.join(export_dir, "export_result.json"))
+    reread_report = _read(os.path.join(export_dir, "export_reread_report.json"))
+    failed_formats = result.get("failed_formats") or []
+    evidence["export_status"] = estatus["status"]
+    evidence["export_failed_formats"] = failed_formats
+    evidence["export_reread_report"] = reread_report
+    _write_evidence("uv_export_refused.json", evidence)
+
+    assert estatus["status"] == "failed", estatus
+    assert failed_formats, result
+    codes = sorted({ff.get("code") for ff in failed_formats})
+    assert codes == ["reread_audit_failed"], json.dumps(failed_formats, indent=2, default=str)
+    assert {ff.get("format") for ff in failed_formats} == set(formats), failed_formats
+    assert reread_report.get("passed") is False, reread_report
+    assert sorted(reread_report.get("failed_formats") or []) == sorted(formats), reread_report
 
 
 # ---------------------------------------------------------------------------

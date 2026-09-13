@@ -418,6 +418,52 @@ def test_merge_back_dissolves_the_seam_that_is_not_paying_for_itself(monkeypatch
     json.dumps(mb)
 
 
+def test_merge_back_repacks_a_gap_only_failure_instead_of_skipping(monkeypatch):
+    """G7 + G9/G11: a merge-back input that fails ONLY the packing gap is re-packed wider,
+    so the stage really runs instead of reporting ``skipped_quality_failed``."""
+    from chart_uv_agent import refinement_loop
+    from uv_agent.geometry import uv_correctness
+
+    mesh, obj, extra = _over_segment(monkeypatch)
+
+    real_audit = uv_correctness.island_gap_audit
+    state = {"armed": False, "calls": 0}
+
+    def failing_twice(*args, **kwargs):
+        report = dict(real_audit(*args, **kwargs))
+        if state["armed"]:
+            state["calls"] += 1
+            if state["calls"] <= 2:
+                report.update({"passed": False, "min_gap_px": 1.0})
+        return report
+
+    # The failures are armed exactly when the merge-back stage takes its own measurement,
+    # which is the situation the real-Blender runs hit (Blender's packer leaves ~4px gaps).
+    real_repack_for_gap = refinement_loop.repack_for_gap
+
+    def arming_repack_for_gap(*args, **kwargs):
+        state["armed"] = True
+        return real_repack_for_gap(*args, **kwargs)
+
+    monkeypatch.setattr(uv_correctness, "island_gap_audit", failing_twice)
+    monkeypatch.setattr(refinement_loop, "repack_for_gap", arming_repack_for_gap)
+
+    result = run_chart_uv(obj, mesh, max_rounds=4,
+                          budget={"max_candidates_per_round": 2})
+
+    mb = result["merge_back"]
+    assert mb["reason"] != "skipped_quality_failed", mb
+    assert mb["reason"] == "no_removable_seam"
+    assert mb["accepted"] >= 1
+    assert set(mb["removed_edges"]) == extra
+    assert extra.isdisjoint(result["seams"])
+
+    repacks = [h for h in result["history"] if h.get("stage") == "gap_repack"]
+    assert repacks and repacks[0]["attempts"] == 2 and repacks[0]["passed"] is True
+    # The gap was fixed by re-packing, never by a cut.
+    assert [h for h in result["history"] if h.get("stage") == "merge_back"]
+
+
 def test_merge_back_disabled_keeps_the_extra_seam(monkeypatch):
     """The stage is switchable, and switching it off is REPORTED, never silent."""
     mesh, obj, extra = _over_segment(monkeypatch)

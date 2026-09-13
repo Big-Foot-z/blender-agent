@@ -237,6 +237,54 @@ def test_failing_input_layout_is_skipped_without_a_trial(monkeypatch):
     assert result["history"] == []
 
 
+# ------------------------------------- (h2) a gap-only trial failure is re-packed
+
+
+def test_gap_only_trial_failure_is_repacked_and_accepted(monkeypatch):
+    """G9/G11: a merged layout that fails ONLY the packing gap is re-packed, not rejected."""
+    mesh, _backend, obj, seams, constraints, _mandatory, extra = _fixture(monkeypatch)
+
+    before = R.unwrap_and_measure(obj, mesh, seams, profile=PROFILE, margin=MARGIN,
+                                  stage="merge_back")
+
+    def _gap_failing(o, m, trial_seams, **kwargs):
+        measurement = dict(R.unwrap_and_measure(o, m, trial_seams, profile=PROFILE,
+                                                margin=MARGIN, stage="merge_back"))
+        correctness = dict(measurement["correctness"])
+        correctness["passed"] = False
+        correctness["checks"] = [
+            dict(c, passed=(False if c["name"] == "island_gap" else c["passed"]))
+            for c in correctness["checks"]
+        ]
+        measurement["correctness"] = correctness
+        measurement["hard_failures"] = ["correctness_failed"]
+        measurement["passed"] = False
+        return measurement
+
+    repaired: dict = {}
+
+    def _repack_for_gap(o, m, trial_seams, **kwargs):
+        fixed = dict(R.unwrap_and_measure(o, m, trial_seams, profile=PROFILE,
+                                          margin=MARGIN, stage="merge_back"))
+        fixed["gap_repack"] = {"attempts": 1, "passed": True}
+        repaired["seams"] = {int(e) for e in trial_seams}
+        return fixed
+
+    monkeypatch.setattr(MB, "unwrap_and_measure", _gap_failing)
+    monkeypatch.setattr(MB, "repack_for_gap", _repack_for_gap)
+
+    result = _run(obj, mesh, seams, constraints, initial_measurement=before)
+
+    assert result["accepted"] == 1
+    assert result["removed_edges"] == extra
+    assert repaired["seams"] == set(seams) - set(extra)
+
+    record = result["history"][0]
+    assert record["accepted"] is True
+    assert record["reason"] == "accepted"
+    assert record["gap_repack"] == {"attempts": 1, "passed": True}
+
+
 # ------------------------------------------------------------ (i) determinism
 
 

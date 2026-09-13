@@ -367,6 +367,80 @@ def unwrap_and_measure(obj, mesh: MeshGraph, seams, *, profile: QualityProfile,
     return measure_layout(obj, mesh, seams, profile=profile, stage=stage, regions=regions)
 
 
+# ------------------------------------------------------------- gap re-packing
+
+#: Re-pack margin multipliers tried when the ONLY failing correctness checks are the
+#: placement ones (G1 packing 간격 / G5 "packing 단독 문제로 추가 절개 0").
+GAP_REPACK_FACTORS: tuple[float, ...] = (1.5, 2.0, 3.0)
+
+#: The correctness checks a pure RE-PACK (never a cut) can repair: island-to-island
+#: spacing and tile-border padding are both placement problems (G9/G11).
+_REPACK_ONLY_CHECKS = ("island_gap", "border_gap")
+
+
+def gap_only_failure(correctness: dict) -> bool:
+    """True when the failing correctness checks are ONLY the placement ones.
+
+    ``island_gap`` / ``border_gap`` are the two a pure re-pack can repair; if anything
+    else (overlap / orientation / degenerate / bounds) fails, re-packing is the wrong
+    tool and the caller must not pretend otherwise.
+    """
+    checks = {str(c.get("name")): bool(c.get("passed"))
+              for c in (correctness or {}).get("checks", ())}
+    if all(checks.get(name, True) for name in _REPACK_ONLY_CHECKS):
+        return False
+    return all(v for k, v in checks.items() if k not in _REPACK_ONLY_CHECKS)
+
+
+def repack_for_gap(obj, mesh: MeshGraph, seams, *, profile: QualityProfile,
+                   pack_margin: float, regions: dict | None = None,
+                   stage: str = "gap_repack", history: list | None = None) -> dict:
+    """Repair a placement-ONLY correctness failure by re-packing wider (G9/G11).
+
+    Measures the layout that is already on ``obj`` (:func:`measure_layout` never unwraps).
+    When the measurement does not fail, or fails something a re-pack cannot fix, it is
+    returned untouched and nothing is packed. Otherwise the layout is re-packed with a
+    progressively larger margin (``GAP_REPACK_FACTORS``, ≤ 3 attempts) until BOTH
+    ``island_gap`` and ``border_gap`` pass. The seam set is NEVER touched — a packing gap
+    is not a reason to cut.
+    """
+    from chart_uv_agent import unwrap as unwrap_mod
+
+    def _measure() -> dict:
+        return measure_layout(obj, mesh, seams, profile=profile, stage=stage,
+                              regions=regions)
+
+    def _check(measurement: dict, name: str) -> dict:
+        return (measurement.get("correctness") or {}).get(name) or {}
+
+    measurement = _measure()
+    if not gap_only_failure(measurement.get("correctness") or {}):
+        return measurement
+
+    attempts, passed = 0, False
+    for factor in GAP_REPACK_FACTORS:
+        attempts += 1
+        unwrap_mod.repack(obj, margin=float(pack_margin) * float(factor))
+        measurement = _measure()
+        if (bool(_check(measurement, "island_gap").get("passed", False))
+                and bool(_check(measurement, "border_gap").get("passed", True))):
+            passed = True
+            break
+
+    if history is not None:
+        history.append({
+            "stage": "gap_repack",
+            "attempts": int(attempts),
+            "passed": bool(passed),
+            "min_gap_px": float(_check(measurement, "island_gap")
+                                .get("min_gap_px", float("nan"))),
+            "min_border_gap_px": float(_check(measurement, "border_gap")
+                                       .get("min_gap_px", float("nan"))),
+        })
+    measurement["gap_repack"] = {"attempts": int(attempts), "passed": bool(passed)}
+    return measurement
+
+
 def _region_metric(mesh: MeshGraph, uvmap: UVMap, faces, metric: str,
                    profile: QualityProfile) -> float:
     """The v2 value of ``metric`` over exactly ``faces``, measured as its own scope.
@@ -871,11 +945,14 @@ def seam_length_report(mesh: MeshGraph, seams, *, mandatory, user, distortion_se
 
 __all__ = [
     "CORRECTNESS_METRIC",
+    "GAP_REPACK_FACTORS",
     "METRIC_PRIORITY",
     "UvSnapshot",
     "ensure_border_margin",
     "evaluate_candidate",
+    "gap_only_failure",
     "measure_layout",
+    "repack_for_gap",
     "resolve_budget",
     "restore_snapshot",
     "run_refinement",

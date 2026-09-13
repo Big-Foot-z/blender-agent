@@ -16,6 +16,7 @@ from __future__ import annotations
 import dataclasses
 import time
 
+from chart_uv_agent import refinement_loop
 from chart_uv_agent.gate import ChartGateConfig, ChartGateResult, evaluate_chart_gate
 from chart_uv_agent.segmentation import (
     constrained_split_chart, flood_charts, segment, split_chart,
@@ -289,7 +290,9 @@ def _apply_v2_metrics(metrics: dict, measurement: dict) -> None:
 
 #: Re-pack margin multipliers tried when the ONLY failing correctness check is the island
 #: gap (G1 packing 간격 / G5 "packing 단독 문제로 추가 절개 0").
-_GAP_REPACK_FACTORS = (1.5, 2.0, 3.0)
+#: The policy itself lives in :mod:`chart_uv_agent.refinement_loop` so merge-back can reuse
+#: it; this name is kept as the pipeline's alias.
+_GAP_REPACK_FACTORS = refinement_loop.GAP_REPACK_FACTORS
 
 
 def _pack_margin_for(profile, margin: float | None) -> float:
@@ -301,50 +304,26 @@ def _pack_margin_for(profile, margin: float | None) -> float:
 
 #: The correctness checks a pure RE-PACK (never a cut) can repair: island-to-island
 #: spacing and tile-border padding are both placement problems (G9/G11).
-_REPACK_ONLY_CHECKS = ("island_gap", "border_gap")
+_REPACK_ONLY_CHECKS = refinement_loop._REPACK_ONLY_CHECKS
 
 
 def _island_gap_only_failure(correctness: dict) -> bool:
     """True when the failing correctness checks are ONLY the placement ones.
 
-    ``island_gap`` / ``border_gap`` are the two a pure re-pack can repair; if anything
-    else (overlap / orientation / degenerate / bounds) fails, re-packing is the wrong
-    tool and the loop must not pretend otherwise."""
-    checks = {str(c.get("name")): bool(c.get("passed"))
-              for c in (correctness or {}).get("checks", ())}
-    if all(checks.get(name, True) for name in _REPACK_ONLY_CHECKS):
-        return False
-    return all(v for k, v in checks.items() if k not in _REPACK_ONLY_CHECKS)
+    Thin wrapper over :func:`chart_uv_agent.refinement_loop.gap_only_failure`, which owns
+    the policy so merge-back can apply exactly the same rule."""
+    return refinement_loop.gap_only_failure(correctness)
 
 
 def _gap_repack_pass(obj, mesh, final_seams, *, profile, regions, pack_margin: float,
                      history: list) -> None:
-    """G1/G5: if the shipped layout fails ONLY the island-gap check, re-pack with a
+    """G1/G5: if the shipped layout fails ONLY the placement checks, re-pack with a
     progressively larger margin (≤3 attempts). The seam set is NEVER touched — a packing
-    gap is not a reason to cut. Measures in place (``measure_layout`` never unwraps)."""
-    from chart_uv_agent.refinement_loop import measure_layout
-    from chart_uv_agent.unwrap import repack
-
-    def _measure():
-        return measure_layout(obj, mesh, final_seams, profile=profile, stage="final",
-                              regions=regions)
-
-    def _gap(m):
-        return (m.get("correctness") or {}).get("island_gap") or {}
-
-    measurement = _measure()
-    if not _island_gap_only_failure(measurement.get("correctness") or {}):
-        return
-    attempts, passed = 0, False
-    for k in _GAP_REPACK_FACTORS:
-        attempts += 1
-        repack(obj, margin=pack_margin * k)
-        measurement = _measure()
-        if bool(_gap(measurement).get("passed", False)):
-            passed = True
-            break
-    history.append({"stage": "gap_repack", "attempts": int(attempts), "passed": bool(passed),
-                    "min_gap_px": float(_gap(measurement).get("min_gap_px", float("nan")))})
+    gap is not a reason to cut. Delegates to
+    :func:`chart_uv_agent.refinement_loop.repack_for_gap`."""
+    refinement_loop.repack_for_gap(obj, mesh, final_seams, profile=profile,
+                                   pack_margin=pack_margin, regions=regions,
+                                   stage="final", history=history)
 
 
 def _charts(mesh: MeshGraph, seams: set[int]) -> tuple[list[list[int]], dict[int, int]]:
@@ -931,8 +910,12 @@ def run_chart_uv(obj, mesh: MeshGraph, *, config: ChartGateConfig | None = None,
     merge_back_enabled = (bool(profile.merge_back_enabled) if merge_back is None
                           else bool(merge_back))
     if merge_back_enabled:
-        mb_measure = refinement_loop.measure_layout(
-            obj, mesh, final_seams, profile=profile, stage="merge_back", regions=regions)
+        # G9/G11 before G7: a layout that fails ONLY on packing gaps is re-packed wider
+        # first, so merge-back judges the layout it can actually ship instead of skipping
+        # itself with ``skipped_quality_failed`` over a placement defect.
+        mb_measure = refinement_loop.repack_for_gap(
+            obj, mesh, final_seams, profile=profile, pack_margin=pack_margin,
+            regions=regions, history=history)
         mb = run_merge_back(
             obj, mesh, final_seams, constraints=constraints, profile=profile,
             margin=pack_margin, regions=regions, required=constraints.required,
@@ -945,9 +928,11 @@ def run_chart_uv(obj, mesh: MeshGraph, *, config: ChartGateConfig | None = None,
         overlap_seams -= mb_removed
         distortion_seams -= mb_removed
         # One re-unwrap of the SHIPPED seam set so the v1 metrics describe the merged
-        # layout. ``measure()`` re-unwraps exactly ``final_seams`` — deterministic, and
-        # identical to the merge-back layout when nothing was accepted.
-        metrics, gate, ev = measure()
+        # layout — ONLY when merge-back actually changed it. When nothing was accepted the
+        # seam set is untouched, so a re-unwrap would only cost time and throw away the
+        # gap re-pack that was just applied; the v1 metrics stay as they were.
+        if int(mb["accepted"]) > 0:
+            metrics, gate, ev = measure()
     else:
         mb = merge_back_disabled_block()
         mb_removed = set()

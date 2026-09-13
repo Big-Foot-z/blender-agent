@@ -43,6 +43,8 @@ import time
 from chart_uv_agent.candidates import bbox_diagonal, seam_length
 from chart_uv_agent.quality_profile import QualityProfile
 from chart_uv_agent.refinement_loop import (
+    gap_only_failure,
+    repack_for_gap,
     restore_snapshot,
     take_snapshot,
     unwrap_and_measure,
@@ -164,6 +166,13 @@ def run_merge_back(obj, mesh: MeshGraph, seams, *, constraints,
     if measurement is None:
         measurement = unwrap_and_measure(obj, mesh, seams, profile=profile, margin=margin,
                                          stage="merge_back", regions=regions)
+        # G9/G11: a layout that fails ONLY on packing gaps is a PLACEMENT defect. Re-pack
+        # it wider before deciding this stage has nothing to reason about.
+        if (not measurement.get("passed", False)
+                and gap_only_failure(measurement.get("correctness") or {})):
+            measurement = repack_for_gap(obj, mesh, seams, profile=profile,
+                                         pack_margin=margin, regions=regions,
+                                         stage="merge_back_gap_repack")
 
     diagonal = bbox_diagonal(mesh)
     seam_length_before = seam_length(mesh, seams)
@@ -237,6 +246,13 @@ def run_merge_back(obj, mesh: MeshGraph, seams, *, constraints,
         try:
             after = unwrap_and_measure(obj, mesh, trial_seams, profile=profile,
                                        margin=margin, stage="merge_back", regions=regions)
+            # A merged layout that only fails the packing gaps is re-packed, never cut
+            # back apart (G9/G11) — the accept rule below is unchanged.
+            if (not after.get("passed", False)
+                    and gap_only_failure(after.get("correctness") or {})):
+                after = repack_for_gap(obj, mesh, trial_seams, profile=profile,
+                                       pack_margin=margin, regions=regions,
+                                       stage="merge_back_gap_repack")
             accept = bool(after.get("passed", False)) and (
                 int(after["island_count"]) == before_count - 1)
         except Exception as exc:                               # noqa: BLE001 — reported
@@ -255,6 +271,7 @@ def run_merge_back(obj, mesh: MeshGraph, seams, *, constraints,
             "edges": sorted(edges),
             "shared_length": float(group["shared_length"]),
             "island_count_before": before_count,
+            "gap_repack": (after or {}).get("gap_repack"),
         }
 
         if accept and after is not None:
