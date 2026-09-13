@@ -42,7 +42,8 @@ def _interior_edge(mesh, seams) -> int:
 
 
 def _fixed_candidates(cand):
-    def _gen(mesh, charts, target_island, seams, constraints, face_stretch, *, max_candidates):
+    def _gen(mesh, charts, target_island, seams, constraints, face_stretch, *,
+             max_candidates, cut_reason="distortion_repair"):
         return [cand]
     return _gen
 
@@ -384,3 +385,46 @@ def test_candidate_creating_sliver_is_rejected_with_fragmentation_reason(monkeyp
     assert result["seams"] == seams_before
     assert result["distortion_seams"] == set()
     assert np.array_equal(obj.uv.uv, uv_before)
+
+
+# ------------------------------------- 9. cut reason + cost ranking (G2)
+
+
+def test_choice_key_breaks_a_tie_on_the_candidate_cut_cost():
+    """G2: two candidates with identical islands / auxiliary length / exposure are ranked
+    by their itemised cut cost, cheapest first — not by the order they were produced."""
+    record = {"island_count_after": 3, "aux_length": 1.0, "exposure": 0.0}
+    cheap = SeamCandidate(kind="short_cut", added_edges=frozenset({1}), target_island=0,
+                          reason="cheap", seam_length=1.0, exposure_cost=0.0,
+                          cost={"total": 0.25})
+    dear = SeamCandidate(kind="preferred_path", added_edges=frozenset({2}),
+                         target_island=0, reason="dear", seam_length=1.0,
+                         exposure_cost=0.0, cost={"total": 0.75})
+
+    assert R._choice_key(record, cheap) < R._choice_key(record, dear)
+    # A candidate with no cost breakdown at all is treated as 0.0, never as an error.
+    plain = SeamCandidate(kind="normal_split", added_edges=frozenset({3}),
+                          target_island=0, reason="plain", seam_length=1.0,
+                          exposure_cost=0.0)
+    assert R._choice_key(record, plain) < R._choice_key(record, cheap)
+
+
+def test_candidate_records_carry_the_cut_reason_and_the_cut_cost(monkeypatch):
+    """G2: every candidate trial records WHY the round was cutting and what the cut would
+    cost, and the chosen split carries the same reason into the history."""
+    mesh, _backend, obj, seams, constraints = _sphere(monkeypatch)
+
+    result = R.run_refinement(obj, mesh, seams, constraints=constraints, profile=PROFILE,
+                              budget={"max_iterations": 1, "max_candidates_per_round": 3},
+                              margin=0.005)
+
+    assert result["candidate_history"], "the sphere must fail and propose candidates"
+    for record in result["candidate_history"]:
+        assert record["cut_reason"] in ("distortion_repair", "correctness_repair")
+        cost = record["candidate"]["cost"]
+        assert "total" in cost and isinstance(float(cost["total"]), float)
+
+    rows = [h for h in result["history"] if h.get("stage") == "refinement"]
+    assert rows
+    for row in rows:
+        assert row["cut_reason"] in ("distortion_repair", "correctness_repair")

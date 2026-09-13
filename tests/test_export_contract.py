@@ -291,3 +291,62 @@ def test_empty_history():
     h = contract.empty_history()
     assert h["schema_version"] == 1
     assert h["events"] == []
+
+
+# --- Gate G13 re-read audit gating (export_reread_report.json) -------------
+def test_format_validation_ok_reread_none_pass_fail():
+    v = {"reopen_ok": True, "has_uv": True}
+    # Not audited -> the plan §7 verdict stands.
+    assert contract.format_validation_ok(v) is True
+    assert contract.format_validation_ok(v, reread=None) is True
+    # Audited and passing -> still ok; audited and failing -> not shippable.
+    assert contract.format_validation_ok(v, reread={"passed": True}) is True
+    assert contract.format_validation_ok(
+        v, reread={"passed": False, "failures": ["uv_fingerprint_mismatch"]}) is False
+    # A failed re-open is never rescued by a passing audit.
+    assert contract.format_validation_ok({"reopen_ok": False, "has_uv": True},
+                                         reread={"passed": True}) is False
+
+
+def test_build_reread_report_all_pass():
+    report = contract.build_reread_report(
+        {"fbx": {"passed": True}, "glb": {"passed": True}}, profile_id="engineering_v0")
+    assert report["schema_version"] == 1
+    assert report["profile_id"] == "engineering_v0"
+    assert report["passed"] is True
+    assert report["failed_formats"] == []
+    assert set(report["formats"]) == {"fbx", "glb"}
+
+
+def test_build_reread_report_names_failed_formats():
+    report = contract.build_reread_report(
+        {"fbx": {"passed": True},
+         "obj": {"passed": False, "failures": ["mandatory_90_uv_unsplit"]}},
+        profile_id=None)
+    assert report["passed"] is False
+    assert report["failed_formats"] == ["obj"]
+    assert report["profile_id"] is None
+
+
+def test_build_reread_report_empty_is_vacuous_pass():
+    report = contract.build_reread_report({}, profile_id="engineering_v0")
+    assert report["passed"] is True and report["formats"] == {}
+
+
+def test_artifact_registry_contains_reread_report(tmp_path):
+    assert contract.EXPORT_REREAD_REPORT_FILE == "export_reread_report.json"
+    artifacts, _warnings = contract.collect_export_artifacts(str(tmp_path))
+    assert artifacts["reread_report"] == contract.EXPORT_REREAD_REPORT_FILE
+
+
+def test_build_export_result_carries_reread():
+    reread = contract.build_reread_report({"fbx": {"passed": True}},
+                                          profile_id="engineering_v0")
+    result = contract.build_export_result(
+        export_id="export_x", status=contract.STATUS_ACCEPTED, source={}, exports={},
+        validation={}, artifacts={}, reread=reread)
+    assert result["reread"] is reread
+    # Omitted when no audit ran, so older readers never see an empty block.
+    assert "reread" not in contract.build_export_result(
+        export_id="export_x", status=contract.STATUS_ACCEPTED, source={}, exports={},
+        validation={}, artifacts={})

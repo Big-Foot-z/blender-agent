@@ -644,11 +644,18 @@ def evaluate_candidate(obj, mesh: MeshGraph, seams, cand, *, target: dict, befor
 
 
 def _choice_key(record: dict, cand) -> tuple:
-    """Deterministic tie-break for candidates of equal standing (§5 / G4)."""
+    """Deterministic tie-break for candidates of equal standing (§5 / G4 / G2).
+
+    Islands → auxiliary seam length → exposure → the candidate's own itemised cut cost
+    (``cost["total"]``), so two cuts that are otherwise indistinguishable are separated
+    by the cost ranking instead of by dict order.
+    """
     island_count = record.get("island_count_after")
     if island_count is None:
         island_count = 1 << 30
-    return rank_key(island_count, record.get("aux_length", 0.0), record.get("exposure", 0.0))
+    total_cost = float((getattr(cand, "cost", None) or {}).get("total", 0.0))
+    return rank_key(island_count, record.get("aux_length", 0.0),
+                    record.get("exposure", 0.0), total_cost)
 
 
 # --------------------------------------------------------------------- loop
@@ -708,11 +715,17 @@ def run_refinement(obj, mesh: MeshGraph, seams: set[int], *, constraints,
             reason = "no_improving_candidate" if rejected_regions else "no_failing_target"
             break
 
+        # G2: WHY this round is cutting at all travels with every candidate and every
+        # history row — a correctness repair is not a distortion repair.
+        cut_reason = ("correctness_repair" if target["kind"] == "correctness_repair"
+                      else "distortion_repair")
+
         snapshot = take_snapshot(obj, mesh, seams)
         cands = generate_candidates(
             mesh, measurement["islands"], target["island_id"], seams, constraints,
             measurement["face_anisotropy"],
             max_candidates=budget["max_candidates_per_round"],
+            cut_reason=cut_reason,
         )
 
         trials: list[tuple] = []
@@ -724,6 +737,7 @@ def run_refinement(obj, mesh: MeshGraph, seams: set[int], *, constraints,
                     "kind": cand.kind,
                     "target_island": int(target["island_id"]),
                     "target_metric": str(target["metric"]),
+                    "cut_reason": str(getattr(cand, "cut_reason", cut_reason)),
                     "accepted": False,
                     "reason": str(cand.rejected),
                     "improvement_ratio": 0.0,
@@ -744,6 +758,7 @@ def run_refinement(obj, mesh: MeshGraph, seams: set[int], *, constraints,
                 # G5: restore on EVERY path — accepted, rejected, or raised.
                 restore_snapshot(obj, mesh, snapshot)
             record["round"] = iterations
+            record["cut_reason"] = str(getattr(cand, "cut_reason", cut_reason))
             candidates_evaluated += 1
             candidate_history.append(record)
             trials.append((cand, record))
@@ -767,6 +782,7 @@ def run_refinement(obj, mesh: MeshGraph, seams: set[int], *, constraints,
                 "stage": "refinement",
                 "action": "reject_region",
                 "reason": target["kind"],
+                "cut_reason": cut_reason,
                 "target_island": int(target["island_id"]),
                 "target_metric": str(target["metric"]),
                 "before": float(target["before"]),
@@ -790,6 +806,7 @@ def run_refinement(obj, mesh: MeshGraph, seams: set[int], *, constraints,
             "stage": "refinement",
             "action": "split" if added else "unwrap_only",
             "reason": target["kind"],
+            "cut_reason": cut_reason,
             "target_island": int(target["island_id"]),
             "target_metric": str(target["metric"]),
             "before": float(record.get("target_before", target["before"])),

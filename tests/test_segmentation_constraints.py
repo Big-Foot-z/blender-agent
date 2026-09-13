@@ -144,3 +144,54 @@ def test_split_welded_folds_keeps_existing_keys_and_counts_unblocked_runs():
         assert k in r
     assert r["blocked"] == 0 and r["blocked_edge_ids"] == []
     assert r["local_cuts"] + r["fallback"] >= 1
+
+
+# -- shading-required seams: an ENGINE rule that is never removed (G4/G10) ---------------
+
+
+def _required_constraints(mesh, required):
+    from chart_uv_agent.constraints import SeamConstraints
+    return SeamConstraints.build(mesh, required=required)
+
+
+def test_required_seams_are_never_removable():
+    mesh = build_folded_planes(n=6)
+    mandatory = mandatory_seam_edges(mesh)
+    required = set(_interior_edges(mesh, mandatory)[:3])
+    assert len(required) == 3
+
+    con = _required_constraints(mesh, required)
+    assert con.required == frozenset(required)
+    # ``mandatory`` stays the DIHEDRAL set — a required edge never leaks into it.
+    assert not (con.mandatory & con.required)
+    assert con.never_removed == frozenset(con.mandatory | con.locked | con.required)
+
+    removed = con.check_removed(sorted(required))
+    assert removed["ok"] is False
+    assert removed["required_removed"] == sorted(required)
+    assert removed["reason"] == "required_seam_removed"
+    # mandatory and locked still outrank the required reason.
+    both = con.check_removed(sorted(required) + sorted(con.mandatory)[:1])
+    assert both["reason"] == "mandatory_seam_removed"
+
+
+def test_required_seam_is_free_to_cut_and_never_forbidden():
+    mesh = build_folded_planes(n=6)
+    mandatory = mandatory_seam_edges(mesh)
+    free = _interior_edges(mesh, mandatory)
+    required = {free[0]}
+    protected = {free[0], free[1]}
+
+    from chart_uv_agent.constraints import SeamConstraints
+    con = SeamConstraints.build(mesh, protected=protected, required=required)
+
+    # protected ∩ required → the required (engine) rule wins, and it is RECORDED.
+    assert free[0] not in con.forbidden
+    assert free[1] in con.forbidden
+    conflicts = [c for c in con.conflicts if c["engine_rule"] == "shading_required"]
+    assert conflicts == [{"edge_id": free[0], "user_rule": "protected",
+                          "engine_rule": "shading_required",
+                          "resolution": "required_wins"}]
+    # A required edge is already a seam, so routing "through" it costs nothing.
+    assert con.edge_cost(mesh, free[0]) == 0.0
+    assert con.to_report()["required_count"] == 1

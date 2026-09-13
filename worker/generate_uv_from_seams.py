@@ -489,7 +489,7 @@ def _render_previews(obj, mesh, final_seams, out_dir: str, *, render_size: int,
 # ---------------------------------------------------------------------------
 def _final_reread_audit(bpy, staging_blend: str, out_dir: str, mesh, final_seams,
                         *, object_data_name: str, texture_size_px: int, margin_px: float,
-                        reported_only: bool) -> dict:
+                        reported_only: bool, shading_policy: str = "preserve") -> dict:
     """Re-open the SAVED blend from disk and re-audit the UV it actually carries.
 
     Edge ids may be renumbered by the save/load round trip, so the original seam set is
@@ -505,6 +505,7 @@ def _final_reread_audit(bpy, staging_blend: str, out_dir: str, mesh, final_seams
     from uv_agent.geometry.distortion_v2 import evaluate_distortion_v2
     from uv_agent.geometry.evaluation import mandatory_seam_uv_audit
     from uv_agent.geometry.mesh_identity import edge_correspondence, remap_edge_ids
+    from uv_agent.geometry.shading_policy import sharp_edge_uv_audit
     from uv_agent.geometry.uv_correctness import compact_correctness, evaluate_correctness
 
     source_rel = os.path.relpath(staging_blend, out_dir).replace(os.sep, "/")
@@ -536,8 +537,12 @@ def _final_reread_audit(bpy, staging_blend: str, out_dir: str, mesh, final_seams
         seam_audit = mandatory_seam_audit(mesh_r, set(remapped), fold_angle=90.0)
         distortion_global = (evaluate_distortion_v2(mesh_r, uvmap_r) or {}).get("global")
 
+        # G10: does the SAVED file still split the UVs on every sharp edge?
+        sharp_audit = sharp_edge_uv_audit(mesh_r, uvmap_r)
+
         unsplit = int(uv_audit["mandatory_90_uv_unsplit"])
         missing = int(seam_audit["mandatory_90_missing"])
+        sharp_unsplit = int(sharp_audit["sharp_edge_uv_unsplit"])
         audit = {
             "source": source_rel,
             "mandatory_90_uv_unsplit": unsplit,
@@ -546,12 +551,16 @@ def _final_reread_audit(bpy, staging_blend: str, out_dir: str, mesh, final_seams
             "unmatched_edges": len(unmatched),
             "correctness": corr,
             "distortion_global": distortion_global,
+            "sharp_edge_uv_audit": sharp_audit,
+            "shading_policy": str(shading_policy),
         }
         if reported_only:
             audit["reported_only"] = True
             audit["passed"] = bool(corr.get("passed")) and not unmatched
         else:
-            audit["passed"] = (unsplit == 0 and missing == 0
+            sharp_ok = (sharp_unsplit == 0
+                        if str(shading_policy) == "require_uv_seam_on_sharp_edges" else True)
+            audit["passed"] = (unsplit == 0 and missing == 0 and sharp_ok
                                and bool(corr.get("passed")) and not unmatched)
         return audit
     except Exception as exc:  # noqa: BLE001 - an unevaluatable audit is never a pass
@@ -573,6 +582,7 @@ def _run_generate(bpy, contract, job: dict, out_dir: str, status_path: str, stat
                   *, mode: str, options: dict) -> int:
     from uv_agent.blender.extract import extract_mesh_graph
     from uv_agent.geometry.mesh_identity import mesh_identity
+    from uv_agent.geometry.shading_policy import shading_snapshot
 
     started = time.monotonic()
 
@@ -604,6 +614,13 @@ def _run_generate(bpy, contract, job: dict, out_dir: str, status_path: str, stat
     mesh = extract_mesh_graph(obj)
     identity_before = mesh_identity(mesh, model_path=job.get("model"))
 
+    # --- G10: the shading state BEFORE the engine (sharp edges / smooth faces) ---
+    try:
+        shading_before = shading_snapshot(obj.data)
+    except Exception as exc:  # noqa: BLE001 - an unreadable snapshot must not kill the run
+        shading_before = None
+        print(f"generate_uv_from_seams: shading snapshot failed: {exc}", file=sys.stderr)
+
     # --- G7: reviewer feedback, only on a matching fingerprint ------------
     feedback_applied, feedback_inputs, warnings = _load_feedback(contract, job, identity_before)
 
@@ -612,6 +629,7 @@ def _run_generate(bpy, contract, job: dict, out_dir: str, status_path: str, stat
         "obj": obj,
         "mesh": mesh,
         "identity_before": identity_before,
+        "shading_before": shading_before,
         "feedback_applied": feedback_applied,
         "feedback_inputs": feedback_inputs,
         "warnings": warnings,
@@ -814,7 +832,8 @@ def _run_auto(bpy, contract, job: dict, out_dir: str, status_path: str, status: 
         margin_px=options["margin_px"],
         seed=options["seed"],
         max_rounds=max_rounds,
-        margin=0.005)
+        margin=0.005,
+        shading_snapshot_before=ctx.get("shading_before"))
 
     final_seams = res.get("seams", [])
     metrics = res.get("metrics", {})
@@ -863,7 +882,7 @@ def _finish_run(bpy, contract, job: dict, out_dir: str, status_path: str, status
     promotion, artifacts, status classification, handoff and summary (G0/G1/G6/G7)."""
     from chart_uv_agent.reporting import (
         build_run_manifest, build_seam_overlay, git_head_sha, json_safe,
-        write_anisotropy_heatmap_png,
+        write_anisotropy_heatmap_png, write_seam_overlay_png,
     )
     from uv_agent.blender.extract import extract_mesh_graph
     from uv_agent.blender.organic_unwrap import AI_UV_LAYER, read_uvmap
@@ -942,7 +961,9 @@ def _finish_run(bpy, contract, job: dict, out_dir: str, status_path: str, status
         audit = _final_reread_audit(
             bpy, staging_blend, out_dir, mesh, final_seams,
             object_data_name=obj.data.name, texture_size_px=texture_size_px,
-            margin_px=margin_px, reported_only=not auto)
+            margin_px=margin_px, reported_only=not auto,
+            shading_policy=str((res.get("quality_profile") or {}).get(
+                "shading_uv_policy", "preserve")))
     else:
         audit = {"passed": False, "error": "selected_uv.blend was not saved"}
         if not auto:
@@ -994,12 +1015,24 @@ def _finish_run(bpy, contract, job: dict, out_dir: str, status_path: str, status
             _write(contract.MERGE_BACK_HISTORY_FILE, res.get("merge_back"))
         if res.get("shading") is not None:
             _write(contract.SHADING_POLICY_FILE, res.get("shading"))
-        _write(contract.SEAM_OVERLAY_FILE, build_seam_overlay(
+        # G15: the overlay carries the shading-policy required edges, so the reviewer
+        # legend can separate a `shading` cut from a discretionary one.
+        overlay = build_seam_overlay(
             mesh, final_seams, res.get("seam_types") or {},
             history=res.get("history") or [],
             candidate_history=res.get("candidate_history") or [],
             conflicts=(res.get("constraints") or {}).get("conflicts") or [],
-            object_name=obj.name, locked=locked, user=user_seam_ids))
+            object_name=obj.name, locked=locked, user=user_seam_ids,
+            required=set(int(e) for e in
+                         ((res.get("auto_constraints") or {}).get("required_seam_edges") or [])))
+        _write(contract.SEAM_OVERLAY_FILE, overlay)
+        try:
+            write_seam_overlay_png(
+                mesh, read_uvmap(obj, mesh, layer_name=AI_UV_LAYER), overlay,
+                os.path.join(out_dir, contract.SEAM_OVERLAY_PNG_FILE),
+                size=texture_size_px)
+        except Exception as exc:  # noqa: BLE001 - an image artifact failure is a warning (plan §13)
+            warnings.append(f"seam_overlay.png render failed: {exc}")
         try:
             heat_uvmap = read_uvmap(obj, mesh, layer_name=AI_UV_LAYER)
             write_anisotropy_heatmap_png(

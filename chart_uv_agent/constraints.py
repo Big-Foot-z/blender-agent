@@ -10,7 +10,10 @@ of each stage re-deriving "what may I cut?" from a loose ``forbidden`` set:
   mandatory fold ships as a seam and the clash is recorded as a *conflict*
   (``resolution="mandatory_wins"``), so the run can be held for ``needs_user_review``.
 - ``locked`` (an explicit user seam) also wins over ``protected`` (``"locked_wins"``).
-- ``forbidden`` = protected − mandatory − locked: the edges a cut must route *around*.
+- ``required`` (a shading/UV policy seam) also wins over ``protected``
+  (``"required_wins"``) and is never removed.
+- ``forbidden`` = protected − mandatory − locked − required: the edges a cut must route
+  *around*.
 - ``preferred`` is a SOFT cost (× 0.25), never a hard rule.
 - ``front_axis`` drives the visibility/exposure cost. Empty ⇒ **visibility neutral**: the
   engine never guesses which way an asset faces (G4).
@@ -46,6 +49,10 @@ class SeamConstraints:
     locked: frozenset[int]
     protected: frozenset[int]
     preferred: frozenset[int]
+    #: Edge ids an ENGINE rule (the shading/UV policy) forces to be seams. Like
+    #: ``mandatory`` they are never removed and never blocked, but they come from a
+    #: *policy*, not from the dihedral angle, so they are tracked separately (G10).
+    required: frozenset[int] = frozenset()
     conflicts: tuple[dict, ...] = ()
     region_policy: object | None = field(default=None, compare=False)
     front_axis: str = ""
@@ -56,12 +63,13 @@ class SeamConstraints:
     @classmethod
     def build(cls, mesh: MeshGraph, *, fold_angle: float = FOLD_ANGLE,
               locked=(), protected=(), preferred=(), region_policy=None,
-              front_axis: str = "") -> "SeamConstraints":
+              front_axis: str = "", required=()) -> "SeamConstraints":
         """Resolve the precedence against ``mesh``.
 
         Out-of-range edge ids are dropped into ``invalid_edges`` (an edge cannot be a
-        constraint if it does not exist). ``protected ∩ mandatory`` and
-        ``protected ∩ locked`` become recorded conflicts — mandatory / locked win.
+        constraint if it does not exist). ``protected ∩ mandatory``,
+        ``protected ∩ locked`` and ``protected ∩ required`` become recorded conflicts —
+        mandatory / locked / required win.
         """
         n = mesh.edge_count
 
@@ -76,7 +84,8 @@ class SeamConstraints:
         locked_v, bad_l = split_valid(locked)
         protected_v, bad_p = split_valid(protected)
         preferred_v, bad_f = split_valid(preferred)
-        invalid = tuple(sorted(bad_l | bad_p | bad_f))
+        required_v, bad_r = split_valid(required)
+        invalid = tuple(sorted(bad_l | bad_p | bad_f | bad_r))
 
         mandatory = frozenset(segmentation.mandatory_seam_edges(mesh, fold_angle=fold_angle))
 
@@ -90,12 +99,18 @@ class SeamConstraints:
              "resolution": "locked_wins"}
             for e in sorted((protected_v & locked_v) - mandatory)
         ]
+        conflicts += [
+            {"edge_id": e, "user_rule": "protected", "engine_rule": "shading_required",
+             "resolution": "required_wins"}
+            for e in sorted((protected_v & required_v) - mandatory - locked_v)
+        ]
 
         return cls(
             mandatory=mandatory,
             locked=frozenset(locked_v),
             protected=frozenset(protected_v),
             preferred=frozenset(preferred_v),
+            required=frozenset(required_v),
             conflicts=tuple(conflicts),
             region_policy=region_policy,
             front_axis=str(front_axis or ""),
@@ -105,10 +120,16 @@ class SeamConstraints:
 
     # -- hard rules -------------------------------------------------------
     @property
+    def never_removed(self) -> frozenset[int]:
+        """Every edge no stage may take away: mandatory folds, user locks and the
+        policy-required seams."""
+        return frozenset(self.mandatory | self.locked | self.required)
+
+    @property
     def forbidden(self) -> frozenset[int]:
-        """Protected edges that are neither mandatory nor an explicit user seam — the
-        only edges a cut is actually forbidden to traverse."""
-        return frozenset(self.protected - self.mandatory - self.locked)
+        """Protected edges that are neither mandatory, an explicit user seam nor a
+        policy-required seam — the only edges a cut is actually forbidden to traverse."""
+        return frozenset(self.protected - self.mandatory - self.locked - self.required)
 
     def check_added(self, edges) -> dict:
         """Would adding ``edges`` cut a protected edge? (G4: "mandatory와 충돌하지 않는
@@ -118,18 +139,22 @@ class SeamConstraints:
                 "reason": None if not cut else "protected_edge_cut"}
 
     def check_removed(self, edges) -> dict:
-        """Would removing ``edges`` drop a mandatory fold or a user-locked seam?
-        (G4: "mandatory seam 유지, 사용자 seam lock 제거 0")."""
+        """Would removing ``edges`` drop a mandatory fold, a user-locked seam or a
+        policy-required seam? (G4: "mandatory seam 유지, 사용자 seam lock 제거 0"; G10:
+        the shading policy's required seams ship too)."""
         ids = set(int(e) for e in edges)
         mand = sorted(ids & self.mandatory)
         lock = sorted(ids & self.locked)
+        req = sorted(ids & self.required)
         reason = None
         if mand:
             reason = "mandatory_seam_removed"
         elif lock:
             reason = "locked_seam_removed"
-        return {"ok": not mand and not lock, "mandatory_removed": mand,
-                "locked_removed": lock, "reason": reason}
+        elif req:
+            reason = "required_seam_removed"
+        return {"ok": not mand and not lock and not req, "mandatory_removed": mand,
+                "locked_removed": lock, "required_removed": req, "reason": reason}
 
     def filter_added(self, edges) -> tuple[set[int], set[int]]:
         """``(allowed, rejected)`` — the rejected edges are RETURNED, never silently
@@ -144,13 +169,14 @@ class SeamConstraints:
         """Cost of routing a cut through ``edge_id`` under these constraints.
 
         ``segmentation.edge_cut_cost`` supplies the crease/region base cost (``inf`` on a
-        forbidden edge); a *locked* seam is free (0.0 — it is already a seam) and a
+        forbidden edge); a *locked* or policy-*required* seam is free (0.0 — it is
+        already a seam) and a
         *preferred* sub-fold edge is discounted by :data:`PREFERRED_COST_FACTOR`. A
         mandatory (≥ fold) edge is never discounted: preference can never outrank the
         engine's own rule.
         """
         eid = int(edge_id)
-        if eid in self.locked:
+        if eid in self.locked or eid in self.required:
             return 0.0
         cost = segmentation.edge_cut_cost(
             mesh, eid, forbidden=self.forbidden, fold_angle=self.fold_angle,
@@ -187,6 +213,7 @@ class SeamConstraints:
             "locked_count": len(self.locked),
             "protected_count": len(self.protected),
             "preferred_count": len(self.preferred),
+            "required_count": len(self.required),
             "forbidden_count": len(self.forbidden),
             "conflict_count": len(self.conflicts),
             "conflicts": [dict(c) for c in self.conflicts],

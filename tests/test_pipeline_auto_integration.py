@@ -11,7 +11,7 @@ from __future__ import annotations
 import json
 
 from artist_uv_agent.user_seams import UserSeamSpec
-from chart_uv_agent.fixtures import build_displaced_sphere
+from chart_uv_agent.fixtures import build_displaced_sphere, build_folded_planes
 from chart_uv_agent.gate import ChartGateConfig
 from chart_uv_agent.pipeline import run_chart_uv
 from chart_uv_agent.segmentation import mandatory_seam_edges
@@ -147,6 +147,10 @@ def test_legacy_path_is_unchanged(monkeypatch):
         action = rec.get("action")
         if action is None:
             continue
+        if rec.get("stage") == "merge_back":
+            # G7 runs on the legacy path too; its verdicts are its own (merge/reject/skip).
+            assert action in {"merge", "reject", "skip"}, action
+            continue
         assert action in LEGACY_ACTIONS | {"region_protected_merge", "ok", "repair"}, action
     assert isinstance(result["metrics"]["stretch_score"], float)
 
@@ -203,8 +207,11 @@ def test_island_gap_failure_is_repacked_never_recut(monkeypatch):
     resolved by re-packing wider; the shipped seam set is identical to the clean run."""
     from uv_agent.geometry import uv_correctness
 
+    # ``merge_back=False``: the G7 stage takes its own island-gap measurement, which would
+    # consume the scripted failures below. This case is about the gap repack, nothing else.
     mesh, _backend, obj = _sphere(monkeypatch)
-    baseline = run_chart_uv(obj, mesh, max_rounds=3, use_refinement_loop=False)
+    baseline = run_chart_uv(obj, mesh, max_rounds=3, use_refinement_loop=False,
+                            merge_back=False)
 
     mesh2, backend2, obj2 = _sphere(monkeypatch)
     real_audit = uv_correctness.island_gap_audit
@@ -220,7 +227,8 @@ def test_island_gap_failure_is_repacked_never_recut(monkeypatch):
         return report
 
     monkeypatch.setattr(uv_correctness, "island_gap_audit", failing_twice)
-    result = run_chart_uv(obj2, mesh2, max_rounds=3, use_refinement_loop=False)
+    result = run_chart_uv(obj2, mesh2, max_rounds=3, use_refinement_loop=False,
+                          merge_back=False)
 
     records = [h for h in result["history"] if h.get("stage") == "gap_repack"]
     assert len(records) == 1, result["history"]
@@ -343,3 +351,174 @@ def test_no_spec_result_carries_fragmentation_texel_packing_and_quality_report(m
     # The shipped layout respects the tile padding (G9).
     border = [c for c in result["correctness"]["checks"] if c["name"] == "border_gap"]
     assert len(border) == 1 and border[0]["passed"] is True
+
+
+# --------------------------- 12. merge-back (G7) + shading policy (G10) + cost (G2)
+
+
+def _folded(monkeypatch, n: int = 6):
+    mesh = build_folded_planes(n=n)
+    backend = FakeUnwrapBackend(mesh)
+    obj = backend.install(monkeypatch)
+    return mesh, backend, obj
+
+
+def _row_seam_chain(mesh, n: int, row: int) -> set[int]:
+    """The full-width edge chain at ``y = row/n`` of grid A — a flat, non-mandatory cut
+    that splits that plane in two, i.e. exactly one seam that is NOT paying for itself."""
+    by_key = {tuple(sorted(e.vertex_ids)): e.id for e in mesh.edges}
+
+    def vA(i, j):
+        return i * (n + 1) + j
+
+    chain = {by_key[tuple(sorted((vA(i, row), vA(i + 1, row))))] for i in range(n)}
+    assert not (chain & mandatory_seam_edges(mesh, fold_angle=90.0))
+    return chain
+
+
+def _over_segment(monkeypatch, n: int = 6, row: int = 3):
+    """Install a fake object whose INITIAL segmentation carries one extra flat seam."""
+    import chart_uv_agent.pipeline as pipeline
+    from chart_uv_agent import segmentation
+
+    mesh, backend, obj = _folded(monkeypatch, n=n)
+    extra = _row_seam_chain(mesh, n, row)
+    real_segment = segmentation.segment
+
+    def _segment(m, **kwargs):
+        seg = real_segment(m, **kwargs)
+        seg.seams.update(extra)
+        return seg
+
+    monkeypatch.setattr(pipeline, "segment", _segment)
+    return mesh, obj, extra
+
+
+def test_merge_back_dissolves_the_seam_that_is_not_paying_for_itself(monkeypatch):
+    """G7: an over-segmented start must come out with the removable seam given back, the
+    stage reported complete, and a merge trial in the history."""
+    mesh, obj, extra = _over_segment(monkeypatch)
+    mandatory = mandatory_seam_edges(mesh, fold_angle=90.0)
+
+    result = run_chart_uv(obj, mesh, max_rounds=4,
+                          budget={"max_candidates_per_round": 2})
+
+    mb = result["merge_back"]
+    assert mb["enabled"] is True
+    assert mb["accepted"] >= 1, mb
+    assert mb["complete"] is True
+    assert mb["reason"] == "no_removable_seam"
+    assert set(mb["removed_edges"]) == extra
+    assert mb["island_count_after"] == mb["island_count_before"] - mb["accepted"]
+
+    assert set(result["seams"]) == mandatory
+    assert result["final_island_count"] == 2
+    rows = [h for h in result["history"] if h.get("stage") == "merge_back"]
+    assert rows and any(r["accepted"] for r in rows), rows
+    json.dumps(mb)
+
+
+def test_merge_back_disabled_keeps_the_extra_seam(monkeypatch):
+    """The stage is switchable, and switching it off is REPORTED, never silent."""
+    mesh, obj, extra = _over_segment(monkeypatch)
+
+    result = run_chart_uv(obj, mesh, max_rounds=4, merge_back=False,
+                          budget={"max_candidates_per_round": 2})
+
+    mb = result["merge_back"]
+    assert mb["enabled"] is False
+    assert mb["reason"] == "disabled"
+    assert mb["trials"] == 0 and mb["accepted"] == 0
+    assert mb["removed_edges"] == []
+    assert extra <= set(result["seams"])
+    assert not [h for h in result["history"] if h.get("stage") == "merge_back"]
+
+
+def test_shading_preserve_policy_passes_and_reaches_the_quality_report(monkeypatch):
+    """G10: the default ``preserve`` policy audits the before/after shading snapshots and
+    the verdict ships inside the one quality-report document."""
+    mesh, _backend, obj = _folded(monkeypatch)
+    result = run_chart_uv(obj, mesh, max_rounds=4,
+                          budget={"max_candidates_per_round": 2})
+
+    shading = result["shading"]
+    assert shading["policy"] == "preserve"
+    assert shading["passed"] is True
+    assert shading["failures"] == [] and shading["invalid_reasons"] == []
+    assert shading["snapshot_diff"]["unchanged"] is True
+    assert "shading" in result["quality_report"]["sections"]
+    json.dumps(shading)
+
+    # No policy-required seams under ``preserve``.
+    assert result["auto_constraints"]["required_seam_edges"] == []
+    assert result["auto_constraints"]["required_missing"] == []
+    assert result["constraints"]["required_count"] == 0
+
+
+def _sharp_plane(monkeypatch, n: int = 4, row: int = 2):
+    """A FLAT grid whose interior ``y = row/n`` line is authored sharp: nothing about the
+    geometry forces a seam there, only the shading policy does."""
+    from uv_agent.geometry.mesh_graph import MeshGraph
+
+    coords, idx = [], {}
+    for i in range(n + 1):
+        for j in range(n + 1):
+            idx[(i, j)] = len(coords)
+            coords.append((i / n, j / n, 0.0))
+    faces = [[idx[(i, j)], idx[(i + 1, j)], idx[(i + 1, j + 1)], idx[(i, j + 1)]]
+             for i in range(n) for j in range(n)]
+    sharp = [(idx[(i, row)], idx[(i + 1, row)]) for i in range(n)]
+    mesh = MeshGraph.from_faces("sharp_plane", coords, faces, sharp_edge_keys=sharp)
+    backend = FakeUnwrapBackend(mesh)
+    return mesh, backend.install(monkeypatch)
+
+
+def test_require_uv_seam_on_sharp_edges_forces_those_seams(monkeypatch):
+    """G10: under ``require_uv_seam_on_sharp_edges`` every sharp edge is a ``required``
+    constraint — it ships as a seam, is listed in the evidence block, and the policy
+    passes on the shipped UVs."""
+    from chart_uv_agent.quality_profile import ENGINEERING_V0
+
+    mesh, obj = _sharp_plane(monkeypatch)
+    sharp = sorted(e.id for e in mesh.edges if e.is_sharp and len(e.face_ids) == 2)
+    assert sharp, "fixture must carry interior sharp edges"
+    assert all(mesh.edges[e].dihedral_angle < 90.0 for e in sharp), \
+        "the sharp edges must be FLAT, so only the policy can require them"
+
+    profile = {**ENGINEERING_V0.to_dict(),
+               "shading_uv_policy": "require_uv_seam_on_sharp_edges"}
+    result = run_chart_uv(obj, mesh, max_rounds=4, quality_profile=profile,
+                          budget={"max_candidates_per_round": 2})
+
+    assert set(sharp) <= set(result["seams"])
+    assert result["auto_constraints"]["required_seam_edges"] == sharp
+    assert result["auto_constraints"]["required_missing"] == []
+    assert result["constraints"]["required_count"] == len(sharp)
+
+    shading = result["shading"]
+    assert shading["policy"] == "require_uv_seam_on_sharp_edges"
+    assert shading["passed"] is True, shading
+    assert shading["sharp_edge_uv_audit"]["sharp_edge_uv_unsplit"] == 0
+    # Merge-back must never give a required seam back.
+    assert not (set(result["merge_back"]["removed_edges"]) & set(sharp))
+
+
+def _without_timings(history) -> list:
+    return [{k: v for k, v in dict(row).items() if k != "elapsed_s"} for row in history]
+
+
+def test_two_runs_agree_on_the_seams_and_the_merge_back_history(monkeypatch):
+    """G12: merge-back adds no non-determinism — two fresh runs dissolve the same seams
+    through the same trials, in the same order (wall-clock timings excluded)."""
+    runs = []
+    for _ in range(2):
+        with monkeypatch.context() as mp:
+            mesh, obj, _extra = _over_segment(mp)
+            runs.append(run_chart_uv(obj, mesh, max_rounds=4,
+                                     budget={"max_candidates_per_round": 2}))
+
+    first, second = runs
+    assert second["seams"] == first["seams"]
+    assert second["merge_back"]["removed_edges"] == first["merge_back"]["removed_edges"]
+    assert _without_timings(second["merge_back"]["history"]) == \
+        _without_timings(first["merge_back"]["history"])

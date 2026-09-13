@@ -152,6 +152,7 @@ def _termination_block(records, *, budget: dict, elapsed: float, passed: bool,
 def _auto_constraints_block(constraints, final_seams: set[int], forbidden: set[int]) -> dict:
     """G4 evidence block: what the run was told to protect and what actually shipped."""
     locked = set(constraints.locked)
+    required = set(getattr(constraints, "required", ()) or ())
     protected = set(constraints.protected)
     protected_cut = sorted(set(final_seams) & set(forbidden))
     mandatory_cut = sorted(protected & set(constraints.mandatory) & set(final_seams))
@@ -159,6 +160,8 @@ def _auto_constraints_block(constraints, final_seams: set[int], forbidden: set[i
     return {
         "locked_seam_edges": sorted(locked),
         "locked_missing": sorted(locked - set(final_seams)),
+        "required_seam_edges": sorted(required),
+        "required_missing": sorted(required - set(final_seams)),
         "protected_edges": sorted(protected),
         "protected_cut": protected_cut,
         "conflicts": conflicts,
@@ -179,7 +182,9 @@ def _v2_result_block(obj, mesh: MeshGraph, final_seams: set[int], *, profile, re
                      distortion_seams: set[int], candidate_history, termination_records,
                      budget: dict, elapsed: float, gate,
                      exhausted_rounds: bool,
-                     island_cap: int | None = None) -> tuple[dict, dict]:
+                     island_cap: int | None = None,
+                     merge_back: dict | None = None,
+                     shading: dict | None = None) -> tuple[dict, dict]:
     """Final v2 measurement of the SHIPPED UV plus the G1/G2/G4/G5 report blocks.
 
     Measures the layout already on ``obj`` (never unwraps), so the numbers describe exactly
@@ -206,7 +211,8 @@ def _v2_result_block(obj, mesh: MeshGraph, final_seams: set[int], *, profile, re
         "border_inset": measurement["border_inset"],
         "hard_failures": list(measurement["hard_failures"]),
         "quality_failures": list(measurement["quality_failures"]),
-        "quality_report": build_quality_report(measurement, profile),
+        "quality_report": build_quality_report(measurement, profile,
+                                               merge_back=merge_back, shading=shading),
         "uv_island_count": int(measurement["uv_island_count"]),
         "islands_disagree": bool(measurement["islands_disagree"]),
         "quality_profile": profile.to_dict(),
@@ -222,7 +228,13 @@ def _v2_result_block(obj, mesh: MeshGraph, final_seams: set[int], *, profile, re
         "seam_length": seam_length_report(mesh, final_seams, mandatory=mandatory,
                                           user=constraints.locked,
                                           distortion_seams=distortion_seams),
-        "auto_passed": bool(passed and _mandatory_gate_ok(gate)),
+        # G7/G10: an incomplete merge-back or a failing shading policy is a REAL failure of
+        # the automatic path, not a remark — ``auto_passed`` may never claim a pass then.
+        "auto_passed": bool(passed and _mandatory_gate_ok(gate)
+                            and (merge_back is None
+                                 or bool(merge_back.get("complete", True)))
+                            and (shading is None
+                                 or bool(shading.get("passed", True)))),
     }
     return block, measurement
 
@@ -419,7 +431,9 @@ def run_chart_uv(obj, mesh: MeshGraph, *, config: ChartGateConfig | None = None,
                  layout_optimization_config=None, constraints=None, quality_profile=None,
                  budget=None, locked_seam_edges=None, preferred_edges=None,
                  front_axis: str = "", regions=None, texture_size_px=None, margin_px=None,
-                 seed=None, use_refinement_loop: bool = True) -> dict:
+                 seed=None, use_refinement_loop: bool = True,
+                 shading_snapshot_before: dict | None = None,
+                 merge_back: bool | None = None) -> dict:
     """Run U1→U4 on ``obj`` (in Blender). Returns the gate, metrics, seam set, chart
     count, and per-round history; leaves the object holding the best layout.
 
@@ -453,7 +467,19 @@ def run_chart_uv(obj, mesh: MeshGraph, *, config: ChartGateConfig | None = None,
     is REJECTED before it is committed (§5.4 post-split reject — ``split_chart`` is NOT
     rewritten); that island is then left alone, and the reject is recorded in the history and
     the ``seam_report`` ``regions`` block. Mandatory ≥90° folds are never protected, so they
-    still ship."""
+    still ship.
+
+    Merge-back (G7) and the shading policy (G10) close the automatic path. After the
+    refinement loop and the prune pass settle, :func:`chart_uv_agent.merge_back.run_merge_back`
+    proves that no remaining seam can be dissolved without losing quality (pass
+    ``merge_back=False`` to switch the stage off; ``None`` follows
+    ``profile.merge_back_enabled``). The profile's ``shading_uv_policy`` then decides what
+    happens to the shading state: ``split_normals_on_uv_seams`` marks the final seam set
+    sharp, ``require_uv_seam_on_sharp_edges`` forces every sharp edge into the seam set as
+    a ``required`` constraint, and ``preserve`` demands the before/after shading snapshots
+    compare unchanged. ``shading_snapshot_before`` lets the caller (the worker) supply the
+    pre-run snapshot; when it is omitted the pipeline takes its own before touching
+    anything."""
     from chart_uv_agent.unwrap import (
         flipped_faces, island_plan_from_seams, read_uvmap, repack, unwrap_and_pack,
     )
@@ -466,8 +492,22 @@ def run_chart_uv(obj, mesh: MeshGraph, *, config: ChartGateConfig | None = None,
 
     from chart_uv_agent import refinement_loop
     from chart_uv_agent.constraints import SeamConstraints
+    from chart_uv_agent.merge_back import merge_back_disabled_block, run_merge_back
+    from uv_agent.blender.apply import apply_smoothing_split_by_edges
+    from uv_agent.geometry.shading_policy import (
+        evaluate_shading_policy, required_seam_edges_for_policy, shading_snapshot,
+    )
 
     config = config or ChartGateConfig()
+    # G10: the BEFORE shading snapshot has to predate every mutation of this run, so it is
+    # taken here (unless the caller already supplied one).
+    def _has_shading_data(o) -> bool:
+        data = getattr(o, "data", None)
+        return hasattr(data, "edges") and hasattr(data, "polygons")
+
+    shading_before = shading_snapshot_before
+    if shading_before is None and _has_shading_data(obj):
+        shading_before = shading_snapshot(obj.data)
     started_at = time.monotonic()
     profile = _resolve_profile(quality_profile, texture_size_px=texture_size_px,
                                margin_px=margin_px)
@@ -499,11 +539,16 @@ def run_chart_uv(obj, mesh: MeshGraph, *, config: ChartGateConfig | None = None,
 
     # G4: ONE constraint object governs every cut path of this run (initial segmentation,
     # distortion refinement, overlap repair, welded-fold repair, prune).
+    # G10: the shading policy may FORCE edges into the seam set (every sharp edge must be a
+    # UV boundary under ``require_uv_seam_on_sharp_edges``). They enter the one constraint
+    # object as ``required`` so every cut/prune/merge stage honours them by construction.
+    shading_policy = str(profile.shading_uv_policy)
+    required = required_seam_edges_for_policy(shading_policy, mesh)
     if constraints is None:
         constraints = SeamConstraints.build(
             mesh, locked=locked_seam_edges or (), protected=forbidden_edges or (),
             preferred=preferred_edges or (), region_policy=region_policy,
-            front_axis=front_axis)
+            front_axis=front_axis, required=required)
     forbidden = set(constraints.forbidden)
 
     aux_seams: set[int] = set()       # welded-fold-auxiliary seams (prune candidates)
@@ -823,6 +868,8 @@ def run_chart_uv(obj, mesh: MeshGraph, *, config: ChartGateConfig | None = None,
     correctness = correctness_pass(obj, mesh, final_seams, config, margin=pack_margin,
                                    forbidden=forbidden, reject_history=history)
     final_seams |= mandatory
+    # G10: a policy-required seam ships exactly like a mandatory fold.
+    final_seams |= set(constraints.required)
 
     def measure():
         """Unwrap+pack the current ``final_seams`` and return (metrics, gate, ev). Owns the
@@ -866,14 +913,59 @@ def run_chart_uv(obj, mesh: MeshGraph, *, config: ChartGateConfig | None = None,
     # green (fewer needless cuts, lower vt/v). One at a time, flattest first; revert on fail.
     pruned: list[int] = []
     if prune_auxiliary and gate.passed:
-        # A user-LOCKED seam is never a prune candidate (G4: 사용자 seam lock 제거 0).
+        # A user-LOCKED or policy-REQUIRED seam is never a prune candidate
+        # (G4: 사용자 seam lock 제거 0 / G10: shading-required seam 제거 0).
         cand = sorted((e for e in aux_seams if e in final_seams
-                       and e not in constraints.locked
+                       and e not in constraints.never_removed
                        and mesh.edges[e].dihedral_angle < 90.0),
                       key=lambda e: mesh.edges[e].dihedral_angle)[:_PRUNE_CAP]
         pruned = _prune_seams(final_seams, cand, lambda: measure()[1].passed)
         aux_seams -= set(pruned)
         metrics, gate, ev = measure()     # ship the kept seam set
+
+    # ----------------------------------------------------------- merge-back (G7)
+    # The refinement loop only ever ADDS cuts, so before the layout ships the run must
+    # prove that no remaining seam can be dissolved without losing quality — or record
+    # that the budget ran out. mandatory / user-locked / shading-required seams are never
+    # even trialled (G4/G10).
+    merge_back_enabled = (bool(profile.merge_back_enabled) if merge_back is None
+                          else bool(merge_back))
+    if merge_back_enabled:
+        mb_measure = refinement_loop.measure_layout(
+            obj, mesh, final_seams, profile=profile, stage="merge_back", regions=regions)
+        mb = run_merge_back(
+            obj, mesh, final_seams, constraints=constraints, profile=profile,
+            margin=pack_margin, regions=regions, required=constraints.required,
+            history=history, initial_measurement=mb_measure,
+            time_budget_s=max(0.0, float(budget["time_budget_s"])
+                              - (time.monotonic() - started_at)))
+        mb_removed = {int(e) for e in mb["removed_edges"]}
+        final_seams = set(mb["seams"])
+        aux_seams -= mb_removed
+        overlap_seams -= mb_removed
+        distortion_seams -= mb_removed
+        # One re-unwrap of the SHIPPED seam set so the v1 metrics describe the merged
+        # layout. ``measure()`` re-unwraps exactly ``final_seams`` — deterministic, and
+        # identical to the merge-back layout when nothing was accepted.
+        metrics, gate, ev = measure()
+    else:
+        mb = merge_back_disabled_block()
+        mb_removed = set()
+    merge_back_block = _jsonable({k: v for k, v in mb.items()
+                                  if k not in ("seams", "measurement")})
+    merge_back_block["removed_edges"] = sorted(mb_removed)
+
+    # ------------------------------------------------------- shading policy (G10)
+    # The seam set is final from here on. ``split_normals_on_uv_seams`` is the one policy
+    # that WRITES shading state (every UV seam becomes a sharp edge); the other two only
+    # audit. The audit runs on the shipped UVs, so a seam Blender welds across is caught.
+    if shading_policy == "split_normals_on_uv_seams" and hasattr(getattr(obj, "data", None),
+                                                                 "edges"):
+        apply_smoothing_split_by_edges(obj, sorted(final_seams))
+    shading_after = shading_snapshot(obj.data) if _has_shading_data(obj) else None
+    shading_block = _jsonable(evaluate_shading_policy(
+        shading_policy, mesh=mesh, uvmap=read_uvmap(obj, mesh), seams=final_seams,
+        before_snapshot=shading_before, after_snapshot=shading_after))
 
     seam_types = _classify_seams(mesh, final_seams, aux_seams, overlap_seams,
                                  distortion_seams, forbidden)
@@ -901,6 +993,7 @@ def run_chart_uv(obj, mesh: MeshGraph, *, config: ChartGateConfig | None = None,
         "stuck_charts": stuck_charts, "shippable": shippable_with_stuck(gate, stuck_charts),
         "pack_margin_uv": float(pack_margin), "margin_px": int(profile.margin_px),
         "texture_size_px": int(profile.texture_size_px),
+        "merge_back": merge_back_block, "shading": shading_block,
     }
     # G1/G5: an island-gap-ONLY correctness failure is repaired by re-packing wider, never
     # by cutting. Runs before the final v2 measurement so the report describes the re-pack.
@@ -914,7 +1007,8 @@ def run_chart_uv(obj, mesh: MeshGraph, *, config: ChartGateConfig | None = None,
         candidate_history=candidate_history, termination_records=termination_records,
         budget=budget, elapsed=time.monotonic() - started_at, gate=gate,
         exhausted_rounds=rounds_exhausted,
-        island_cap=min(int(config.island_count_max), int(budget["island_cap"])))
+        island_cap=min(int(config.island_count_max), int(budget["island_cap"])),
+        merge_back=merge_back_block, shading=shading_block)
     result.update(v2_block)
     # G1 (topology/입력): the input-defect diagnosis ships with every automatic result.
     result["input_diagnostics"] = _input_diagnostics(mesh, v2_block.get("distortion_v2"))

@@ -12,6 +12,10 @@ Run inside Blender:
    mutated (plan §11, §15), and export each requested FBX/OBJ/GLB/GLTF,
 4. re-open every exported file in a fresh scene and validate UV presence +
    face/vertex/normal snapshot (plan §7); a missing UV layer is a hard failure,
+   then re-AUDIT the same file against the source mesh/UV snapshot (Gate G13:
+   correctness, texel density, shading policy, source-matched mandatory-90 and
+   UV/vertex fingerprints) into ``export_reread_report.json`` — a format that
+   fails the audit does not count as shipped,
 5. render best-effort UV-layout + checker previews of the exported result (plan §7),
 6. write ``export_manifest.json`` (accepted/partial), ``validation_report.json``
    and the ``status.json`` lifecycle (plan §6, §7).
@@ -234,6 +238,30 @@ def _run_export(bpy, contract, job: dict, out_dir: str, status_path: str, status
           f"materials={options.get('include_materials')} normals={options.get('include_normals')}",
           flush=True)
 
+    # --- SOURCE snapshot for the G13 re-read audit (before the duplicate) -
+    # The re-read audit compares the shipped file against the mesh + UV that was
+    # actually exported, so it must be captured here: the export duplicate is
+    # modified (scale/triangulate) and every re-open below wipes the scene.
+    source_mesh = source_uvmap = None
+    reread_profile: dict = {}
+    profile_id = None
+    try:
+        from chart_uv_agent.quality_profile import load_quality_profile
+        from uv_agent.blender.extract import extract_mesh_graph
+        from uv_agent.blender.organic_unwrap import read_uvmap
+
+        source_mesh = extract_mesh_graph(obj)
+        source_uvmap = read_uvmap(obj, source_mesh, layer_name=active_uv)
+        # Frozen profile defaults, overridden by whatever the accepted MVP 3 run
+        # recorded — the audit must judge the export by the profile it was made
+        # under, not by today's defaults.
+        reread_profile = dict(load_quality_profile(None).to_dict())
+        reread_profile.update({k: v for k, v in ((summary or {}).get("quality_profile") or {}).items()
+                               if v is not None})
+        profile_id = reread_profile.get("profile_id")
+    except Exception as exc:  # noqa: BLE001 - the audit is evidence, never a crash
+        warnings.append(f"re-read audit source snapshot failed: {exc}")
+
     # --- export each format from a DUPLICATE (source never mutated) -------
     dup = exporter.build_export_object(bpy, obj, options)
     export_results: dict[str, dict] = {}
@@ -259,6 +287,7 @@ def _run_export(bpy, contract, job: dict, out_dir: str, status_path: str, status
 
     # --- re-open validation (resets the scene per file, plan §7) ----------
     validation_formats: dict[str, dict] = {}
+    reread_formats: dict[str, dict] = {}
     for fmt, res in export_results.items():
         if not res["ok"]:
             continue
@@ -267,11 +296,26 @@ def _run_export(bpy, contract, job: dict, out_dir: str, status_path: str, status
             include_normals=bool(options.get("include_normals", True)),
             source_faces=source_faces, source_vertices=source_vertices,
             triangulated=triangulated)
+        # G13: same place, same scene-reset cost — re-read the shipped file and
+        # audit it against the source snapshot (never raises).
+        if source_mesh is not None and source_uvmap is not None:
+            reread_formats[fmt] = validation.reread_audit(
+                bpy, res["path"], fmt, source_mesh=source_mesh,
+                source_uvmap=source_uvmap, profile=reread_profile,
+                triangulated=triangulated, expected_uv_layer=active_uv)
+            block = reread_formats[fmt]
+            print(f"export_production_asset: reread {fmt} passed={block.get('passed')} "
+                  f"failures={block.get('failures')}", flush=True)
+
+    # --- re-read report (Gate G13 / G15 evidence; always written) ---------
+    reread_report = contract.build_reread_report(reread_formats, profile_id=profile_id)
+    contract.write_json(os.path.join(out_dir, contract.EXPORT_REREAD_REPORT_FILE), reread_report)
 
     # --- status: a format must export AND validate to count (plan §5, §7) -
     succeeded = [f for f in formats
                  if export_results[f]["ok"]
-                 and contract.format_validation_ok(validation_formats.get(f))]
+                 and contract.format_validation_ok(validation_formats.get(f),
+                                                   reread=reread_formats.get(f))]
     failed_formats: list[dict] = []
     for fmt in formats:
         res = export_results[fmt]
@@ -280,6 +324,13 @@ def _run_export(bpy, contract, job: dict, out_dir: str, status_path: str, status
         elif not contract.format_validation_ok(validation_formats.get(fmt)):
             failed_formats.append({"format": fmt, "code": "validation_failed",
                                    "message": f"{fmt.upper()} re-opened without a UV layer"})
+        elif not contract.format_validation_ok(validation_formats.get(fmt),
+                                               reread=reread_formats.get(fmt)):
+            block = reread_formats.get(fmt) or {}
+            failed_formats.append({"format": fmt, "code": "reread_audit_failed",
+                                   "message": f"{fmt.upper()} re-read audit failed: "
+                                              f"{block.get('failures') or block.get('error')}",
+                                   "failures": list(block.get("failures") or [])})
     for fmt, v in validation_formats.items():
         warnings += [w for w in v.get("warnings", []) if "hard failure" not in w]
 
@@ -325,7 +376,8 @@ def _run_export(bpy, contract, job: dict, out_dir: str, status_path: str, status
     result = contract.build_export_result(
         export_id=export_id, status=run_status, source=result_source, exports=exports,
         validation=validation_report, artifacts=artifacts,
-        failed_formats=failed_formats or None, warnings=warnings)
+        failed_formats=failed_formats or None, warnings=warnings,
+        reread=reread_report)
     if job.get("out"):
         contract.write_json(job["out"], result)
 
@@ -338,7 +390,9 @@ def _run_export(bpy, contract, job: dict, out_dir: str, status_path: str, status
     contract.write_json(status_path, status)
     print(f"export_production_asset: {run_status} export={export_id} object={object_name!r} "
           f"succeeded={succeeded} failed={[f['format'] for f in failed_formats]} "
-          f"manifest={manifest_written} validation={validation_report['status']}", flush=True)
+          f"manifest={manifest_written} validation={validation_report['status']} "
+          f"reread_passed={reread_report['passed']} "
+          f"reread_failed={reread_report['failed_formats']}", flush=True)
     # partial/failed are product outcomes — the verdict lives in status.json, so a
     # completed export attempt still exits 0 (plan §5).
     return 0

@@ -140,6 +140,10 @@ EXPORT_METRIC_KEYS = (
 # --- Artifact registry (plan §2 folder layout / §5.1 artifacts) ------------
 MANIFEST_FILE = "export_manifest.json"
 VALIDATION_REPORT_FILE = "validation_report.json"
+# Gate G13/G15: the source-matched re-read audit of every shipped file. Separate
+# from ``validation_report.json`` on purpose — that one answers "does the file
+# re-open with a UV layer?", this one answers "is it still the approved UV?".
+EXPORT_REREAD_REPORT_FILE = "export_reread_report.json"
 STATUS_FILE = "status.json"
 # key -> (filename, required). Missing required preview becomes a warning, not a
 # hard failure (plan §7 step 7 "best-effort preview").
@@ -424,14 +428,22 @@ def classify_export_status(requested_formats: Iterable[str], succeeded_formats: 
     return STATUS_ACCEPTED
 
 
-def format_validation_ok(fmt_validation: dict | None) -> bool:
+def format_validation_ok(fmt_validation: dict | None, reread: dict | None = None) -> bool:
     """A format "succeeds" iff it re-opened AND carries a UV layer (plan §7).
 
     Missing UV is always a hard failure; normals / material / vertex-count
     differences are warnings, never failures (plan §7 tolerance policy).
+
+    When a Gate G13 ``reread`` audit was run for the format it must ALSO pass:
+    a file that re-opens with a UV layer but whose UV no longer matches the
+    approved layout is not a shippable export. ``reread=None`` means "not
+    audited" and leaves the plan §7 verdict untouched.
     """
     v = fmt_validation or {}
-    return bool(v.get("reopen_ok")) and bool(v.get("has_uv"))
+    ok = bool(v.get("reopen_ok")) and bool(v.get("has_uv"))
+    if reread is not None:
+        ok = ok and bool(reread.get("passed"))
+    return ok
 
 
 def classify_validation_status(formats: dict) -> str:
@@ -456,6 +468,25 @@ def build_validation_report(formats: dict, *, status: str | None = None) -> dict
         "schema_version": SCHEMA_VERSION,
         "status": status or classify_validation_status(formats),
         "formats": formats,
+    }
+
+
+def build_reread_report(formats: dict, *, profile_id: str | None) -> dict:
+    """Assemble ``export_reread_report.json`` (Gate G13 / G15 evidence).
+
+    ``formats`` maps each audited format -> its ``build_reread_audit`` block.
+    ``passed`` is the conjunction over every audited format (an empty map is a
+    vacuous pass — nothing was shipped to audit), and ``failed_formats`` names
+    the ones that failed so the evidence is readable without walking the blocks.
+    """
+    fmts = dict(formats or {})
+    failed = [f for f, block in fmts.items() if not bool((block or {}).get("passed"))]
+    return {
+        "schema_version": SCHEMA_VERSION,
+        "profile_id": profile_id,
+        "formats": fmts,
+        "passed": not failed,
+        "failed_formats": failed,
     }
 
 
@@ -552,12 +583,14 @@ def build_export_result(
     artifacts: dict,
     failed_formats: list[dict] | None = None,
     warnings: list[str] | None = None,
+    reread: dict | None = None,
 ) -> dict:
     """Assemble the ``export_production_asset`` result (plan §5.1).
 
     ``exports`` maps each *succeeded* format -> its project-relative path;
     ``failed_formats`` carries structured per-format failures so the UI can never
-    hide a partial failure (plan §5).
+    hide a partial failure (plan §5). ``reread`` is the optional Gate G13 report
+    (:func:`build_reread_report`); it is omitted when no re-read audit ran.
     """
     result = {
         "schema_version": SCHEMA_VERSION,
@@ -570,6 +603,8 @@ def build_export_result(
         "artifacts": artifacts,
         "warnings": list(warnings or []),
     }
+    if reread is not None:
+        result["reread"] = reread
     if failed_formats:
         result["failed_formats"] = failed_formats
     return result
@@ -591,13 +626,15 @@ def collect_export_files(out_dir: str, export_paths: dict, export_name_files: di
 def collect_export_artifacts(out_dir: str) -> tuple[dict, list[str]]:
     """Return ``(artifacts, warnings)`` for the export artifacts in ``out_dir`` (plan §5.1).
 
-    ``manifest`` + ``validation_report`` keys always point at their canonical
+    ``manifest`` + ``validation_report`` + ``reread_report`` (Gate G13/G15) keys
+    always point at their canonical
     filenames; preview keys are added when present. Missing previews are silent
     (they are best-effort, plan §7) — the result still ships.
     """
     artifacts: dict[str, str] = {
         "manifest": MANIFEST_FILE,
         "validation_report": VALIDATION_REPORT_FILE,
+        "reread_report": EXPORT_REREAD_REPORT_FILE,
     }
     warnings: list[str] = []
     for key, (filename, required) in PREVIEW_ARTIFACTS.items():

@@ -52,10 +52,18 @@ class _FakeUvLayers:
 
 
 class _FakeMeshData:
-    """Minimal ``obj.data`` stand-in (uv layer bookkeeping only)."""
+    """Minimal ``obj.data`` stand-in (uv layer bookkeeping only).
+
+    ``edges`` / ``polygons`` are present but EMPTY: that is enough for
+    :func:`uv_agent.geometry.shading_policy.shading_snapshot` to produce a real (empty)
+    snapshot, and it keeps ``mark_seams`` / ``apply_smoothing_split_by_edges`` harmless
+    no-ops off-Blender — they only ever iterate these lists.
+    """
 
     def __init__(self) -> None:
         self.uv_layers = _FakeUvLayers()
+        self.edges: list = []
+        self.polygons: list = []
 
     def update(self) -> None:
         return None
