@@ -850,6 +850,15 @@ def run_chart_uv(obj, mesh: MeshGraph, *, config: ChartGateConfig | None = None,
                 rec["refinement_reason"] = ref["termination"]["reason"]
             else:
                 rec["refinement_reason"] = ref["termination"]["reason"]
+                # CG5: an accepted R1 re-unwrap repairs the LAYOUT without touching a single
+                # seam, so a seam-set comparison alone reads it as "nothing happened" and the
+                # round loop stops one repair too early. The UV digest is what actually moved,
+                # so it is what decides whether this round changed anything.
+                if str((ref.get("measurement") or {}).get("uv_hash", "")) \
+                        != str(_round_v2().get("uv_hash", "")):
+                    changed = True
+                    rec["action"] = "reunwrap"
+                    rec["reason"] = _CATASTROPHIC_CUT_REASON
         elif use_refinement_loop and not changed and (global_over or worst_over or v2_needed) \
                 and len(charts) >= refine_island_cap and not cat_failed:
             # Refinement was skipped because the island cap is already reached — recorded so
@@ -994,6 +1003,36 @@ def run_chart_uv(obj, mesh: MeshGraph, *, config: ChartGateConfig | None = None,
         aux_seams -= set(pruned)
         metrics, gate, ev = measure()     # ship the kept seam set
 
+    # ------------------------------------------ post-prune catastrophic pass (CG6/CG13)
+    # The round loop can be forced to stop at the island cap while a catastrophic region is
+    # still broken; the prune pass then GIVES islands back (the statue case: 80 islands at
+    # the cap → 37 after pruning). So once the seam set has settled, re-measure and, if the
+    # hard catastrophic gate is still red, re-enter the repair loop with the headroom that
+    # pruning just bought — instead of shipping the broken regions untouched.
+    if use_refinement_loop:
+        post_prune = refinement_loop.measure_layout(obj, mesh, final_seams, profile=profile,
+                                                    stage="post_prune", regions=regions)
+        if (post_prune.get("catastrophic") or {}).get("passed") is False:
+            ref2 = refinement_loop.run_refinement(
+                obj, mesh, final_seams, constraints=constraints, profile=profile,
+                budget={**budget,
+                        "max_iterations": int(profile.catastrophic_repair_max_rounds)},
+                margin=pack_margin, regions=regions, history=history,
+                candidate_history=candidate_history, initial_measurement=post_prune)
+            termination_records.append(ref2["termination"])
+            final_seams = set(ref2["seams"])
+            distortion_seams |= set(ref2["distortion_seams"])
+            history.append({
+                "stage": "post_prune_catastrophic",
+                "rounds": int(ref2["termination"]["iterations"]),
+                "reason": str(ref2["termination"]["reason"]),
+                "bad_triangles_before": int(((post_prune.get("catastrophic") or {})
+                                             .get("bad_triangle_count", 0)) or 0),
+                "bad_triangles_after": int((((ref2.get("measurement") or {})
+                                             .get("catastrophic") or {})
+                                            .get("bad_triangle_count", 0)) or 0),
+            })
+
     # ----------------------------------------------------------- merge-back (G7)
     # The refinement loop only ever ADDS cuts, so before the layout ships the run must
     # prove that no remaining seam can be dissolved without losing quality — or record
@@ -1011,7 +1050,7 @@ def run_chart_uv(obj, mesh: MeshGraph, *, config: ChartGateConfig | None = None,
         mb = run_merge_back(
             obj, mesh, final_seams, constraints=constraints, profile=profile,
             margin=pack_margin, regions=regions, required=constraints.required,
-            history=history, initial_measurement=mb_measure,
+            history=history, initial_measurement=mb_measure, repair_mode=True,
             time_budget_s=max(0.0, float(budget["time_budget_s"])
                               - (time.monotonic() - started_at)))
         mb_removed = {int(e) for e in mb["removed_edges"]}

@@ -41,6 +41,7 @@ from __future__ import annotations
 import time
 
 from chart_uv_agent.candidates import bbox_diagonal, seam_length
+from chart_uv_agent.catastrophic_repair import _counters_not_worse, catastrophic_counters
 from chart_uv_agent.quality_profile import QualityProfile
 from chart_uv_agent.refinement_loop import (
     gap_only_failure,
@@ -53,7 +54,108 @@ from chart_uv_agent.segmentation import flood_charts
 from uv_agent.geometry.mesh_graph import MeshGraph
 
 #: Trial verdicts, as they appear in a history record's ``reason``.
-TRIAL_REASONS = ("accepted", "quality_failed", "island_count_unchanged", "exception")
+TRIAL_REASONS = ("accepted", "quality_failed", "island_count_unchanged", "exception",
+                 "accepted_repair", "repair_not_improved", "hard_failures_grew",
+                 "catastrophic_worse", "correctness_worse", "fragmentation_worse")
+
+#: The fragmentation HARD checks a merge must never make worse in repair mode. The two
+#: count metrics live in ``fragmentation["metrics"]``; the rest are ``checks`` rows that
+#: only exist when the profile supplies the matching pixel cap (CG8).
+_FRAG_HARD_METRICS = ("zero_area_island_count", "below_min_area_island_count")
+_FRAG_HARD_CHECKS = ("sliver_islands", "island_min_width_px", "island_min_area_px2",
+                     "island_bbox_aspect", "island_perimeter_area_ratio")
+
+#: Absolute slack on the overlap AREA comparison (a re-pack moves islands, so the total is
+#: re-derived from a fresh unwrap and last-bit noise must not read as a regression).
+_OVERLAP_TOLERANCE = 1e-12
+
+
+def _fragmentation_hard_counts(measurement: dict) -> dict:
+    """The non-exempt fragmentation HARD offender counts of one measurement (CG8/CG10)."""
+    report = (measurement or {}).get("fragmentation") or {}
+    metrics = report.get("metrics") or {}
+    out: dict[str, float] = {}
+    for key in _FRAG_HARD_METRICS:
+        out[key] = float(metrics.get(key, 0) or 0)
+    for check in report.get("checks") or ():
+        name = str((check or {}).get("name", ""))
+        if name in _FRAG_HARD_CHECKS and str(check.get("scope")) == "hard":
+            out[name] = float(check.get("value", 0) or 0)
+    return out
+
+
+def _fragmentation_verdict(before: dict, after: dict) -> tuple[bool, bool]:
+    """``(nothing got worse, something got strictly better)`` over the shared hard counts."""
+    better = False
+    for key, before_value in before.items():
+        if key not in after:
+            continue                      # the check is not part of this profile
+        if after[key] > before_value:
+            return False, False
+        if after[key] < before_value:
+            better = True
+    return True, better
+
+
+def _correctness_counters(measurement: dict) -> tuple[float, int, int]:
+    """``(overlap area, local flips, UV-degenerate triangles)`` — lower is better."""
+    corr = (measurement or {}).get("correctness") or {}
+    return (
+        float((corr.get("overlap") or {}).get("overlap_area_total", 0.0) or 0.0),
+        int((corr.get("orientation") or {}).get("local_flip_count", 0) or 0),
+        int((corr.get("degenerate") or {}).get("uv_degenerate_count", 0) or 0),
+    )
+
+
+def _correctness_not_worse(before: dict, after: dict) -> bool:
+    b_area, b_flips, b_degen = _correctness_counters(before)
+    a_area, a_flips, a_degen = _correctness_counters(after)
+    return (a_area <= b_area + _OVERLAP_TOLERANCE
+            and a_flips <= b_flips and a_degen <= b_degen)
+
+
+def _broken_island_ids(measurement: dict) -> set[int]:
+    """The island ids the fragmentation report already calls tiny or sliver."""
+    report = (measurement or {}).get("fragmentation") or {}
+    out: set[int] = set()
+    for key in ("tiny_island_ids", "sliver_island_ids"):
+        out.update(int(i) for i in (report.get(key) or ()))
+    return out
+
+
+def repair_trial_verdict(before: dict, after: dict, *, before_count: int,
+                         touches_broken: bool) -> str:
+    """Why a merge trial on an ALREADY-FAILING layout is accepted or not (CG10/CG8).
+
+    A failing layout cannot be asked "does this merge still pass?" — nothing passes. The
+    question is instead "does dissolving this seam make the layout *less* broken without
+    breaking anything else?", so a merge is kept iff the island count really dropped by
+    one, no hard failure / catastrophic counter / correctness counter / fragmentation hard
+    count got worse, and either a fragmentation hard count got strictly better or the pair
+    that was merged contained one of the tiny / sliver islands the report complains about.
+
+    ``mandatory``, ``texel density`` and the shading-required seams need no separate test:
+    a regression in any of them shows up as a new entry in ``hard_failures`` (and a
+    shading-required group is never trialled at all).
+
+    Returns ``"accepted_repair"`` or the name of the first rule that refused.
+    """
+    if int(after.get("island_count", -1)) != int(before_count) - 1:
+        return "island_count_unchanged"
+    if not set(after.get("hard_failures") or ()) <= set(before.get("hard_failures") or ()):
+        return "hard_failures_grew"
+    if not _counters_not_worse(catastrophic_counters(after.get("catastrophic") or {}),
+                               catastrophic_counters(before.get("catastrophic") or {})):
+        return "catastrophic_worse"
+    if not _correctness_not_worse(before, after):
+        return "correctness_worse"
+    not_worse, improved = _fragmentation_verdict(_fragmentation_hard_counts(before),
+                                                 _fragmentation_hard_counts(after))
+    if not not_worse:
+        return "fragmentation_worse"
+    if not (improved or touches_broken):
+        return "repair_not_improved"
+    return "accepted_repair"
 
 
 # ----------------------------------------------------------- removable groups
@@ -137,13 +239,23 @@ def run_merge_back(obj, mesh: MeshGraph, seams, *, constraints,
                    required=frozenset(), max_trials: int | None = None,
                    clock=time.monotonic, time_budget_s: float | None = None,
                    history: list | None = None,
-                   initial_measurement: dict | None = None) -> dict:
+                   initial_measurement: dict | None = None,
+                   repair_mode: bool = True) -> dict:
     """Dissolve every seam that is not paying for itself, to a recorded end (G7/G12).
 
-    Merge-back only runs on a layout that is ALREADY good: a failing input is reported as
-    ``skipped_quality_failed`` with zero trials, because "which seams are unnecessary?" is
-    not a meaningful question about a layout that does not meet the bar in the first place
-    — the refinement loop's own termination reason is the story there.
+    Two modes, decided by the INPUT measurement:
+
+    ``preserve`` (the input already passes)
+        the historical behaviour, byte for byte: accept a merge iff the merged layout still
+        passes the full measurement AND the island count dropped by exactly one.
+
+    ``repair`` (the input FAILS and ``repair_mode`` is on)
+        over-segmentation is one of the things that *makes* a layout fail — a wall of tiny
+        and sliver islands is exactly what merge-back exists to dissolve — so a failing
+        input is no longer skipped. Groups touching a tiny / sliver island are trialled
+        first and a merge is kept under :func:`repair_trial_verdict`: strictly less broken,
+        nothing else worse. With ``repair_mode=False`` a failing input is still reported as
+        ``skipped_quality_failed`` with zero trials.
 
     Otherwise each iteration takes the best untried removable group and trials it. Accept
     iff the merged layout passes the full measurement AND the island count dropped by
@@ -177,6 +289,9 @@ def run_merge_back(obj, mesh: MeshGraph, seams, *, constraints,
     diagonal = bbox_diagonal(mesh)
     seam_length_before = seam_length(mesh, seams)
     island_count_before = int(measurement["island_count"])
+    # CG10: a FAILING input is a repair job, not a reason to walk away — unless the caller
+    # switched the repair mode off.
+    mode = "preserve" if measurement.get("passed", False) else "repair"
 
     records: list[dict] = []
     removed_edges: set[int] = set()
@@ -190,6 +305,7 @@ def run_merge_back(obj, mesh: MeshGraph, seams, *, constraints,
             "enabled": True,
             "complete": bool(complete),
             "reason": str(reason),
+            "mode": str(mode),
             "trials": int(trials),
             "accepted": int(accepted),
             "island_count_before": island_count_before,
@@ -208,7 +324,8 @@ def run_merge_back(obj, mesh: MeshGraph, seams, *, constraints,
             "elapsed_s": float(clock() - started),
         }
 
-    if not measurement.get("passed", False):
+    if mode == "repair" and not repair_mode:
+        mode = "preserve"
         groups = removable_seam_groups(mesh, seams, constraints, required=required)
         history.append({
             "stage": "merge_back",
@@ -225,6 +342,15 @@ def run_merge_back(obj, mesh: MeshGraph, seams, *, constraints,
     while True:
         groups = removable_seam_groups(mesh, seams, constraints, required=required)
         untried = [g for g in groups if frozenset(g["edges"]) not in tried]
+        broken_islands = _broken_island_ids(measurement) if mode == "repair" else set()
+        if mode == "repair":
+            # CG10: in repair mode the point is to dissolve the islands the report is
+            # actually complaining about, so a group touching a tiny / sliver island is
+            # trialled before the merely-longest boundary. Same deterministic tiebreak.
+            untried.sort(key=lambda row: (
+                not ({int(row["island_a"]), int(row["island_b"])} & broken_islands),
+                -round(float(row["shared_length"]), 9),
+                int(row["island_a"]), int(row["island_b"])))
 
         if not untried:
             return result("no_removable_seam", True, 0)
@@ -240,9 +366,13 @@ def run_merge_back(obj, mesh: MeshGraph, seams, *, constraints,
         snapshot = take_snapshot(obj, mesh, seams)
         trial_seams = set(seams) - set(edges)
 
+        touches_broken = bool({int(group["island_a"]), int(group["island_b"])}
+                              & broken_islands)
+
         after: dict | None = None
         error: str | None = None
         accept = False
+        verdict: str | None = None
         try:
             after = unwrap_and_measure(obj, mesh, trial_seams, profile=profile,
                                        margin=margin, stage="merge_back", regions=regions)
@@ -253,8 +383,14 @@ def run_merge_back(obj, mesh: MeshGraph, seams, *, constraints,
                 after = repack_for_gap(obj, mesh, trial_seams, profile=profile,
                                        pack_margin=margin, regions=regions,
                                        stage="merge_back_gap_repack")
-            accept = bool(after.get("passed", False)) and (
-                int(after["island_count"]) == before_count - 1)
+            if mode == "repair":
+                verdict = repair_trial_verdict(measurement, after,
+                                               before_count=before_count,
+                                               touches_broken=touches_broken)
+                accept = verdict == "accepted_repair"
+            else:
+                accept = bool(after.get("passed", False)) and (
+                    int(after["island_count"]) == before_count - 1)
         except Exception as exc:                               # noqa: BLE001 — reported
             error = str(exc)
             accept = False
@@ -272,6 +408,7 @@ def run_merge_back(obj, mesh: MeshGraph, seams, *, constraints,
             "shared_length": float(group["shared_length"]),
             "island_count_before": before_count,
             "gap_repack": (after or {}).get("gap_repack"),
+            "mode": str(mode),
         }
 
         if accept and after is not None:
@@ -281,8 +418,9 @@ def run_merge_back(obj, mesh: MeshGraph, seams, *, constraints,
             accepted += 1
             record.update({
                 "accepted": True,
-                "reason": "accepted",
-                "hard_failures": None,
+                "reason": "accepted" if mode == "preserve" else "accepted_repair",
+                "hard_failures": (None if mode == "preserve"
+                                  else list(after.get("hard_failures") or ())),
                 "island_count_after": int(after["island_count"]),
             })
             action = "merge"
@@ -291,6 +429,9 @@ def run_merge_back(obj, mesh: MeshGraph, seams, *, constraints,
             if error is not None:
                 reason = "exception"
                 island_count_after = None
+            elif verdict is not None:
+                reason = verdict
+                island_count_after = int(after["island_count"])
             elif not after.get("passed", False):
                 reason = "quality_failed"
                 island_count_after = int(after["island_count"])
@@ -326,6 +467,7 @@ def run_merge_back(obj, mesh: MeshGraph, seams, *, constraints,
 
 __all__ = [
     "TRIAL_REASONS",
+    "repair_trial_verdict",
     "merge_back_disabled_block",
     "removable_seam_groups",
     "run_merge_back",

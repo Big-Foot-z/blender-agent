@@ -613,12 +613,14 @@ def test_two_runs_agree_on_the_seams_and_the_merge_back_history(monkeypatch):
 # ------------------- 13. CG5: catastrophic repair still runs at the island cap
 
 
-def _needle_grid(monkeypatch, *, inject_needle: bool, n: int = 4):
+def _needle_grid(monkeypatch, *, inject_needle: bool, n: int = 4, persist: bool = False):
     """A flat ``n x n`` quad grid (ONE chart, no fold seams) behind the fake backend.
 
     With ``inject_needle`` the unwrap always collapses one UV corner of a middle face
     (the CG5 pattern from ``tests/test_catastrophic_repair.py``), so every layout the
     pipeline measures fails the hard catastrophic gate; the R1 re-unwrap repairs it.
+    With ``persist`` the re-unwrap re-injects the needle too, so the catastrophic failure
+    survives the whole round loop (CG6/CG13: the post-prune pass must still run).
     """
     coords = [(i / n, j / n, 0.0) for i in range(n + 1) for j in range(n + 1)]
 
@@ -642,13 +644,15 @@ def _needle_grid(monkeypatch, *, inject_needle: bool, n: int = 4):
 
     def unwrap_and_pack(o, seams, **kwargs):
         out = real_unwrap(o, seams, **kwargs)
-        if inject_needle and not state["reunwrapped"]:
+        if inject_needle and (persist or not state["reunwrapped"]):
             inject(o)
         return out
 
     def reunwrap_faces(o, face_ids, **kwargs):
         out = real_reunwrap(o, face_ids, **kwargs)
         state["reunwrapped"] = True
+        if inject_needle and persist:
+            inject(o)
         return out
 
     monkeypatch.setattr("chart_uv_agent.unwrap.unwrap_and_pack", unwrap_and_pack)
@@ -682,3 +686,61 @@ def test_clean_run_at_the_island_cap_still_stops_without_candidates(monkeypatch)
     assert termination["candidates_evaluated"] == 0, termination
     assert termination["reason"] in {"island_cap", "quality_passed"}, termination
     assert not [c for c in result["candidate_history"] if c.get("kind") == "reunwrap"]
+
+
+# ------- 14. CG5/CG6/CG13: an accepted R1 keeps the round loop going; post-prune pass
+
+
+def _round_rows(result) -> list:
+    """The per-round records of the pipeline loop (they all carry a gate ``verdict``)."""
+    return [h for h in result["history"] if "verdict" in h]
+
+
+def test_accepted_reunwrap_without_a_seam_change_continues_the_round_loop(monkeypatch):
+    """CG5: an accepted R1 repair changes the LAYOUT, not the seam set — the round must
+    still count as changed, or the loop stops one repair too early."""
+    mesh, _backend, obj = _needle_grid(monkeypatch, inject_needle=True)
+
+    result = run_chart_uv(obj, mesh, max_rounds=4,
+                          budget={"max_candidates_per_round": 2})
+
+    rounds = _round_rows(result)
+    reunwrap_rounds = [h for h in rounds if h.get("action") == "reunwrap"]
+    assert reunwrap_rounds, rounds
+    row = reunwrap_rounds[0]
+    assert row["reason"] == "catastrophic_repair"
+    assert "refinement_added_edges" not in row, "an R1 repair adds no seam"
+    # The loop did NOT stop on that round: a later round exists, and it is not the
+    # "nothing left to try" break.
+    assert row["round"] < rounds[-1]["round"], rounds
+    assert row is not rounds[-1]
+
+
+def test_post_prune_catastrophic_pass_re_enters_the_repair_loop(monkeypatch):
+    """CG6/CG13: when the loop stops with the catastrophic gate still red, the settled
+    (pruned) seam set is re-measured and the repair loop is entered once more."""
+    mesh, _backend, obj = _needle_grid(monkeypatch, inject_needle=True, persist=True)
+
+    result = run_chart_uv(obj, mesh, max_rounds=2,
+                          budget={"max_candidates_per_round": 2})
+
+    rows = [h for h in result["history"] if h.get("stage") == "post_prune_catastrophic"]
+    assert rows, [h.get("stage") for h in result["history"]]
+    row = rows[0]
+    assert isinstance(row["reason"], str) and row["reason"]
+    assert int(row["rounds"]) >= 0
+    assert int(row["bad_triangles_before"]) >= 1
+    assert int(row["bad_triangles_after"]) >= 0
+    # The pass only makes sense below the island cap — pruning is what buys that headroom.
+    assert result["final_island_count"] < int(result["termination"]["budget"]["island_cap"])
+    json.dumps(row)
+
+
+def test_clean_run_has_no_post_prune_catastrophic_row(monkeypatch):
+    """The control: a layout whose catastrophic gate is green never re-enters the loop."""
+    mesh, _backend, obj = _needle_grid(monkeypatch, inject_needle=False)
+
+    result = run_chart_uv(obj, mesh, max_rounds=3,
+                          budget={"max_candidates_per_round": 2})
+
+    assert not [h for h in result["history"] if h.get("stage") == "post_prune_catastrophic"]
