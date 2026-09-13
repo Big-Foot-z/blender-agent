@@ -40,7 +40,25 @@ import {
 import type { Banner } from '../App';
 import { useT, statusLabel, type TKey } from '../i18n';
 import { previewUrl } from '../previewUrl';
-import { SEAM_TYPE_ORDER, SeamOverlayView, seamTypeColor } from './SeamOverlayView';
+import {
+  REASON_CODE_ORDER,
+  SEAM_TYPE_ORDER,
+  SeamOverlayView,
+  reasonCodeColor,
+  seamEdgeColor,
+  seamTypeColor,
+} from './SeamOverlayView';
+
+/** i18n label per G15 reason code — the legend enumerates all seven. */
+const REASON_CODE_LABELS: Record<string, TKey> = {
+  mandatory_90: 'generate.rc.mandatory_90',
+  boundary_topology: 'generate.rc.boundary_topology',
+  user: 'generate.rc.user',
+  shading: 'generate.rc.shading',
+  material: 'generate.rc.material',
+  distortion_added: 'generate.rc.distortion_added',
+  rejected_candidate: 'generate.rc.rejected_candidate',
+};
 
 type CenterTab = 'checker' | 'layout' | 'candidates' | 'heatmap' | 'seams';
 type CheckerView = 'front' | 'side';
@@ -802,15 +820,18 @@ function GenerateCenter(props: {
         )}
 
         {props.centerTab === 'layout' && (
-          <BeforeAfter
+          <LayoutTab
             beforeSrc={paths.baseline_uv_layout}
             afterSrc={paths.selected_uv_layout}
-            label={t('common.uvLayout')}
+            overlaySrc={paths.seam_overlay_png}
           />
         )}
 
         {props.centerTab === 'candidates' && (
-          <CandidateTable candidateSummary={runView.candidate_summary} summary={summary} />
+          <div className="candidates-tab">
+            <CandidateTable candidateSummary={runView.candidate_summary} summary={summary} />
+            <MergeBackList history={runView.merge_back_history} />
+          </div>
         )}
 
         {props.centerTab === 'heatmap' &&
@@ -847,6 +868,9 @@ function SeamOverlayPanel(props: {
   setSelectedEdgeId: (id: number | null) => void;
 }): JSX.Element {
   const t = useT();
+  // Gate G15: rejected candidate cuts are shown by default — "what the engine
+  // decided NOT to do" is part of the evidence, not an opt-in extra.
+  const [showRejected, setShowRejected] = useState(true);
   const ov = props.overlay;
   if (!ov || ov.edges.length === 0) {
     return <div className="placeholder">{t('generate.noSeamOverlay')}</div>;
@@ -857,14 +881,60 @@ function SeamOverlayPanel(props: {
     new Set<string>([...SEAM_TYPE_ORDER, ...Object.keys(counts), ...ov.edges.map((e) => e.type)]),
   ).filter((ty) => (counts[ty] ?? ov.edges.filter((e) => e.type === ty).length) > 0);
 
+  // Gate G15: the reason-code legend. Counts come from the artifact when the
+  // engine reported them, else they are recomputed from the edges themselves so
+  // an older overlay still shows an honest tally.
+  const rejected = ov.rejected_candidates ?? [];
+  const codeCounts: Record<string, number> = { ...(ov.reason_code_counts ?? {}) };
+  if (!ov.reason_code_counts) {
+    for (const e of ov.edges) {
+      const c = String(e.reason_code ?? '');
+      if (c) codeCounts[c] = (codeCounts[c] ?? 0) + 1;
+    }
+    if (rejected.length) codeCounts.rejected_candidate = rejected.length;
+  }
+  const hasReasonCodes = Object.keys(codeCounts).length > 0;
+
   return (
     <div className="seamoverlay-wrap">
       <SeamOverlayView
         edges={ov.edges}
+        rejected={rejected}
+        showRejected={showRejected}
         selectedEdgeId={props.selectedEdgeId}
         onPick={props.setSelectedEdgeId}
       />
       <div className="seamoverlay-side">
+        <h4>{t('generate.reasonLegend')}</h4>
+        <ul className="seamlegend">
+          {REASON_CODE_ORDER.map((code) => (
+            <li key={code} className={code === 'rejected_candidate' ? 'dashed' : ''}>
+              <span
+                className="dot"
+                style={{
+                  background:
+                    code === 'rejected_candidate' ? 'transparent' : reasonCodeColor(code),
+                  border:
+                    code === 'rejected_candidate'
+                      ? `2px dashed ${reasonCodeColor(code)}`
+                      : undefined,
+                }}
+              />
+              <span className="small">{t(REASON_CODE_LABELS[code])}</span>
+              <span className="muted small">{codeCounts[code] ?? 0}</span>
+            </li>
+          ))}
+        </ul>
+        {!hasReasonCodes && <div className="muted small">{t('generate.noReasonCodes')}</div>}
+        <label className="small">
+          <input
+            type="checkbox"
+            checked={showRejected}
+            onChange={(e) => setShowRejected(e.target.checked)}
+          />{' '}
+          {t('generate.showRejectedCuts', { n: rejected.length })}
+        </label>
+
         <h4>{t('generate.seamLegend')}</h4>
         <ul className="seamlegend">
           {types.map((ty) => (
@@ -886,12 +956,39 @@ function SeamOverlayPanel(props: {
               className={e.edge_id === props.selectedEdgeId ? 'sel' : ''}
               onClick={() => props.setSelectedEdgeId(e.edge_id)}
             >
-              <span className="dot" style={{ background: seamTypeColor(e.type) }} />
+              <span className="dot" style={{ background: seamEdgeColor(e) }} />
               <code className="small">#{e.edge_id}</code>{' '}
-              <span className="muted small">{e.type}</span>
+              <span className="muted small">{e.reason_code ?? e.type}</span>
             </li>
           ))}
         </ul>
+
+        {showRejected && rejected.length > 0 && (
+          <>
+            <h4>{t('generate.rejectedCuts')}</h4>
+            <ul className="list seamedgelist">
+              {rejected.slice(0, 200).map((r) => (
+                <li key={r.edge_id} className="rejected">
+                  <span
+                    className="dot"
+                    style={{
+                      background: 'transparent',
+                      border: `2px dashed ${reasonCodeColor('rejected_candidate')}`,
+                    }}
+                  />
+                  <code className="small">#{r.edge_id}</code>{' '}
+                  <span className="muted small">
+                    {r.reject_reason ?? r.kind ?? '—'}
+                    {r.round === null || r.round === undefined ? '' : ` · r${r.round}`}
+                    {r.cost_total === null || r.cost_total === undefined
+                      ? ''
+                      : ` · ${fmtNum(r.cost_total, 3)}`}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          </>
+        )}
 
         <h4>{t('generate.seamEdgeDetail')}</h4>
         {selected ? (
@@ -926,6 +1023,15 @@ function SeamEdgeDetail(props: { edge: SeamOverlayEdge }): JSX.Element {
       <tbody>
         <tr><td>{t('generate.edge.id')}</td><td>#{e.edge_id}</td></tr>
         <tr><td>{t('generate.edge.type')}</td><td>{e.type}</td></tr>
+        <tr>
+          <td>{t('generate.edge.reasonCode')}</td>
+          <td>
+            <span className="dot" style={{ background: seamEdgeColor(e) }} />{' '}
+            {e.reason_code ?? '—'}
+          </td>
+        </tr>
+        <tr><td>{t('generate.edge.cutReason')}</td><td>{e.cut_reason ?? '—'}</td></tr>
+        <tr><td>{t('generate.edge.cost')}</td><td>{fmtNum(e.cost_total, 3)}</td></tr>
         <tr><td>{t('generate.edge.reason')}</td><td>{e.reason ?? '—'}</td></tr>
         <tr><td>{t('generate.edge.stage')}</td><td>{e.stage ?? '—'}</td></tr>
         <tr><td>{t('generate.edge.round')}</td><td>{e.round ?? '—'}</td></tr>
@@ -936,6 +1042,45 @@ function SeamEdgeDetail(props: { edge: SeamOverlayEdge }): JSX.Element {
         </tr>
       </tbody>
     </table>
+  );
+}
+
+/**
+ * UV layout tab: the before/after layout pair, with a toggle to the flat seam
+ * overlay image when the run produced one (gate G15 `seam_overlay_png`).
+ */
+function LayoutTab(props: {
+  beforeSrc?: string;
+  afterSrc?: string;
+  overlaySrc?: string;
+}): JSX.Element {
+  const t = useT();
+  const [view, setView] = useState<'layout' | 'overlay'>('layout');
+  const showOverlay = !!props.overlaySrc && view === 'overlay';
+  return (
+    <div className="layout-tab">
+      {props.overlaySrc && (
+        <div className="viewtoggle">
+          <button className={view === 'layout' ? 'active' : ''} onClick={() => setView('layout')}>
+            {t('common.uvLayout')}
+          </button>
+          <button className={view === 'overlay' ? 'active' : ''} onClick={() => setView('overlay')}>
+            {t('generate.seamOverlayImage')}
+          </button>
+        </div>
+      )}
+      {showOverlay ? (
+        <div className="preview">
+          <img alt={t('generate.seamOverlayImage')} src={previewUrl(props.overlaySrc as string)} />
+        </div>
+      ) : (
+        <BeforeAfter
+          beforeSrc={props.beforeSrc}
+          afterSrc={props.afterSrc}
+          label={t('common.uvLayout')}
+        />
+      )}
+    </div>
   );
 }
 
@@ -1033,6 +1178,73 @@ function CandidateTable(props: {
           })}
         </tbody>
       </table>
+    </div>
+  );
+}
+
+/**
+ * Merge-back trial log (gate G15): every seam group the engine tried to dissolve,
+ * whether it was kept, and what the island count did. Absent artifact -> a hint.
+ */
+function MergeBackList(props: { history: UvGenerateRunView['merge_back_history'] }): JSX.Element {
+  const t = useT();
+  const mb = props.history;
+  const rows = mb?.history ?? [];
+  return (
+    <div className="mergeback-wrap">
+      <h4>{t('generate.mergeBack')}</h4>
+      {!mb ? (
+        <div className="muted small">{t('generate.noMergeBack')}</div>
+      ) : (
+        <>
+          <div className="small">
+            <span className={`tag ${mb.complete ? 'ok' : 'unknown'}`}>
+              {mb.complete ? t('generate.mb.complete') : t('generate.mb.incomplete')}
+            </span>{' '}
+            <span className="muted">
+              {t('generate.mb.summary', {
+                trials: mb.trials ?? 0,
+                accepted: mb.accepted ?? 0,
+                before: mb.island_count_before ?? '—',
+                after: mb.island_count_after ?? '—',
+                reason: mb.reason ?? '—',
+              })}
+            </span>
+          </div>
+          {rows.length === 0 ? (
+            <div className="muted small">{t('generate.noMergeBackTrials')}</div>
+          ) : (
+            <table className="candtable">
+              <thead>
+                <tr>
+                  <th>{t('generate.mb.trial')}</th>
+                  <th>{t('generate.mb.islands')}</th>
+                  <th>{t('generate.mb.edges')}</th>
+                  <th>{t('generate.mb.accepted')}</th>
+                  <th>{t('generate.mb.reason')}</th>
+                </tr>
+              </thead>
+              <tbody>
+                {rows.map((r, i) => (
+                  <tr key={i} className={r.accepted ? '' : 'rejected'}>
+                    <td>{r.trial ?? i + 1}</td>
+                    <td>
+                      {r.island_a ?? '—'} / {r.island_b ?? '—'}
+                    </td>
+                    <td>{(r.edges ?? []).length}</td>
+                    <td>
+                      <span className={`tag ${r.accepted ? 'ok' : 'unknown'}`}>
+                        {r.accepted ? t('common.yes') : t('common.no')}
+                      </span>
+                    </td>
+                    <td>{r.reason ?? '—'}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </>
+      )}
     </div>
   );
 }
@@ -1167,6 +1379,13 @@ function GenerateRightPanel(props: {
       </section>
 
       <section>
+        <h3>
+          {t('generate.gameGates')} <GameGateHeaderTag summary={summary} />
+        </h3>
+        <GameGatesSection summary={summary} />
+      </section>
+
+      <section>
         <h3>{t('generate.termination')}</h3>
         <TerminationSection summary={summary} />
       </section>
@@ -1273,6 +1492,15 @@ function CorrectnessSection(props: { summary: UvGenerateRunView['summary'] }): J
       </div>
       <table className="metrics">
         <tbody>
+          {/* Gate G15: WHERE padding failed — the smallest island/border gaps. */}
+          <tr>
+            <td>{t('generate.cr.minIslandGap')}</td>
+            <td>{fmtNum(c.min_island_gap_px, 2)}</td>
+          </tr>
+          <tr>
+            <td>{t('generate.cr.minBorderGap')}</td>
+            <td>{fmtNum(c.min_border_gap_px, 2)}</td>
+          </tr>
           {(c.checks ?? []).map((ck) => (
             <tr key={ck.name} className={ck.passed ? '' : 'bad'}>
               <td>{ck.name}</td>
@@ -1287,6 +1515,151 @@ function CorrectnessSection(props: { summary: UvGenerateRunView['summary'] }): J
         </tbody>
       </table>
     </>
+  );
+}
+
+// --- Game gates (T14; gate G15) --------------------------------------------
+
+/** Pass/fail/not-evaluable tag for one gate block. */
+function GateTag(props: { passed?: boolean | null; valid?: boolean | null }): JSX.Element {
+  const t = useT();
+  if (props.valid === false) return <span className="tag unknown">{t('generate.gate.invalid')}</span>;
+  if (props.passed === true) return <span className="tag ok">{t('generate.check.pass')}</span>;
+  if (props.passed === false) return <span className="tag bad">{t('generate.check.fail')}</span>;
+  return <span className="tag unknown">{t('generate.gate.na')}</span>;
+}
+
+/** The combined game-quality verdict shown next to the section header. */
+function GameGateHeaderTag(props: { summary: UvGenerateRunView['summary'] }): JSX.Element {
+  const t = useT();
+  const passed = props.summary?.quality_report_passed;
+  if (passed === true) return <span className="tag ok">{t('generate.gate.passed')}</span>;
+  if (passed === false) return <span className="tag bad">{t('generate.gate.failed')}</span>;
+  return <span className="tag unknown">{t('generate.gate.na')}</span>;
+}
+
+function idList(ids: number[] | null | undefined, limit = 12): string {
+  const list = ids ?? [];
+  if (list.length === 0) return '—';
+  const head = list.slice(0, limit).join(', ');
+  return list.length > limit ? `${head}, …(${list.length})` : head;
+}
+
+/**
+ * Every game gate with its pass/fail tag and the evidence a reviewer needs to
+ * act: which islands are tiny/sliver, which break texel density, how packing
+ * compares to its floor, and what merge-back did (gate G15).
+ */
+function GameGatesSection(props: { summary: UvGenerateRunView['summary'] }): JSX.Element {
+  const t = useT();
+  const s = props.summary;
+  const frag = s?.fragmentation ?? null;
+  const td = s?.texel_density ?? null;
+  const pk = s?.packing ?? null;
+  const sh = s?.shading ?? null;
+  const mb = s?.merge_back ?? null;
+  const dist = s?.distortion_v2 ?? null;
+  const corr = s?.correctness ?? null;
+  if (!frag && !td && !pk && !sh && !mb && !dist && !corr) {
+    return <div className="muted">{t('generate.noGameGates')}</div>;
+  }
+  const fm = frag?.metrics ?? {};
+  return (
+    <table className="metrics gamegates">
+      <tbody>
+        {/* distortion — the existing v2 block, restated as a gate row. */}
+        <tr>
+          <td>{t('generate.gg.distortion')}</td>
+          <td>
+            <GateTag
+              passed={dist ? (dist.global?.exceed_area_fraction ?? 0) <= 0 : null}
+              valid={dist?.valid}
+            />{' '}
+            <span className="muted small">
+              {t('generate.q.anisoP95')} {fmtNum(dist?.global?.anisotropy_p95)}
+            </span>
+          </td>
+        </tr>
+        <tr>
+          <td>{t('generate.gg.correctness')}</td>
+          <td>
+            <GateTag passed={corr?.passed} />{' '}
+            <span className="muted small">
+              {t('generate.cr.minIslandGap')} {fmtNum(corr?.min_island_gap_px, 2)} ·{' '}
+              {t('generate.cr.minBorderGap')} {fmtNum(corr?.min_border_gap_px, 2)}
+            </span>
+          </td>
+        </tr>
+        <tr>
+          <td>{t('generate.gg.fragmentation')}</td>
+          <td>
+            <GateTag passed={frag?.passed} valid={frag?.valid} />{' '}
+            <span className="muted small">
+              {t('generate.gg.tiny')} {fm.tiny_island_count ?? '—'} · {t('generate.gg.sliver')}{' '}
+              {fm.sliver_island_count ?? '—'} · {t('generate.gg.oneTwoFace')}{' '}
+              {fm.one_two_face_island_count ?? '—'} · {t('generate.gg.aspectP95')}{' '}
+              {fmtNum(fm.island_aspect_p95, 2)}
+            </span>
+            {frag && (
+              <div className="muted small">
+                {t('generate.gg.tinyIds')} {idList(frag.tiny_island_ids)} ·{' '}
+                {t('generate.gg.sliverIds')} {idList(frag.sliver_island_ids)} ·{' '}
+                {t('generate.gg.exemptIds')} {idList(frag.exempt_islands)}
+              </div>
+            )}
+          </td>
+        </tr>
+        <tr>
+          <td>{t('generate.gg.texelDensity')}</td>
+          <td>
+            <GateTag passed={td?.passed} valid={td?.valid} />{' '}
+            <span className="muted small">
+              cv {fmtNum(td?.density_cv, 4)} · {t('generate.gg.outliers')} {td?.outlier_count ?? '—'}
+            </span>
+            {td && (
+              <div className="muted small">
+                {t('generate.gg.outlierIds')} {idList(td.outlier_island_ids)}
+              </div>
+            )}
+          </td>
+        </tr>
+        <tr>
+          <td>{t('generate.gg.packing')}</td>
+          <td>
+            <GateTag passed={pk?.passed} />{' '}
+            <span className="muted small">
+              {fmtNum(pk?.efficiency)} / {fmtNum(pk?.limit)}
+              {pk?.advisory ? ` · ${t('generate.gg.advisory')}` : ''}
+            </span>
+          </td>
+        </tr>
+        <tr>
+          <td>{t('generate.gg.shading')}</td>
+          <td>
+            <GateTag passed={sh?.passed} valid={sh?.valid} />{' '}
+            <span className="muted small">
+              {sh?.policy ?? '—'}
+              {sh?.failures?.length ? ` · ${sh.failures.join(', ')}` : ''}
+            </span>
+          </td>
+        </tr>
+        <tr>
+          <td>{t('generate.gg.mergeBack')}</td>
+          <td>
+            <GateTag passed={mb ? mb.complete : null} />{' '}
+            <span className="muted small">
+              {t('generate.mb.summary', {
+                trials: mb?.trials ?? 0,
+                accepted: mb?.accepted ?? 0,
+                before: mb?.island_count_before ?? '—',
+                after: mb?.island_count_after ?? '—',
+                reason: mb?.reason ?? '—',
+              })}
+            </span>
+          </td>
+        </tr>
+      </tbody>
+    </table>
   );
 }
 

@@ -665,6 +665,21 @@ function mockGenerate(dir: string, runId: string, projectDir: string, job: any):
   };
   if (derived) artifacts.derived_seam_spec = 'derived_from_uv_boundary.json';
 
+  // Gate G15 reviewer evidence: the raw game-gate report, the merge-back trial
+  // log, the flat seam-overlay image and the shading policy. Written in
+  // `auto_generate` only — a preserve run neither cuts nor merges, so it has no
+  // merge-back history and no automatic-cut report to show.
+  if (auto) {
+    writeFileSync(join(dir, 'quality_report.json'), JSON.stringify(MOCK_QUALITY_REPORT, null, 2));
+    writeFileSync(join(dir, 'merge_back_history.json'), JSON.stringify(MOCK_MERGE_BACK_HISTORY, null, 2));
+    writeFileSync(join(dir, 'shading_policy.json'), JSON.stringify(MOCK_SHADING_POLICY, null, 2));
+    writeFileSync(join(dir, 'seam_overlay.png'), MOCK_PNG);
+    artifacts.quality_report = 'quality_report.json';
+    artifacts.merge_back_history = 'merge_back_history.json';
+    artifacts.shading_policy = 'shading_policy.json';
+    artifacts.seam_overlay_png = 'seam_overlay.png';
+  }
+
   // Gate G6: a forced non-accepted mock run produces NO handoff and no pointer.
   const runStatus: string =
     mockStatus === 'needs_user_review'
@@ -809,8 +824,16 @@ function autoReportBlocks(lockedSeamCount: number): Record<string, unknown> {
       mirrored_island_count: 0,
       uv_degenerate_count: 0,
       min_island_gap_px: 6,
+      min_border_gap_px: 5,
       bounds_ok: true,
     },
+    // --- Game gates (T14; gate G15) — passing evidence blocks -------------
+    fragmentation: MOCK_FRAGMENTATION,
+    texel_density: MOCK_TEXEL_DENSITY,
+    packing: { efficiency: 0.591278, limit: 0.55, passed: true, advisory: true },
+    shading: { policy: MOCK_SHADING_POLICY.policy, passed: true, valid: true, failures: [], invalid_reasons: [] },
+    merge_back: MOCK_MERGE_BACK_BLOCK,
+    quality_report_passed: true,
     termination: {
       reason: 'quality_passed',
       iterations: 2,
@@ -873,6 +896,102 @@ function readMockSeamCount(specAbs?: string): number | null {
     return null;
   }
 }
+
+// ---------------------------------------------------------------------------
+// Mock game-gate evidence (T14; gate G15). Deterministic PASSING values so the
+// renderer's "Game gates" panel, merge-back list and reason-code legend have a
+// realistic shape to draw without Blender.
+// ---------------------------------------------------------------------------
+const MOCK_FRAGMENTATION = {
+  passed: true,
+  valid: true,
+  failures: [] as string[],
+  quality_failures: [] as string[],
+  metrics: {
+    island_count: 52,
+    tiny_island_count: 1,
+    tiny_island_area_ratio: 0.0031,
+    sliver_island_count: 0,
+    one_two_face_island_count: 0,
+    island_aspect_p95: 3.2,
+    normalized_seam_length: 0.1667,
+  },
+  exempt_islands: [7],
+  tiny_island_ids: [7],
+  sliver_island_ids: [] as number[],
+};
+
+const MOCK_TEXEL_DENSITY = {
+  passed: true,
+  valid: true,
+  failures: [] as string[],
+  density_mean: 512.4,
+  density_cv: 0.041,
+  outlier_count: 1,
+  outlier_island_ids: [11],
+};
+
+const MOCK_SHADING_POLICY = {
+  policy: 'hard_edges_are_seams',
+  passed: true,
+  valid: true,
+  failures: [] as string[],
+  invalid_reasons: [] as string[],
+};
+
+const MOCK_MERGE_BACK_BLOCK = {
+  complete: true,
+  enabled: true,
+  trials: 2,
+  accepted: 1,
+  island_count_before: 53,
+  island_count_after: 52,
+  seam_length_before: 1.62,
+  seam_length_after: 1.5,
+  removable_remaining: 0,
+  reason: 'no_removable_seam',
+};
+
+const MOCK_MERGE_BACK_HISTORY = {
+  ...MOCK_MERGE_BACK_BLOCK,
+  history: [
+    {
+      trial: 1,
+      island_a: 4,
+      island_b: 5,
+      edges: [101, 102],
+      shared_length: 0.12,
+      accepted: true,
+      reason: 'accepted',
+      island_count_before: 53,
+      island_count_after: 52,
+      elapsed_s: 0.21,
+    },
+    {
+      trial: 2,
+      island_a: 8,
+      island_b: 9,
+      edges: [204],
+      shared_length: 0.04,
+      accepted: false,
+      reason: 'quality_failed',
+      island_count_before: 52,
+      island_count_after: 52,
+      elapsed_s: 0.18,
+    },
+  ],
+};
+
+const MOCK_QUALITY_REPORT = {
+  schema_version: 1,
+  passed: true,
+  failures: [] as string[],
+  fragmentation: MOCK_FRAGMENTATION,
+  texel_density: MOCK_TEXEL_DENSITY,
+  packing: { efficiency: 0.591278, limit: 0.55, passed: true, advisory: true },
+  shading: MOCK_SHADING_POLICY,
+  merge_back: MOCK_MERGE_BACK_BLOCK,
+};
 
 // 1x1 transparent PNG (base64) used as the mock image placeholder.
 const MOCK_PNG = Buffer.from(

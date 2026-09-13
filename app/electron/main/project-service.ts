@@ -25,6 +25,7 @@ import {
   type SeamEditorStatusDoc,
   type CandidateSummary,
   type CandidateHistoryEntry,
+  type MergeBackHistory,
   type SeamOverlay,
   type UvGenerateRunView,
   type UvGenerateStatusDoc,
@@ -600,6 +601,10 @@ export function getUvGenerateRunView(projectDir: string, runId: string): UvGener
     // Review artifacts (gate G7): absent on a pre-automation run -> null.
     seam_overlay: readJsonIfExists<SeamOverlay>(join(dir, 'seam_overlay.json')),
     candidate_history: readJsonIfExists<CandidateHistoryEntry[]>(join(dir, 'candidate_history.json')),
+    // Reviewer evidence (gate G15): the merge-back trial log + the raw game-gate
+    // report. Optional like every other review artifact -> null when absent.
+    merge_back_history: readJsonIfExists<MergeBackHistory>(join(dir, 'merge_back_history.json')),
+    quality_report: readJsonIfExists<Record<string, unknown>>(join(dir, 'quality_report.json')),
     stdout: readTextIfExists(join(dir, 'stdout.log')),
     stderr: readTextIfExists(join(dir, 'stderr.log')),
     artifact_paths,

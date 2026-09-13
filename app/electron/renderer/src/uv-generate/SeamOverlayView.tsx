@@ -15,7 +15,8 @@
 
 import React, { useCallback, useEffect, useRef } from 'react';
 import * as THREE from 'three';
-import type { SeamOverlayEdge } from '@shared/contracts';
+import type { RejectedCandidateEntry, SeamOverlayEdge } from '@shared/contracts';
+import { SEAM_REASON_CODES } from '@shared/contracts';
 import {
   applyOrbitToCamera,
   makeOrbitState,
@@ -54,6 +55,33 @@ export function seamTypeColor(type: string): string {
   return SEAM_TYPE_COLORS[type] ?? SEAM_TYPE_COLORS.other;
 }
 
+/**
+ * Reason-code palette (gate G15). Seven fixed codes, so the reviewer reads
+ * "why was this cut?" straight off the legend. `rejected_candidate` is drawn
+ * dashed as well as magenta — it never shipped.
+ */
+export const REASON_CODE_COLORS: Record<string, string> = {
+  mandatory_90: '#ff5a4d',
+  boundary_topology: '#8a92a6',
+  user: '#5b8cff',
+  shading: '#c07bff',
+  material: '#ff9d3d',
+  distortion_added: '#4fd17a',
+  rejected_candidate: '#ff3df0',
+  other: '#565b68',
+};
+
+export const REASON_CODE_ORDER = SEAM_REASON_CODES;
+
+export function reasonCodeColor(code: string | null | undefined): string {
+  return REASON_CODE_COLORS[code ?? ''] ?? REASON_CODE_COLORS.other;
+}
+
+/** An overlay edge's color: its reason code when present, else its origin type. */
+export function seamEdgeColor(edge: Pick<SeamOverlayEdge, 'type' | 'reason_code'>): string {
+  return edge.reason_code ? reasonCodeColor(String(edge.reason_code)) : seamTypeColor(edge.type);
+}
+
 const PICK_TOLERANCE_PX = 8;
 
 interface Baked {
@@ -64,6 +92,9 @@ interface Baked {
 
 export function SeamOverlayView(props: {
   edges: SeamOverlayEdge[];
+  /** Tried-and-dropped cuts, drawn dashed when `showRejected` (gate G15). */
+  rejected?: RejectedCandidateEntry[] | null;
+  showRejected?: boolean;
   selectedEdgeId: number | null;
   onPick: (edgeId: number | null) => void;
 }): JSX.Element {
@@ -73,6 +104,7 @@ export function SeamOverlayView(props: {
   const sceneRef = useRef<THREE.Scene | null>(null);
   const cameraRef = useRef<THREE.PerspectiveCamera | null>(null);
   const linesRef = useRef<THREE.LineSegments | null>(null);
+  const rejectedLinesRef = useRef<THREE.LineSegments | null>(null);
   const bakedRef = useRef<Baked | null>(null);
 
   const orbit = useRef(makeOrbitState());
@@ -144,7 +176,7 @@ export function SeamOverlayView(props: {
     for (let i = 0; i < baked.edgeIds.length; i++) {
       const e = props.edges[i];
       const isSel = props.selectedEdgeId === baked.edgeIds[i];
-      tmp.set(isSel ? '#ffffff' : seamTypeColor(e?.type ?? 'other'));
+      tmp.set(isSel ? '#ffffff' : e ? seamEdgeColor(e) : SEAM_TYPE_COLORS.other);
       colorAttr.setXYZ(i * 2, tmp.r, tmp.g, tmp.b);
       colorAttr.setXYZ(i * 2 + 1, tmp.r, tmp.g, tmp.b);
     }
@@ -156,13 +188,15 @@ export function SeamOverlayView(props: {
   useEffect(() => {
     const scene = sceneRef.current;
     if (!scene) return;
-    if (linesRef.current) {
-      scene.remove(linesRef.current);
-      linesRef.current.geometry.dispose();
-      (linesRef.current.material as THREE.Material).dispose();
-      linesRef.current = null;
-      bakedRef.current = null;
+    for (const ref of [linesRef, rejectedLinesRef]) {
+      if (ref.current) {
+        scene.remove(ref.current);
+        ref.current.geometry.dispose();
+        (ref.current.material as THREE.Material).dispose();
+        ref.current = null;
+      }
     }
+    bakedRef.current = null;
     const edges = props.edges;
     if (!edges.length) {
       renderFrame();
@@ -218,12 +252,35 @@ export function SeamOverlayView(props: {
     linesRef.current = lines;
     bakedRef.current = { a: av, b: bv, edgeIds };
 
+    // Rejected candidates: same space, dashed, magenta — never shipped (G15).
+    const rejected = props.showRejected ? props.rejected ?? [] : [];
+    if (rejected.length) {
+      const rp = new Float32Array(rejected.length * 6);
+      for (let i = 0; i < rejected.length; i++) {
+        rp.set(bake(rejected[i].a), i * 6);
+        rp.set(bake(rejected[i].b), i * 6 + 3);
+      }
+      const rgeo = new THREE.BufferGeometry();
+      rgeo.setAttribute('position', new THREE.BufferAttribute(rp, 3));
+      const rmat = new THREE.LineDashedMaterial({
+        color: REASON_CODE_COLORS.rejected_candidate,
+        dashSize: 0.03,
+        gapSize: 0.03,
+        depthTest: false,
+      });
+      const rlines = new THREE.LineSegments(rgeo, rmat);
+      rlines.computeLineDistances();
+      rlines.renderOrder = 2;
+      scene.add(rlines);
+      rejectedLinesRef.current = rlines;
+    }
+
     orbit.current.radius = 3;
     orbit.current.target.set(0, 0, 0);
     applyCamera();
     recolor();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [props.edges]);
+  }, [props.edges, props.rejected, props.showRejected]);
 
   useEffect(() => {
     recolor();

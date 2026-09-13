@@ -938,3 +938,43 @@ test('uv generate run view: seam_overlay.json and candidate_history.json are par
   assert.equal(view.candidate_history![0].before, 1.9);
   assert.equal(view.candidate_history![0].after, 1.3);
 });
+
+// The reviewer evidence a game-UV run has to show (gate G15): the merge-back
+// trial log and the raw game-gate report reach the run view, and the flat seam
+// overlay image is addressable as an artifact path.
+test('uv generate run view: merge_back_history, quality_report and seam_overlay_png are exposed', async () => {
+  const { project, objectName } = seedSeamSpecProject('uv_generate_g15_evidence');
+  setUvGenerateMode(project.dir!, 'auto_generate');
+  const runner = new UvGenerateRunner({ blenderPath: null, workerRoot: workerRoot(), mock: true });
+  const started = runner.start(project.id, project.dir!, { objectName, mode: 'auto_generate' });
+  const view = await waitForTerminal(project.dir!, started.run_id);
+
+  // 1. the merge-back trial log is parsed, block fields and all.
+  assert.ok(view.merge_back_history, 'merge_back_history.json parsed');
+  assert.equal(view.merge_back_history!.complete, true);
+  assert.equal(view.merge_back_history!.island_count_before, 53);
+  assert.equal(view.merge_back_history!.island_count_after, 52);
+  assert.equal(view.merge_back_history!.history!.length, 2);
+  assert.equal(view.merge_back_history!.history![0].accepted, true);
+  assert.equal(view.merge_back_history!.history![1].accepted, false);
+
+  // 2. the raw game-gate report is parsed for the debug/evidence view.
+  assert.ok(view.quality_report, 'quality_report.json parsed');
+  assert.equal((view.quality_report as Record<string, unknown>).passed, true);
+
+  // 3. the evidence artifacts are addressable on disk for `uvpreview://`.
+  for (const key of ['seam_overlay_png', 'quality_report', 'merge_back_history', 'shading_policy']) {
+    assert.ok(view.artifact_paths[key] && existsSync(view.artifact_paths[key]), `artifact ${key}`);
+  }
+
+  // 4. the summary carries the game-gate blocks the right panel reads.
+  const s = view.summary!;
+  assert.equal(s.quality_report_passed, true);
+  assert.equal(s.fragmentation!.passed, true);
+  assert.deepEqual(s.fragmentation!.tiny_island_ids, [7]);
+  assert.deepEqual(s.texel_density!.outlier_island_ids, [11]);
+  assert.equal(s.packing!.advisory, true);
+  assert.equal(s.shading!.policy, 'hard_edges_are_seams');
+  assert.equal(s.merge_back!.reason, 'no_removable_seam');
+  assert.equal(s.correctness!.min_border_gap_px, 5);
+});

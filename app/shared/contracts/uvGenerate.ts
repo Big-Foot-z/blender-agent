@@ -484,7 +484,102 @@ export interface CorrectnessBlock {
   mirrored_island_count?: number;
   uv_degenerate_count?: number;
   min_island_gap_px?: number | null;
+  /** Smallest island-to-tile-border gap in px — WHERE padding failed (gate G15). */
+  min_border_gap_px?: number | null;
   bounds_ok?: boolean;
+}
+
+// --- Game-gate evidence blocks (T14; gate G15) -----------------------------
+// Mirrors of `compact_fragmentation_block` / `compact_texel_density_block` /
+// `compact_merge_back_block` plus the `packing` / `shading` / `quality_report_passed`
+// keys `build_generate_summary` now writes. All optional on the summary so a
+// pre-T14 run still parses.
+
+/** Island fragmentation metrics — tiny/sliver/aspect evidence (gate G15). */
+export interface FragmentationMetrics {
+  island_count?: number | null;
+  tiny_island_count?: number | null;
+  tiny_island_area_ratio?: number | null;
+  sliver_island_count?: number | null;
+  one_two_face_island_count?: number | null;
+  island_aspect_p95?: number | null;
+  normalized_seam_length?: number | null;
+  [k: string]: unknown;
+}
+
+export interface FragmentationBlock {
+  passed?: boolean | null;
+  valid?: boolean | null;
+  failures?: string[] | null;
+  quality_failures?: string[] | null;
+  metrics?: FragmentationMetrics | null;
+  /** Islands exempted from the tiny/sliver rules (small hard-surface details). */
+  exempt_islands?: number[] | null;
+  tiny_island_ids?: number[] | null;
+  sliver_island_ids?: number[] | null;
+}
+
+/** Texel-density uniformity + the islands that break it (gate G15). */
+export interface TexelDensityBlock {
+  passed?: boolean | null;
+  valid?: boolean | null;
+  failures?: string[] | null;
+  density_mean?: number | null;
+  density_cv?: number | null;
+  outlier_count?: number | null;
+  outlier_island_ids?: number[] | null;
+}
+
+/** Packing efficiency vs its floor. `advisory` means it never fails a run. */
+export interface PackingBlock {
+  efficiency?: number | null;
+  limit?: number | null;
+  passed?: boolean | null;
+  advisory?: boolean | null;
+}
+
+/** Shading/normal-split policy verdict (gate G15). */
+export interface ShadingBlock {
+  policy?: string | null;
+  passed?: boolean | null;
+  valid?: boolean | null;
+  failures?: string[] | null;
+  invalid_reasons?: string[] | null;
+}
+
+/** Merge-back accounting: how many seams were dissolved, and to what end. */
+export interface MergeBackBlock {
+  complete?: boolean | null;
+  enabled?: boolean | null;
+  trials?: number | null;
+  accepted?: number | null;
+  island_count_before?: number | null;
+  island_count_after?: number | null;
+  seam_length_before?: number | null;
+  seam_length_after?: number | null;
+  removable_remaining?: number | null;
+  reason?: string | null;
+}
+
+/** One `merge_back_history.json` trial row (gate G15 "merge-back history"). */
+export interface MergeBackHistoryEntry {
+  trial?: number | null;
+  island_a?: number | null;
+  island_b?: number | null;
+  edges?: number[] | null;
+  shared_length?: number | null;
+  accepted?: boolean | null;
+  reason?: string | null;
+  island_count_before?: number | null;
+  island_count_after?: number | null;
+  elapsed_s?: number | null;
+  [k: string]: unknown;
+}
+
+/** `merge_back_history.json` — the merge-back block with its full trial log. */
+export interface MergeBackHistory extends MergeBackBlock {
+  history?: MergeBackHistoryEntry[] | null;
+  [k: string]: unknown;
 }
 
 /** Re-read of the saved file, re-measured from disk (gate G6). */
@@ -572,6 +667,11 @@ export interface GenerateArtifacts {
   quality_profile?: string;
   seam_overlay?: string;
   selected_heatmap_anisotropy?: string;
+  // --- Reviewer evidence artifacts (T14; gate G15) — optional --------------
+  quality_report?: string;
+  merge_back_history?: string;
+  seam_overlay_png?: string;
+  shading_policy?: string;
 }
 
 export interface UvGenerateWorkerError {
@@ -619,6 +719,14 @@ export interface UvGenerateSummary {
   mandatory_audit?: MandatoryAuditBlock | null;
   /** Saved reviewer feedback re-application verdict (gate G7). */
   feedback_applied?: FeedbackApplied | null;
+  // --- Game gates (T14; gate G15) — reviewer-visible evidence blocks -------
+  fragmentation?: FragmentationBlock | null;
+  texel_density?: TexelDensityBlock | null;
+  packing?: PackingBlock | null;
+  shading?: ShadingBlock | null;
+  merge_back?: MergeBackBlock | null;
+  /** The combined game-quality verdict; null when the report was not produced. */
+  quality_report_passed?: boolean | null;
 }
 
 // --- Candidate summary (plan §5) ------------------------------------------
@@ -676,9 +784,41 @@ export interface UvGenerateStatusDoc {
  * distortion_split / correctness_repair / segmentation) so the reviewer can tell
  * WHY an edge was cut (gate G7 "mandatory/user/topology/overlap/distortion 이유 구분").
  */
+/**
+ * The fixed reviewer-facing reason vocabulary (gate G15): WHY a cut exists, in
+ * seven codes the legend can enumerate. `rejected_candidate` is not a shipped
+ * seam — it is a cut the engine tried and dropped (drawn dashed).
+ */
+export const SeamReasonCode = {
+  Mandatory90: 'mandatory_90',
+  BoundaryTopology: 'boundary_topology',
+  User: 'user',
+  Shading: 'shading',
+  Material: 'material',
+  DistortionAdded: 'distortion_added',
+  RejectedCandidate: 'rejected_candidate',
+} as const;
+export type SeamReasonCode = (typeof SeamReasonCode)[keyof typeof SeamReasonCode];
+
+export const SEAM_REASON_CODES: readonly SeamReasonCode[] = [
+  SeamReasonCode.Mandatory90,
+  SeamReasonCode.BoundaryTopology,
+  SeamReasonCode.User,
+  SeamReasonCode.Shading,
+  SeamReasonCode.Material,
+  SeamReasonCode.DistortionAdded,
+  SeamReasonCode.RejectedCandidate,
+] as const;
+
 export interface SeamOverlayEdge {
   edge_id: number;
   type: string;
+  /** The G15 reason code; absent on a pre-T14 overlay. */
+  reason_code?: SeamReasonCode | string | null;
+  /** The engine's own cut reason string behind the code (e.g. `distortion_repair`). */
+  cut_reason?: string | null;
+  /** Scalar candidate cost that justified the cut, when one was recorded. */
+  cost_total?: number | null;
   reason?: string | null;
   stage?: string | null;
   round?: number | null;
@@ -688,13 +828,33 @@ export interface SeamOverlayEdge {
   b: [number, number, number];
 }
 
-/** `seam_overlay.json` — the 3D seam overlay source (gate G7). */
+/**
+ * A cut a candidate proposed that was REJECTED and never shipped (gate G15).
+ * Drawn dashed in the overlay so "what the engine decided not to do" is visible.
+ */
+export interface RejectedCandidateEntry {
+  edge_id: number;
+  reason_code?: SeamReasonCode | string | null;
+  reject_reason?: string | null;
+  round?: number | null;
+  target_island?: number | null;
+  kind?: string | null;
+  improvement_ratio?: number | null;
+  cost_total?: number | null;
+  a: [number, number, number];
+  b: [number, number, number];
+}
+
+/** `seam_overlay.json` — the 3D seam overlay source (gate G7/G15). */
 export interface SeamOverlay {
   schema_version: number;
   object_name: string | null;
   edges: SeamOverlayEdge[];
   conflicts: { edge_id: number; user_rule?: string; engine_rule?: string; resolution?: string }[];
   type_counts: Record<string, number>;
+  /** Tried-and-dropped cuts (gate G15); absent on a pre-T14 overlay. */
+  rejected_candidates?: RejectedCandidateEntry[] | null;
+  reason_code_counts?: Record<string, number> | null;
 }
 
 /**
@@ -732,6 +892,10 @@ export interface UvGenerateRunView {
   seam_overlay: SeamOverlay | null;
   /** Parsed `candidate_history.json` for the candidates tab (gate G5/G7). */
   candidate_history: CandidateHistoryEntry[] | null;
+  /** Parsed `merge_back_history.json` — the merge-back trial log (gate G15). */
+  merge_back_history: MergeBackHistory | null;
+  /** Parsed `quality_report.json` — the raw game-gate report (gate G15). */
+  quality_report: Record<string, unknown> | null;
   stdout: string;
   stderr: string;
   /** Stable artifact key -> absolute path on disk, for `uvpreview://` rendering. */
