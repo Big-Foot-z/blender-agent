@@ -442,14 +442,83 @@ def measure_layout(obj, mesh: MeshGraph, seams, *, profile: QualityProfile,
     }
 
 
+# ------------------------------------------------------- layout recipe (CG14/CG0)
+
+
+def override_from_variant(faces, variant: dict, *, round_index: int,
+                          region_id=None) -> dict:
+    """One :data:`UnwrapOverride` row: WHICH faces were re-unwrapped and HOW (CG14).
+
+    An accepted R1 repair changes only the UVs, so every later ``unwrap_and_pack`` of the
+    same seam set would silently throw it away. The recipe is what makes the repair
+    reproducible: replay it after each unwrap and the layout comes back.
+    """
+    method = str(variant.get("method", "MINIMUM_STRETCH"))
+    raw_region = region_id if region_id is not None else variant.get("region_id")
+    return {
+        "faces": sorted(int(f) for f in faces),
+        "variant": {
+            "id": str(variant.get("variant_id", variant.get("id", method))),
+            "method": method,
+            "iterations": variant.get("iterations"),
+            "no_flip": bool(variant.get("no_flip", False)),
+            "fill_holes": bool(variant.get("fill_holes", False)),
+            "minimize_iters": int(variant.get("minimize_iters", 0) or 0),
+        },
+        "round": int(round_index),
+        "region_id": (None if raw_region is None else int(raw_region)),
+    }
+
+
+def apply_unwrap_overrides(obj, mesh: MeshGraph, seams, overrides, *,
+                           margin: float) -> dict:
+    """Replay the layout recipe onto the UVs that are currently on ``obj`` (CG14/CG0).
+
+    An override is replayed ONLY when its face set is still exactly one flood chart of
+    ``seams``: the recipe describes a re-unwrap of a whole island, and if that island has
+    since grown (a merge-back) or shrunk (a new cut) the recorded solver settings no longer
+    describe the same thing. Such a row is skipped and reported as ``stale`` rather than
+    applied to the wrong faces.
+
+    The seam set is never touched — this is exactly the R1 contract.
+    """
+    from chart_uv_agent import catastrophic_repair as cat_repair
+
+    rows = list(overrides or ())
+    report = {"applied": 0, "stale": []}
+    if not rows:
+        return report
+
+    charts = [frozenset(int(f) for f in chart)
+              for chart in flood_charts(mesh, {int(e) for e in seams})]
+    chart_set = set(charts)
+    applied = 0
+    for index, override in enumerate(rows):
+        faces = frozenset(int(f) for f in (override.get("faces") or ()))
+        if not faces or faces not in chart_set:
+            report["stale"].append(int(index))
+            continue
+        cat_repair.apply_reunwrap_variant(obj, mesh, sorted(faces),
+                                          dict(override.get("variant") or {}),
+                                          margin=float(margin))
+        applied += 1
+    report["applied"] = int(applied)
+    return report
+
+
 def unwrap_and_measure(obj, mesh: MeshGraph, seams, *, profile: QualityProfile,
-                       margin: float, stage: str, regions: dict | None = None) -> dict:
-    """Apply ``seams``, unwrap/pack, then measure the result."""
+                       margin: float, stage: str, regions: dict | None = None,
+                       overrides=None) -> dict:
+    """Apply ``seams``, unwrap/pack, replay the layout recipe, then measure the result."""
     from chart_uv_agent import unwrap as unwrap_mod
 
     seams = {int(e) for e in seams}
     unwrap_mod.unwrap_and_pack(obj, seams, margin=margin)
-    return measure_layout(obj, mesh, seams, profile=profile, stage=stage, regions=regions)
+    override_report = apply_unwrap_overrides(obj, mesh, seams, overrides, margin=margin)
+    measurement = measure_layout(obj, mesh, seams, profile=profile, stage=stage,
+                                 regions=regions)
+    measurement["override_report"] = override_report
+    return measurement
 
 
 # ------------------------------------------------------------- gap re-packing
@@ -791,7 +860,7 @@ def select_target(measurement: dict, rejected_regions: set, profile: QualityProf
 
 def evaluate_candidate(obj, mesh: MeshGraph, seams, cand, *, target: dict, before: dict,
                        constraints, profile: QualityProfile, budget: dict, margin: float,
-                       regions: dict | None = None) -> dict:
+                       regions: dict | None = None, overrides=None) -> dict:
     """Trial ``cand``: apply, unwrap, measure, and judge it against the profile (G5).
 
     This function NEVER restores — the caller owns the snapshot, because the restore must
@@ -826,7 +895,7 @@ def evaluate_candidate(obj, mesh: MeshGraph, seams, cand, *, target: dict, befor
     try:
         trial_seams = {int(e) for e in seams} | {int(e) for e in cand.added_edges}
         after = unwrap_and_measure(obj, mesh, trial_seams, profile=profile, margin=margin,
-                                   stage="candidate", regions=regions)
+                                   stage="candidate", regions=regions, overrides=overrides)
 
         if target.get("kind") == "correctness_repair":
             metric = CORRECTNESS_METRIC
@@ -1044,7 +1113,7 @@ def evaluate_reunwrap_candidate(obj, mesh: MeshGraph, seams, variant: dict, *,
 def evaluate_relief_candidate(obj, mesh: MeshGraph, seams, cand, *, target: dict,
                               before: dict, constraints, profile: QualityProfile,
                               margin: float, island_cap_ok: bool = True,
-                              regions: dict | None = None) -> dict:
+                              regions: dict | None = None, overrides=None) -> dict:
     """Trial ONE R2 relief seam (CG5): apply the cut, unwrap, measure, judge.
 
     A constraint violation short-circuits before any unwrap, exactly as in
@@ -1072,7 +1141,7 @@ def evaluate_relief_candidate(obj, mesh: MeshGraph, seams, cand, *, target: dict
     try:
         trial_seams = {int(e) for e in seams} | {int(e) for e in cand.added_edges}
         after = unwrap_and_measure(obj, mesh, trial_seams, profile=profile, margin=margin,
-                                   stage="candidate", regions=regions)
+                                   stage="candidate", regions=regions, overrides=overrides)
         verdict, region_before, region_after, extras = _catastrophic_verdict(
             mesh, target, before, after, profile=profile, constraints_ok=True,
             island_cap_ok=bool(island_cap_ok))
@@ -1164,7 +1233,7 @@ def _run_catastrophic_round(obj, mesh: MeshGraph, seams: set[int], *, target: di
                             measurement: dict, constraints, profile: QualityProfile,
                             budget: dict, margin: float, regions, history: list,
                             candidate_history: list, iterations: int,
-                            island_cap_ok: bool) -> dict:
+                            island_cap_ok: bool, overrides=None) -> dict:
     """ONE catastrophic repair round: R1 same-seam re-unwrap, then (only then) R2 relief.
 
     Every trial is bracketed by the snapshot pair, so a rejected R1 variant leaves the UVs
@@ -1201,6 +1270,12 @@ def _run_catastrophic_round(obj, mesh: MeshGraph, seams: set[int], *, target: di
     if chosen is not None:
         variant, record = chosen
         cat_repair.apply_reunwrap_variant(obj, mesh, island_faces, variant, margin=margin)
+        # CG14/CG0: the repair is UV-only, so it is recorded as a layout-recipe row. Every
+        # later unwrap of this seam set replays it instead of silently discarding it.
+        if overrides is not None:
+            overrides.append(override_from_variant(
+                island_faces, variant, round_index=int(iterations),
+                region_id=target.get("region_id")))
         after = measure_layout(obj, mesh, seams, profile=profile, stage="refinement",
                                regions=regions)
         history.append(_catastrophic_history_row(
@@ -1266,7 +1341,7 @@ def _run_catastrophic_round(obj, mesh: MeshGraph, seams: set[int], *, target: di
             record = evaluate_relief_candidate(
                 obj, mesh, seams, cand, target=target, before=measurement,
                 constraints=constraints, profile=profile, margin=margin,
-                island_cap_ok=True, regions=regions)
+                island_cap_ok=True, regions=regions, overrides=overrides)
         finally:
             restore_snapshot(obj, mesh, snapshot)
         record["round"] = int(iterations)
@@ -1287,7 +1362,7 @@ def _run_catastrophic_round(obj, mesh: MeshGraph, seams: set[int], *, target: di
     added = sorted(int(e) for e in cand.added_edges)
     new_seams = set(seams) | set(added)
     after = unwrap_and_measure(obj, mesh, new_seams, profile=profile, margin=margin,
-                               stage="refinement", regions=regions)
+                               stage="refinement", regions=regions, overrides=overrides)
     history.append(_catastrophic_history_row(
         target, iterations=iterations, action="split", reason=target["kind"],
         record=record, added=added, candidate_kind=cand.kind,
@@ -1303,7 +1378,8 @@ def run_refinement(obj, mesh: MeshGraph, seams: set[int], *, constraints,
                    profile: QualityProfile, budget: dict | None = None,
                    margin: float = 0.005, regions: dict | None = None,
                    history: list | None = None, candidate_history: list | None = None,
-                   clock=time.monotonic, initial_measurement: dict | None = None) -> dict:
+                   clock=time.monotonic, initial_measurement: dict | None = None,
+                   overrides: list | None = None) -> dict:
     """Run the distortion refinement loop to a recorded termination (G4/G5).
 
     One round = pick one island → generate its candidates → trial each (restoring after
@@ -1318,6 +1394,7 @@ def run_refinement(obj, mesh: MeshGraph, seams: set[int], *, constraints,
     and the returned ``measurement`` is always the measurement of the returned ``seams``.
     """
     budget = resolve_budget(profile, budget)
+    overrides = overrides if overrides is not None else []
     history = history if history is not None else []
     candidate_history = candidate_history if candidate_history is not None else []
     seams = {int(e) for e in seams}
@@ -1333,7 +1410,8 @@ def run_refinement(obj, mesh: MeshGraph, seams: set[int], *, constraints,
     measurement = initial_measurement
     if measurement is None:
         measurement = unwrap_and_measure(obj, mesh, seams, profile=profile, margin=margin,
-                                         stage="refinement", regions=regions)
+                                         stage="refinement", regions=regions,
+                                         overrides=overrides)
 
     reason = "no_failing_target"
     while True:
@@ -1372,7 +1450,7 @@ def run_refinement(obj, mesh: MeshGraph, seams: set[int], *, constraints,
                 obj, mesh, seams, target=target, measurement=measurement,
                 constraints=constraints, profile=profile, budget=budget, margin=margin,
                 regions=regions, history=history, candidate_history=candidate_history,
-                iterations=iterations, island_cap_ok=island_cap_ok)
+                iterations=iterations, island_cap_ok=island_cap_ok, overrides=overrides)
             candidates_evaluated += int(outcome["candidates_evaluated"])
             round_reasons.append({"round": iterations, "kind": target["kind"],
                                   "reason": outcome["reason"]})
@@ -1425,7 +1503,7 @@ def run_refinement(obj, mesh: MeshGraph, seams: set[int], *, constraints,
                 record = evaluate_candidate(
                     obj, mesh, seams, cand, target=target, before=measurement,
                     constraints=constraints, profile=profile, budget=budget,
-                    margin=margin, regions=regions,
+                    margin=margin, regions=regions, overrides=overrides,
                 )
             finally:
                 # G5: restore on EVERY path — accepted, rejected, or raised.
@@ -1473,7 +1551,8 @@ def run_refinement(obj, mesh: MeshGraph, seams: set[int], *, constraints,
         seams |= set(added)
         distortion_seams |= set(added)
         measurement = unwrap_and_measure(obj, mesh, seams, profile=profile, margin=margin,
-                                         stage="refinement", regions=regions)
+                                         stage="refinement", regions=regions,
+                                         overrides=overrides)
         history.append({
             "round": iterations,
             "stage": "refinement",
@@ -1495,6 +1574,8 @@ def run_refinement(obj, mesh: MeshGraph, seams: set[int], *, constraints,
         "seams": set(seams),
         "distortion_seams": set(distortion_seams),
         "measurement": measurement,
+        # CG14/CG0: the layout recipe the caller must replay after every later unwrap.
+        "overrides": list(overrides),
         "termination": {
             "reason": reason,
             "iterations": int(iterations),
@@ -1551,12 +1632,14 @@ __all__ = [
     "GAP_REPACK_FACTORS",
     "METRIC_PRIORITY",
     "UvSnapshot",
+    "apply_unwrap_overrides",
     "ensure_border_margin",
     "evaluate_candidate",
     "evaluate_relief_candidate",
     "evaluate_reunwrap_candidate",
     "gap_only_failure",
     "measure_layout",
+    "override_from_variant",
     "repack_for_gap",
     "resolve_budget",
     "restore_snapshot",

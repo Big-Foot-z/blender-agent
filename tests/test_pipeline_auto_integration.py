@@ -613,7 +613,8 @@ def test_two_runs_agree_on_the_seams_and_the_merge_back_history(monkeypatch):
 # ------------------- 13. CG5: catastrophic repair still runs at the island cap
 
 
-def _needle_grid(monkeypatch, *, inject_needle: bool, n: int = 4, persist: bool = False):
+def _needle_grid(monkeypatch, *, inject_needle: bool, n: int = 4, persist: bool = False,
+                 reinject_every_unwrap: bool = False):
     """A flat ``n x n`` quad grid (ONE chart, no fold seams) behind the fake backend.
 
     With ``inject_needle`` the unwrap always collapses one UV corner of a middle face
@@ -621,6 +622,8 @@ def _needle_grid(monkeypatch, *, inject_needle: bool, n: int = 4, persist: bool 
     pipeline measures fails the hard catastrophic gate; the R1 re-unwrap repairs it.
     With ``persist`` the re-unwrap re-injects the needle too, so the catastrophic failure
     survives the whole round loop (CG6/CG13: the post-prune pass must still run).
+    With ``reinject_every_unwrap`` EVERY unwrap re-injects it while the re-unwrap still
+    repairs it (CG14/CG0: only replaying the layout recipe keeps the repair alive).
     """
     coords = [(i / n, j / n, 0.0) for i in range(n + 1) for j in range(n + 1)]
 
@@ -644,7 +647,8 @@ def _needle_grid(monkeypatch, *, inject_needle: bool, n: int = 4, persist: bool 
 
     def unwrap_and_pack(o, seams, **kwargs):
         out = real_unwrap(o, seams, **kwargs)
-        if inject_needle and (persist or not state["reunwrapped"]):
+        if inject_needle and (persist or reinject_every_unwrap
+                              or not state["reunwrapped"]):
             inject(o)
         return out
 
@@ -744,3 +748,41 @@ def test_clean_run_has_no_post_prune_catastrophic_row(monkeypatch):
                           budget={"max_candidates_per_round": 2})
 
     assert not [h for h in result["history"] if h.get("stage") == "post_prune_catastrophic"]
+
+
+# ------------------ 15. CG14/CG0: the layout recipe survives prune / merge-back
+
+
+def test_accepted_reunwrap_survives_the_later_stages_as_a_layout_recipe(monkeypatch):
+    """CG5/CG6/CG14: with every unwrap re-injecting the needle, the ONLY thing that can
+    keep the accepted R1 repair alive through prune / merge-back / the final measurement
+    is the recorded layout recipe — so the shipped layout must still be clean."""
+    mesh, _backend, obj = _needle_grid(monkeypatch, inject_needle=True,
+                                       reinject_every_unwrap=True)
+
+    result = run_chart_uv(obj, mesh, max_rounds=3,
+                          budget={"max_candidates_per_round": 2})
+
+    overrides = result["unwrap_overrides"]
+    assert len(overrides) == 1, overrides
+    row = overrides[0]
+    assert row["faces"] == sorted(range(len(mesh.faces)))
+    assert row["variant"]["method"]
+    assert isinstance(row["round"], int)
+    json.dumps(overrides)
+
+    assert result["repair"]["overrides"] == 1
+    # The FINAL measurement of the shipped UVs: the needle really is gone.
+    assert int(result["catastrophic"]["bad_triangle_count"]) == 0, result["catastrophic"]
+    assert "catastrophic_failed" not in result["hard_failures"], result["hard_failures"]
+
+
+def test_without_a_repair_the_recipe_is_empty(monkeypatch):
+    """The control: a clean run records no override and reports none."""
+    mesh, _backend, obj = _needle_grid(monkeypatch, inject_needle=False)
+
+    result = run_chart_uv(obj, mesh, max_rounds=3,
+                          budget={"max_candidates_per_round": 2})
+
+    assert result["unwrap_overrides"] == []
+    assert result["repair"]["overrides"] == 0

@@ -240,7 +240,7 @@ def run_merge_back(obj, mesh: MeshGraph, seams, *, constraints,
                    clock=time.monotonic, time_budget_s: float | None = None,
                    history: list | None = None,
                    initial_measurement: dict | None = None,
-                   repair_mode: bool = True) -> dict:
+                   repair_mode: bool = True, overrides=None) -> dict:
     """Dissolve every seam that is not paying for itself, to a recorded end (G7/G12).
 
     Two modes, decided by the INPUT measurement:
@@ -277,7 +277,8 @@ def run_merge_back(obj, mesh: MeshGraph, seams, *, constraints,
     measurement = initial_measurement
     if measurement is None:
         measurement = unwrap_and_measure(obj, mesh, seams, profile=profile, margin=margin,
-                                         stage="merge_back", regions=regions)
+                                         stage="merge_back", regions=regions,
+                                         overrides=overrides)
         # G9/G11: a layout that fails ONLY on packing gaps is a PLACEMENT defect. Re-pack
         # it wider before deciding this stage has nothing to reason about.
         if (not measurement.get("passed", False)
@@ -301,6 +302,9 @@ def run_merge_back(obj, mesh: MeshGraph, seams, *, constraints,
 
     def result(reason: str, complete: bool, remaining) -> dict:
         after_length = seam_length(mesh, seams)
+        # CG10/CG14: an override whose island pair was merged no longer describes one
+        # chart, so it stops being replayed — reported instead of silently dropped.
+        stale = list((measurement.get("override_report") or {}).get("stale") or ())
         return {
             "enabled": True,
             "complete": bool(complete),
@@ -318,6 +322,7 @@ def run_merge_back(obj, mesh: MeshGraph, seams, *, constraints,
                                              if diagonal > 0.0 else 0.0),
             "removable_remaining": remaining,
             "removed_edges": sorted(removed_edges),
+            "stale_overrides": [int(i) for i in stale],
             "history": records,
             "seams": set(seams),
             "measurement": measurement,
@@ -375,7 +380,8 @@ def run_merge_back(obj, mesh: MeshGraph, seams, *, constraints,
         verdict: str | None = None
         try:
             after = unwrap_and_measure(obj, mesh, trial_seams, profile=profile,
-                                       margin=margin, stage="merge_back", regions=regions)
+                                       margin=margin, stage="merge_back", regions=regions,
+                                       overrides=overrides)
             # A merged layout that only fails the packing gaps is re-packed, never cut
             # back apart (G9/G11) — the accept rule below is unchanged.
             if (not after.get("passed", False)

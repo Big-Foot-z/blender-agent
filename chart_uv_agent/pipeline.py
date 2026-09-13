@@ -251,7 +251,7 @@ def _v2_result_block(obj, mesh: MeshGraph, final_seams: set[int], *, profile, re
                      island_cap: int | None = None,
                      merge_back: dict | None = None,
                      shading: dict | None = None,
-                     history=None) -> tuple[dict, dict]:
+                     history=None, unwrap_overrides=()) -> tuple[dict, dict]:
     """Final v2 measurement of the SHIPPED UV plus the G1/G2/G4/G5 report blocks.
 
     Measures the layout already on ``obj`` (never unwraps), so the numbers describe exactly
@@ -268,6 +268,8 @@ def _v2_result_block(obj, mesh: MeshGraph, final_seams: set[int], *, profile, re
     distortion_v2 = reportable["distortion_v2"]
     passed = bool(measurement["passed"])
     repair = build_repair_summary(history, termination_records)
+    # CG14/CG0: how many UV-only repairs the shipped layout is replaying.
+    repair["overrides"] = len(list(unwrap_overrides or ()))
     block = {
         "distortion_v2": distortion_v2,
         "correctness": measurement["correctness"],
@@ -650,6 +652,10 @@ def run_chart_uv(obj, mesh: MeshGraph, *, config: ChartGateConfig | None = None,
                            {"stage": "tail_round", "enabled": shape_passes,
                             "rounds": tail["history"], "stuck": tail["stuck"]}]
     best = None
+    # CG14/CG0: the layout recipe — every accepted R1 re-unwrap is recorded here and
+    # replayed after every later ``unwrap_and_pack``, so a UV-only repair survives the
+    # prune / merge-back / post-prune stages instead of being silently discarded.
+    unwrap_overrides: list = []
     repacked = False
     raster_margin_bumped = False
     bbox_packed = False
@@ -659,6 +665,8 @@ def run_chart_uv(obj, mesh: MeshGraph, *, config: ChartGateConfig | None = None,
 
     for rnd in range(max_rounds):
         unwrap_and_pack(obj, seams, margin=pack_margin)
+        refinement_loop.apply_unwrap_overrides(obj, mesh, seams, unwrap_overrides,
+                                               margin=pack_margin)
         uvmap = read_uvmap(obj, mesh)
         plan = island_plan_from_seams(mesh, seams)
         ev = evaluate_uv_solution(mesh, plan, uvmap)
@@ -838,7 +846,7 @@ def run_chart_uv(obj, mesh: MeshGraph, *, config: ChartGateConfig | None = None,
                 obj, mesh, seams, constraints=constraints, profile=profile,
                 budget={**budget, "max_iterations": 1}, margin=pack_margin, regions=regions,
                 history=history, candidate_history=candidate_history,
-                initial_measurement=_round_v2())
+                initial_measurement=_round_v2(), overrides=unwrap_overrides)
             termination_records.append(ref["termination"])
             seams = set(ref["seams"])
             if seams != before_seams:
@@ -955,6 +963,8 @@ def run_chart_uv(obj, mesh: MeshGraph, *, config: ChartGateConfig | None = None,
         """Unwrap+pack the current ``final_seams`` and return (metrics, gate, ev). Owns the
         object's shipped UV — every seam edit here is followed by exactly one re-unwrap."""
         unwrap_and_pack(obj, final_seams, margin=pack_margin)
+        refinement_loop.apply_unwrap_overrides(obj, mesh, final_seams, unwrap_overrides,
+                                               margin=pack_margin)
         uvm = read_uvmap(obj, mesh)
         pl = island_plan_from_seams(mesh, final_seams)
         e = evaluate_uv_solution(mesh, pl, uvm)
@@ -1018,7 +1028,8 @@ def run_chart_uv(obj, mesh: MeshGraph, *, config: ChartGateConfig | None = None,
                 budget={**budget,
                         "max_iterations": int(profile.catastrophic_repair_max_rounds)},
                 margin=pack_margin, regions=regions, history=history,
-                candidate_history=candidate_history, initial_measurement=post_prune)
+                candidate_history=candidate_history, initial_measurement=post_prune,
+                overrides=unwrap_overrides)
             termination_records.append(ref2["termination"])
             final_seams = set(ref2["seams"])
             distortion_seams |= set(ref2["distortion_seams"])
@@ -1051,6 +1062,7 @@ def run_chart_uv(obj, mesh: MeshGraph, *, config: ChartGateConfig | None = None,
             obj, mesh, final_seams, constraints=constraints, profile=profile,
             margin=pack_margin, regions=regions, required=constraints.required,
             history=history, initial_measurement=mb_measure, repair_mode=True,
+            overrides=unwrap_overrides,
             time_budget_s=max(0.0, float(budget["time_budget_s"])
                               - (time.monotonic() - started_at)))
         mb_removed = {int(e) for e in mb["removed_edges"]}
@@ -1110,6 +1122,8 @@ def run_chart_uv(obj, mesh: MeshGraph, *, config: ChartGateConfig | None = None,
         "pack_margin_uv": float(pack_margin), "margin_px": int(profile.margin_px),
         "texture_size_px": int(profile.texture_size_px),
         "merge_back": merge_back_block, "shading": shading_block,
+        # CG14/CG0: the reproducible layout recipe the shipped UVs were built with.
+        "unwrap_overrides": _jsonable(unwrap_overrides),
     }
     # G1/G5: an island-gap-ONLY correctness failure is repaired by re-packing wider, never
     # by cutting. Runs before the final v2 measurement so the report describes the re-pack.
@@ -1124,7 +1138,8 @@ def run_chart_uv(obj, mesh: MeshGraph, *, config: ChartGateConfig | None = None,
         budget=budget, elapsed=time.monotonic() - started_at, gate=gate,
         exhausted_rounds=rounds_exhausted,
         island_cap=min(int(config.island_count_max), int(budget["island_cap"])),
-        merge_back=merge_back_block, shading=shading_block, history=history)
+        merge_back=merge_back_block, shading=shading_block, history=history,
+        unwrap_overrides=unwrap_overrides)
     result.update(v2_block)
     # G1 (topology/입력): the input-defect diagnosis ships with every automatic result.
     result["input_diagnostics"] = _input_diagnostics(mesh, v2_block.get("distortion_v2"))

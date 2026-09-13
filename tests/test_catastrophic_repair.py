@@ -358,3 +358,82 @@ def test_island_cap_blocks_the_relief_cut_but_not_the_reunwrap(monkeypatch):
         assert record["after_measurement"] is None
     assert result["termination"]["reason"] == "island_cap"
     assert result["seams"] == set(seams)
+
+
+# ------------------- (f) CG14/CG0: the layout recipe is recorded and reproducible
+
+
+def _column_seam(mesh, n: int = 4, column: int = 2) -> set[int]:
+    """The straight interior edge chain that splits the flat ``n x n`` grid in two."""
+    def vid(i: int, j: int) -> int:
+        return i * (n + 1) + j
+
+    return {int(mesh.edge_key(vid(column, j), vid(column, j + 1))) for j in range(n)}
+
+
+def test_apply_unwrap_overrides_replays_the_recipe_and_reports_stale(monkeypatch):
+    """CG14: an override is replayed when its face set is still exactly one chart, and
+    reported ``stale`` — never applied to the wrong faces — when the seam set moved."""
+    mesh, backend, obj, seams, _constraints, _state = _planes(monkeypatch,
+                                                              fix_on_reunwrap=True)
+    R.unwrap_and_measure(obj, mesh, seams, profile=PROFILE, margin=0.005, stage="check")
+
+    chart = sorted(int(f) for f in segmentation.flood_charts(mesh, seams)[0])
+    variant = CR.reunwrap_candidates({"region_id": 3, "island_id": 0}, PROFILE)[0]
+    override = R.override_from_variant(chart, variant, round_index=2)
+    assert override["faces"] == chart
+    assert override["variant"]["id"] == CR.R1_VARIANTS[0]["id"]
+    assert override["round"] == 2
+    assert override["region_id"] == 3
+
+    backend.calls.clear()
+    report = R.apply_unwrap_overrides(obj, mesh, seams, [override], margin=0.005)
+    assert report == {"applied": 1, "stale": []}
+
+    reunwraps = [c for c in backend.calls if c[0] == "reunwrap_faces"]
+    assert len(reunwraps) == 1, backend.calls
+    assert reunwraps[0][1] == chart
+    assert reunwraps[0][3] == override["variant"]["method"]
+    assert reunwraps[0][4] == {"iterations": override["variant"]["iterations"],
+                               "no_flip": override["variant"]["no_flip"],
+                               "fill_holes": override["variant"]["fill_holes"]}
+
+    # The chart the recipe describes no longer exists once the grid is cut in two.
+    split = set(seams) | _column_seam(mesh)
+    assert len(segmentation.flood_charts(mesh, split)) == 2
+    backend.calls.clear()
+    stale_report = R.apply_unwrap_overrides(obj, mesh, split, [override], margin=0.005)
+    assert stale_report == {"applied": 0, "stale": [0]}
+    assert not [c for c in backend.calls if c[0] == "reunwrap_faces"]
+
+
+def test_accepted_reunwrap_is_recorded_as_a_replayable_override(monkeypatch):
+    """CG5/CG14: an accepted R1 survives a later unwrap ONLY because of the recipe."""
+    mesh, _backend, obj, seams, constraints, state = _planes(monkeypatch,
+                                                             fix_on_reunwrap=True)
+    result = R.run_refinement(obj, mesh, seams, constraints=constraints, profile=PROFILE,
+                              budget={"max_iterations": 1}, margin=0.005)
+
+    overrides = result["overrides"]
+    assert len(overrides) == 1, overrides
+    override = overrides[0]
+    assert override["faces"] == sorted(int(f) for f in
+                                       segmentation.flood_charts(mesh, seams)[0])
+    assert override["variant"]["id"] == CR.R1_VARIANTS[0]["id"]
+    assert override["round"] == 0
+
+    # Without the recipe the next unwrap silently discards the repair …
+    state["reunwrapped"] = False
+    plain = R.unwrap_and_measure(obj, mesh, seams, profile=PROFILE, margin=0.005,
+                                 stage="check")
+    assert state["reunwrapped"] is False
+    assert "catastrophic_failed" in plain["hard_failures"], plain["hard_failures"]
+
+    # … and with it the repair is re-applied (the backend re-unwraps again).
+    state["reunwrapped"] = False
+    replayed = R.unwrap_and_measure(obj, mesh, seams, profile=PROFILE, margin=0.005,
+                                    stage="check", overrides=overrides)
+    assert state["reunwrapped"] is True
+    assert replayed["override_report"] == {"applied": 1, "stale": []}
+    assert "catastrophic_failed" not in replayed["hard_failures"], \
+        replayed["hard_failures"]

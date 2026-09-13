@@ -423,3 +423,40 @@ def test_repair_mode_rejects_a_trial_whose_hard_failures_grow(monkeypatch):
     assert result["complete"] is True
     assert result["reason"] == "no_removable_seam"
     assert np.array_equal(obj.uv.uv, uv_before)
+
+
+# ------------------------- (k) CG10/CG14: the layout recipe travels through the trials
+
+
+def test_overrides_are_replayed_in_every_trial(monkeypatch):
+    """CG10: every merge-back trial RE-UNWRAPS, so it must replay the repair recipe too —
+    otherwise a trial judges a layout whose repair was silently thrown away."""
+    mesh, backend, obj, seams, constraints, _mandatory, _extra = _fixture(monkeypatch)
+
+    charts = flood_charts(mesh, seams)
+    # The folded plane: a chart no merge-back trial on this fixture can dissolve, so the
+    # recipe row stays live for the initial measurement AND for the trial.
+    chart = sorted(int(f) for f in max(charts, key=len))
+    override = R.override_from_variant(
+        chart, {"variant_id": "slim_iter50_noflip", "method": "MINIMUM_STRETCH",
+                "iterations": 50, "no_flip": True, "fill_holes": False,
+                "minimize_iters": 0},
+        round_index=0, region_id=0)
+
+    backend.calls.clear()
+    result = _run(obj, mesh, seams, constraints, overrides=[override])
+
+    assert result["trials"] >= 1
+    reunwraps = [c for c in backend.calls if c[0] == "reunwrap_faces"]
+    # One for the initial measurement, one for each trial's own unwrap.
+    assert len(reunwraps) >= 1 + int(result["trials"]), backend.calls
+    assert all(c[1] == chart for c in reunwraps)
+    assert all(c[3] == "MINIMUM_STRETCH" for c in reunwraps)
+    assert all(c[4] == {"iterations": 50, "no_flip": True, "fill_holes": False}
+               for c in reunwraps)
+    assert result["stale_overrides"] == []
+
+    # The control: without the recipe nothing is re-unwrapped at all.
+    backend.calls.clear()
+    _run(obj, mesh, seams, constraints)
+    assert not [c for c in backend.calls if c[0] == "reunwrap_faces"]
