@@ -1,0 +1,29 @@
+{
+  "before": {
+    "fingerprint": "2eb957b79d6262f900bcd4f16a923cb87f94f78c3440c6c92d80a10da43ac099",
+    "vertex_count": 5996,
+    "edge_count": 17776,
+    "face_count": 11776,
+    "loop_count": 35552,
+    "material_indices_hash": "af0a8489caede61d6808dad030902687a1553876407478b70e427d6d60ac73ee",
+    "model_sha256": "ec8ff655460be107c00b29bc5b8425506079b6ef238073ed1744fb461628fd1f"
+  },
+  "after": {
+    "fingerprint": "2eb957b79d6262f900bcd4f16a923cb87f94f78c3440c6c92d80a10da43ac099",
+    "vertex_count": 5996,
+    "edge_count": 17776,
+    "face_count": 11776,
+    "loop_count": 35552,
+    "material_indices_hash": "af0a8489caede61d6808dad030902687a1553876407478b70e427d6d60ac73ee",
+    "model_sha256": "ec8ff655460be107c00b29bc5b8425506079b6ef238073ed1744fb461628fd1f"
+  },
+  "diff": {
+    "unchanged": true,
+    "before_sha256": "2eb957b79d6262f900bcd4f16a923cb87f94f78c3440c6c92d80a10da43ac099",
+    "after_sha256": "2eb957b79d6262f900bcd4f16a923cb87f94f78c3440c6c92d80a10da43ac099",
+    "vertex_count": 5996,
+    "face_count": 11776,
+    "loop_count": 35552,
+    "differences": []
+  }
+}

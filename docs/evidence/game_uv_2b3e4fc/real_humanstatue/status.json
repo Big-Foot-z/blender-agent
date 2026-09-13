@@ -1,0 +1,35 @@
+{
+  "schema_version": 1,
+  "run_id": "uv_real_2b3e4fc",
+  "command": "generate_uv_from_seams",
+  "status": "needs_user_review",
+  "started_at": "2026-09-13T02:17:30.093Z",
+  "finished_at": "2026-09-13T02:18:56.698Z",
+  "input": {
+    "model": "work/working_lowpoly.blend",
+    "object_name": null,
+    "seam_spec": null,
+    "mode": "auto_generate"
+  },
+  "artifacts": {
+    "summary": "uv_generate_summary.json",
+    "p5_gate": "p5_gate.json",
+    "seam_report": "seam_report.json",
+    "seam_source_resolution": "seam_source_resolution.json",
+    "selected_blend": "selected_uv.blend",
+    "distortion_v2": "distortion_v2.json",
+    "correctness": "correctness.json",
+    "final_reread_audit": "final_reread_audit.json",
+    "run_manifest": "run_manifest.json",
+    "candidate_history": "candidate_history.json",
+    "mesh_identity": "mesh_identity.json",
+    "quality_profile": "quality_profile.json",
+    "seam_overlay": "seam_overlay.json",
+    "selected_heatmap_anisotropy": "selected_heatmap_anisotropy.png",
+    "quality_report": "quality_report.json",
+    "merge_back_history": "merge_back_history.json",
+    "seam_overlay_png": "seam_overlay.png",
+    "shading_policy": "shading_policy.json"
+  },
+  "error": null
+}

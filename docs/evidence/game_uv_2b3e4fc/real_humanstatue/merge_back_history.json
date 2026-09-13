@@ -1,0 +1,17 @@
+{
+  "enabled": true,
+  "complete": true,
+  "reason": "skipped_quality_failed",
+  "trials": 0,
+  "accepted": 0,
+  "island_count_before": 80,
+  "island_count_after": 80,
+  "seam_length_before": 10759.058874567829,
+  "seam_length_after": 10759.058874567829,
+  "normalized_seam_length_before": 18.437737966158394,
+  "normalized_seam_length_after": 18.437737966158394,
+  "removable_remaining": 86,
+  "removed_edges": [],
+  "history": [],
+  "elapsed_s": 0.0325742999848444
+}
