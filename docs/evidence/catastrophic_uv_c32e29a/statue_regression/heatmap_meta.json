@@ -1,0 +1,21 @@
+{
+  "distortion_metric_version": 2,
+  "hard_fail_color": [
+    0,
+    0,
+    0
+  ],
+  "mesh_fingerprint": "2eb957b79d6262f900bcd4f16a923cb87f94f78c3440c6c92d80a10da43ac099",
+  "metric_version": 1,
+  "nan_color": [
+    255,
+    0,
+    255
+  ],
+  "run_id": "uv_cat_preview",
+  "size": 1024,
+  "source": "catastrophic.per_face_score",
+  "uv_hash": "a1b81130120af8f02cb2c183edae509b9bfd048de2a95f1c68554d78ffd2059b",
+  "vmax": 3.0,
+  "vmin": 1.0
+}

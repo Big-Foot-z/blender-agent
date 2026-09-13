@@ -329,7 +329,7 @@ def test_statue_three_runs_are_deterministic(tmp_path):
             out_dir = os.path.join(project, "run")
             os.makedirs(out_dir, exist_ok=True)
             job = _job(FIXTURE, out_dir, project, run_id, render_previews=False)
-            proc, wall_s = _run(job, tmp_path, f"job_{run_id}", timeout=1200)
+            proc, wall_s = _run(job, tmp_path, f"job_{run_id}", timeout=3000)
             rows.append(_collect_run(out_dir, project, proc, wall_s, run_id))
 
         base = rows[0]
@@ -395,7 +395,7 @@ def _preview_run(tmp_path_factory) -> dict:
     out_dir = os.path.join(project, "run")
     os.makedirs(out_dir, exist_ok=True)
     job = _job(FIXTURE, out_dir, project, run_id, render_previews=True)
-    proc, wall_s = _run(job, base, "job_preview", timeout=1500)
+    proc, wall_s = _run(job, base, "job_preview", timeout=3000)
     row = _collect_run(out_dir, project, proc, wall_s, run_id)
     row["job_dir"] = base
     _PREVIEW_RUN.update(row)

@@ -1,0 +1,17 @@
+{
+  "metric_version": 1,
+  "hard_failed": true,
+  "region_failed": true,
+  "passed": false,
+  "bad_triangle_count": 304,
+  "bad_region_count": 66,
+  "bad_area_fraction": 0.01448465368169656,
+  "max_anisotropy": 186.72106269667952,
+  "max_uv_triangle_aspect": 823.1434021098448,
+  "near_collapse_count": 0,
+  "boundary_spike_region_count": 41,
+  "self_overlap_region_count": 6,
+  "invalid_count": 0,
+  "note": "measured on code 10840c0 (catastrophic audit wired, repair not yet entered at the island cap); same fixture, same profile engineering_v0; needle rule at that commit lacked the 3D-aspect factor",
+  "bad_face_ids_count": 303
+}

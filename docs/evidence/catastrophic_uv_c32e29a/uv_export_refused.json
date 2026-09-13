@@ -1,0 +1,765 @@
+{
+  "generated_at_utc": "2026-09-13T08:45:22Z",
+  "code_sha": "c32e29abd494498d4c09a1d4c2aa53bc2e7e0df7",
+  "blender": {
+    "executable": "C:/Program Files/Blender Foundation\\Blender 5.1\\blender.exe",
+    "version": "5.1.2",
+    "build_hash": "ec6e62d40fa9",
+    "build_date": "2026-05-19",
+    "raw": "Blender 5.1.2\n\tbuild date: 2026-05-19\n\tbuild time: 01:37:34\n\tbuild commit date: 2026-05-18\n\tbuild commit time: 13:43\n\tbuild hash: ec6e62d40fa9\n\tbuild branch: blender-v5.1-release\n\tbuild platform: Windows\n\tbuild type: Release\n\tbuild c flags:  -Wall -Werror=implicit-function-declaration -Werror=return-type -Wno-tautological-compare -Wno-unknown-pragmas -Wno-char-subscripts -Wstrict-prototypes -Wmissing-prototypes -Wunused-parameter -Wundef -Wundef-prefix -Werror=unguarded-availability-new /W3 -Wno-c++98-compat -Wno-old-style-cast -Wno-unsafe-buffer-usage -Wno-missing-prototypes -Wno-sign-conversion -Wno-missing-field-initializers -Wno-extra-semi -Wno-language-extension-token -Wno-implicit-float-conversion -Wno-c++98-compat-pedantic -Wno-implicit-int-float-conversion -Wno-double-promotion -Wno-pre-c++17-compat -Wno-shorten-64-to-32 -Wno-c++98-compat-local-type-template-args -Wno-reserved-identifier -Wno-cast-align -Wno-documentation -Wno-disabled-macro-expansion -Wno-extra-semi-stmt -Wno-zero-as-null-pointer-constant -Wno-float-conversion -Wno-reserved-macro-identifier -Wno-cast-function-type-strict -Wno-float-equal -Wno-implicit-int-conversion -Wno-shadow -Wno-shadow-field-in-constructor -Wno-cast-qual -Wno-pre-c++14-compat -Wno-global-constructors -Wno-switch-enum -Wno-exit-time-destructors -Wno-ctad-maybe-unsupported -Wno-undefined-func-template -Wno-c++98-compat-extra-semi -Wno-cast-function-type -Wno-nullability-extension -Wno-shadow-field -Wno-conditional-uninitialized -Wno-unused-parameter -Wno-suggest-destructor-override -Wno-shadow-uncaptured-local -Wno-unused-macros -Wno-covered-switch-default -Wno-signed-enum-bitfield -Wno-declaration-after-statement -Wno-implicit-fallthrough -Wno-non-virtual-dtor -Wno-nested-anon-types -Wno-gnu-zero-variadic-macro-arguments -Wno-unreachable-code-break -Wno-inconsistent-missing-destructor-override -Wno-format-pedantic -Wno-nonportable-system-include-path -Wno-undef -Wno-ignored-qualifiers -Wno-used-but-marked-unused -Wno-header-hygiene -Wno-char-subscripts -Wno-unreachable-code-return -Wno-unused-template -Wno-gnu-anonymous-struct -Wno-deprecated-copy-with-user-provided-dtor -Wno-inconsistent-missing-override -Wno-unreachable-code -Wno-deprecated-dynamic-exception-spec -Wno-bad-function-cast -Wno-microsoft-enum-value -Wno-deprecated-copy-with-user-provided-copy -Wno-zero-length-array -Wno-unused-function -Wno-pedantic -Wno-deprecated-copy-with-dtor -Wno-documentation-unknown-command -Wno-undefined-reinterpret-cast -Wno-format-nonliteral -Wno-comma -Wno-documentation-deprecated-sync -Wno-shift-sign-overflow -Wno-pre-c++17-compat-pedantic -Wno-c++98-compat-unnamed-type-template-args -Wno-sign-compare -Wno-format -Wno-c++98-compat-bind-to-temporary-copy -Wno-enum-enum-conversion -Wno-anon-enum-enum-conversion -Wno-range-loop-bind-reference -Wno-enum-float-conversion -Wno-keyword-macro -Wno-deprecated-copy -Wno-unused-member-function -Wno-missing-noreturn -Wno-missing-variable-declarations -Wno-documentation-html -Wno-gnu-redeclared-enum -Wno-deprecated-declarations -Wno-overloaded-virtual -Wno-c++98-c++11-compat-binary-literal -Wno-deprecated-redundant-constexpr-static-def -Wno-missing-braces -Wno-c99-extensions -Wno-strict-prototypes -Wno-unreachable-code-loop-increment -Wno-gnu-case-range -Wno-duplicate-enum -Wno-null-pointer-subtraction -Wno-deprecated-literal-operator -Wno-newline-eof -Wno-microsoft-cast -Wno-date-time -Wno-delete-non-abstract-non-virtual-dtor -Wno-unused-private-field -Wno-flexible-array-extensions -Wno-string-conversion -Wno-final-dtor-non-final-class -Wno-microsoft-unqualified-friend -Wno-invalid-noreturn -Wno-invalid-utf8 -Wno-four-char-constants -Wno-parentheses -Wno-pessimizing-move -Wno-deprecated-non-prototype -Wno-bitfield-enum-conversion -Wno-unused-lambda-capture -Wno-shadow-field-in-constructor-modified -Wno-switch-default -Wno-nan-infinity-disabled -Wno-pre-c11-compat /DWIN32 /D_WINDOWS  /MP /nologo /J /Gy /Gd /showFilenames -Wno-unused-command-line-argument -Wno-microsoft-enum-forward-reference /clang:-funsigned-char /clang:-fno-strict-aliasing /clang:-ffp-contract=off -march=x86-64-v2 \n\tbuild c++ flags:  -Wall -Wno-tautological-compare -Wno-unknown-pragmas -Wno-char-subscripts -Wno-overloaded-virtual -Wno-sign-compare -Wno-invalid-offsetof -Wno-suggest-override -Wundef -Wundef-prefix -Wunused-parameter -Wmismatched-tags -Werror=unguarded-availability-new /W3 -Wno-c++98-compat -Wno-old-style-cast -Wno-unsafe-buffer-usage -Wno-missing-prototypes -Wno-sign-conversion -Wno-missing-field-initializers -Wno-extra-semi -Wno-language-extension-token -Wno-implicit-float-conversion -Wno-c++98-compat-pedantic -Wno-implicit-int-float-conversion -Wno-double-promotion -Wno-pre-c++17-compat -Wno-shorten-64-to-32 -Wno-c++98-compat-local-type-template-args -Wno-reserved-identifier -Wno-cast-align -Wno-documentation -Wno-disabled-macro-expansion -Wno-extra-semi-stmt -Wno-zero-as-null-pointer-constant -Wno-float-conversion -Wno-reserved-macro-identifier -Wno-cast-function-type-strict -Wno-float-equal -Wno-implicit-int-conversion -Wno-shadow -Wno-shadow-field-in-constructor -Wno-cast-qual -Wno-pre-c++14-compat -Wno-global-constructors -Wno-switch-enum -Wno-exit-time-destructors -Wno-ctad-maybe-unsupported -Wno-undefined-func-template -Wno-c++98-compat-extra-semi -Wno-cast-function-type -Wno-nullability-extension -Wno-shadow-field -Wno-conditional-uninitialized -Wno-unused-parameter -Wno-suggest-destructor-override -Wno-shadow-uncaptured-local -Wno-unused-macros -Wno-covered-switch-default -Wno-signed-enum-bitfield -Wno-declaration-after-statement -Wno-implicit-fallthrough -Wno-non-virtual-dtor -Wno-nested-anon-types -Wno-gnu-zero-variadic-macro-arguments -Wno-unreachable-code-break -Wno-inconsistent-missing-destructor-override -Wno-format-pedantic -Wno-nonportable-system-include-path -Wno-undef -Wno-ignored-qualifiers -Wno-used-but-marked-unused -Wno-header-hygiene -Wno-char-subscripts -Wno-unreachable-code-return -Wno-unused-template -Wno-gnu-anonymous-struct -Wno-deprecated-copy-with-user-provided-dtor -Wno-inconsistent-missing-override -Wno-unreachable-code -Wno-deprecated-dynamic-exception-spec -Wno-bad-function-cast -Wno-microsoft-enum-value -Wno-deprecated-copy-with-user-provided-copy -Wno-zero-length-array -Wno-unused-function -Wno-pedantic -Wno-deprecated-copy-with-dtor -Wno-documentation-unknown-command -Wno-undefined-reinterpret-cast -Wno-format-nonliteral -Wno-comma -Wno-documentation-deprecated-sync -Wno-shift-sign-overflow -Wno-pre-c++17-compat-pedantic -Wno-c++98-compat-unnamed-type-template-args -Wno-sign-compare -Wno-format -Wno-c++98-compat-bind-to-temporary-copy -Wno-enum-enum-conversion -Wno-anon-enum-enum-conversion -Wno-range-loop-bind-reference -Wno-enum-float-conversion -Wno-keyword-macro -Wno-deprecated-copy -Wno-unused-member-function -Wno-missing-noreturn -Wno-missing-variable-declarations -Wno-documentation-html -Wno-gnu-redeclared-enum -Wno-deprecated-declarations -Wno-overloaded-virtual -Wno-c++98-c++11-compat-binary-literal -Wno-deprecated-redundant-constexpr-static-def -Wno-missing-braces -Wno-c99-extensions -Wno-strict-prototypes -Wno-unreachable-code-loop-increment -Wno-gnu-case-range -Wno-duplicate-enum -Wno-null-pointer-subtraction -Wno-deprecated-literal-operator -Wno-newline-eof -Wno-microsoft-cast -Wno-date-time -Wno-delete-non-abstract-non-virtual-dtor -Wno-unused-private-field -Wno-flexible-array-extensions -Wno-string-conversion -Wno-final-dtor-non-final-class -Wno-microsoft-unqualified-friend -Wno-invalid-noreturn -Wno-invalid-utf8 -Wno-four-char-constants -Wno-parentheses -Wno-pessimizing-move -Wno-deprecated-non-prototype -Wno-bitfield-enum-conversion -Wno-unused-lambda-capture -Wno-shadow-field-in-constructor-modified -Wno-switch-default -Wno-nan-infinity-disabled -Wno-pre-c11-compat /DWIN32 /D_WINDOWS   /EHsc  /Gy /MP /nologo /J /Gd /showFilenames /EHsc -Wno-unused-command-line-argument -Wno-microsoft-enum-forward-reference /clang:-funsigned-char /clang:-fno-strict-aliasing /clang:-ffp-contract=off -march=x86-64-v2 \n\tbuild link flags: /MACHINE:X64  /SUBSYSTEM:CONSOLE /STACK:2097152 /ignore:4049 /ignore:4217 /ignore:4221\n\tbuild system: CMake",
+    "returncode": 0
+  },
+  "hardware": {
+    "platform": "Windows-10-10.0.19045-SP0",
+    "processor": "AMD64 Family 25 Model 33 Stepping 0, AuthenticAMD",
+    "machine": "AMD64",
+    "cpu_count": 12,
+    "python": "3.14.4",
+    "total_memory_mb": 49077.7
+  },
+  "fixture": "suzanne",
+  "fixture_face_count": 500,
+  "fixture_vertex_count": 507,
+  "uv_run": {
+    "returncode": 0,
+    "wall_s": 57.829
+  },
+  "uv_status": "needs_user_review",
+  "uv_mandatory_audit": {
+    "mandatory_90_edges": 118,
+    "mandatory_90_missing": 0,
+    "mandatory_90_fold_edges": 76,
+    "mandatory_90_uv_unsplit": 0,
+    "uv_unsplit_edge_ids": [],
+    "reported_only": false
+  },
+  "uv_final_reread_audit": {
+    "source": ".staging/selected_uv.blend",
+    "mandatory_90_uv_unsplit": 0,
+    "mandatory_90_missing_remapped": 0,
+    "edge_id_remap": false,
+    "unmatched_edges": 0,
+    "correctness": {
+      "passed": false,
+      "checks": [
+        {
+          "name": "overlap",
+          "passed": false,
+          "value": 0.0014861440095238314,
+          "limit": 1e-08
+        },
+        {
+          "name": "orientation",
+          "passed": true,
+          "value": 0,
+          "limit": 0
+        },
+        {
+          "name": "degenerate",
+          "passed": true,
+          "value": 0,
+          "limit": 0
+        },
+        {
+          "name": "bounds",
+          "passed": true,
+          "value": [
+            0.00390625,
+            0.16669721901416779,
+            0.99609375,
+            0.8333027958869934
+          ],
+          "limit": [
+            -0.0001,
+            1.0001
+          ]
+        },
+        {
+          "name": "island_gap",
+          "passed": false,
+          "value": 2.215200784356521,
+          "limit": 4.0
+        },
+        {
+          "name": "border_gap",
+          "passed": true,
+          "value": 4.0,
+          "limit": 4.0
+        }
+      ],
+      "overlap_area_total": 0.0014861440095238314,
+      "local_flip_count": 0,
+      "mirrored_island_count": 0,
+      "uv_degenerate_count": 0,
+      "min_island_gap_px": 2.215200784356521,
+      "min_border_gap_px": 4.0,
+      "bounds_ok": true
+    },
+    "distortion_global": {
+      "anisotropy_mean": 1.2055102001188864,
+      "anisotropy_p95": 1.6028411657898758,
+      "anisotropy_max": 3.0431048185825955,
+      "area_stretch_mean": 0.10767119475631363,
+      "area_stretch_p95": 0.34092077724821557,
+      "area_stretch_max": 0.9478585427719486,
+      "exceed_area_fraction": 0.0547455952044652,
+      "area_3d": 12.46087636855145,
+      "area_uv": 0.3937978855173838,
+      "triangle_count": 968
+    },
+    "sharp_edge_uv_audit": {
+      "sharp_edge_count": 0,
+      "sharp_edge_uv_unsplit": 0,
+      "unsplit_edge_ids": []
+    },
+    "shading_policy": "preserve",
+    "catastrophic": {
+      "metric_version": 1,
+      "thresholds": {
+        "anisotropy_hard_max": 8.0,
+        "anisotropy_warn": 4.0,
+        "near_collapse_ratio": 0.0001,
+        "max_uv_triangle_aspect": 40.0,
+        "needle_3d_aspect_factor": 2.0,
+        "local_area_ratio_min": 0.04,
+        "local_area_ratio_max": 25.0,
+        "bad_area_fraction_cap": 0.005,
+        "min_cluster_area_fraction": 1e-05
+      },
+      "valid": true,
+      "hard_failed": false,
+      "region_failed": false,
+      "passed": true,
+      "bad_triangle_count": 0,
+      "bad_region_count": 0,
+      "bad_area_fraction": 0.0,
+      "max_anisotropy": 3.0431048185825955,
+      "max_uv_triangle_aspect": 22.048733463322446,
+      "near_collapse_count": 0,
+      "needle_count": 0,
+      "anisotropy_hard_count": 0,
+      "area_explosion_count": 0,
+      "area_collapse_count": 0,
+      "invalid_count": 0,
+      "input_defect_count": 0,
+      "warn_triangle_count": 0,
+      "boundary_spike_region_count": 0,
+      "self_overlap_region_count": 0,
+      "flip_region_count": 0,
+      "bad_face_ids": [],
+      "island_bad_counts": {},
+      "triangle_count": 968,
+      "region_face_ids": []
+    },
+    "uv_hash": "e53a365f85d2157d4240228f9316fd24a5600a40587ecd4a0f396d135dcc16e1",
+    "uv_hash_matches_final": true,
+    "passed": false
+  },
+  "export_input": "run/selected_uv.blend",
+  "export_returncode": 0,
+  "export_status": "failed",
+  "export_failed_formats": [
+    {
+      "format": "fbx",
+      "code": "reread_audit_failed",
+      "message": "FBX re-read audit failed: ['correctness_failed']",
+      "failures": [
+        "correctness_failed"
+      ]
+    },
+    {
+      "format": "glb",
+      "code": "reread_audit_failed",
+      "message": "GLB re-read audit failed: ['correctness_failed', 'mandatory_90_uv_unsplit']",
+      "failures": [
+        "correctness_failed",
+        "mandatory_90_uv_unsplit"
+      ]
+    }
+  ],
+  "export_reread_report": {
+    "schema_version": 1,
+    "profile_id": "engineering_v0",
+    "formats": {
+      "fbx": {
+        "format": "fbx",
+        "uv_layers": [
+          "AI_UV"
+        ],
+        "active_uv_layer": "AI_UV",
+        "expected_uv_layer": "AI_UV",
+        "uv_layer_warnings": [],
+        "uv_present": true,
+        "uv_finite": true,
+        "bounds": true,
+        "island_count": 13,
+        "correctness": {
+          "passed": false,
+          "checks": [
+            {
+              "name": "overlap",
+              "passed": false,
+              "value": 0.0014861440095238314,
+              "limit": 1e-08
+            },
+            {
+              "name": "orientation",
+              "passed": true,
+              "value": 0,
+              "limit": 0
+            },
+            {
+              "name": "degenerate",
+              "passed": true,
+              "value": 0,
+              "limit": 0
+            },
+            {
+              "name": "bounds",
+              "passed": true,
+              "value": [
+                0.00390625,
+                0.16669721901416779,
+                0.99609375,
+                0.8333027958869934
+              ],
+              "limit": [
+                -0.0001,
+                1.0001
+              ]
+            },
+            {
+              "name": "island_gap",
+              "passed": false,
+              "value": 2.215200784356521,
+              "limit": 4.0
+            },
+            {
+              "name": "border_gap",
+              "passed": true,
+              "value": 4.0,
+              "limit": 4.0
+            }
+          ],
+          "overlap_area_total": 0.0014861440095238314,
+          "local_flip_count": 0,
+          "mirrored_island_count": 0,
+          "uv_degenerate_count": 0,
+          "min_island_gap_px": 2.215200784356521,
+          "min_border_gap_px": 4.0,
+          "bounds_ok": true
+        },
+        "mandatory": {
+          "fold_angle": 90.0,
+          "fold_edges_checked": 76,
+          "mandatory_90_uv_unsplit": 0,
+          "uv_unsplit_edge_ids": [],
+          "unmatched_fold_edges": 0
+        },
+        "texel_density": {
+          "passed": true,
+          "valid": true,
+          "failures": [],
+          "density_mean": 183.19359943214147,
+          "density_cv": 0.0014693181938597243,
+          "outlier_count": 0,
+          "outlier_island_ids": [],
+          "unmeasurable_island_count": 0,
+          "intentional_weighting_applied": false
+        },
+        "shading": {
+          "policy": "preserve",
+          "valid": true,
+          "passed": true,
+          "failures": [],
+          "invalid_reasons": [],
+          "sharp_edge_uv_audit": {
+            "sharp_edge_count": 0,
+            "sharp_edge_uv_unsplit": 0,
+            "unsplit_edge_ids": []
+          },
+          "tangent_checked": true,
+          "tangent_ok": true,
+          "snapshot_diff": {
+            "unchanged": true,
+            "sharp_added": [],
+            "sharp_removed": [],
+            "smooth_face_delta": 0
+          }
+        },
+        "catastrophic": {
+          "metric_version": 1,
+          "thresholds": {
+            "anisotropy_hard_max": 8.0,
+            "anisotropy_warn": 4.0,
+            "near_collapse_ratio": 0.0001,
+            "max_uv_triangle_aspect": 40.0,
+            "needle_3d_aspect_factor": 2.0,
+            "local_area_ratio_min": 0.04,
+            "local_area_ratio_max": 25.0,
+            "bad_area_fraction_cap": 0.005,
+            "min_cluster_area_fraction": 1e-05
+          },
+          "valid": true,
+          "hard_failed": false,
+          "region_failed": false,
+          "passed": true,
+          "bad_triangle_count": 0,
+          "bad_region_count": 0,
+          "bad_area_fraction": 0.0,
+          "max_anisotropy": 3.0431048185825955,
+          "max_uv_triangle_aspect": 22.048733463322446,
+          "near_collapse_count": 0,
+          "needle_count": 0,
+          "anisotropy_hard_count": 0,
+          "area_explosion_count": 0,
+          "area_collapse_count": 0,
+          "invalid_count": 0,
+          "input_defect_count": 0,
+          "warn_triangle_count": 0,
+          "boundary_spike_region_count": 0,
+          "self_overlap_region_count": 0,
+          "flip_region_count": 0,
+          "bad_face_ids": [],
+          "island_bad_counts": {},
+          "triangle_count": 968,
+          "region_face_ids": []
+        },
+        "fragmentation": {
+          "metrics": {
+            "island_count": 13,
+            "tiny_island_count": 6,
+            "tiny_island_area_ratio": 0.015957370593767103,
+            "sliver_island_count": 0,
+            "one_two_face_island_count": 1,
+            "one_two_face_island_ratio": 0.07692307692307693,
+            "island_aspect_p95": 4.210276101187735,
+            "zero_area_island_count": 0,
+            "below_min_area_island_count": 0,
+            "normalized_seam_length": 7.854883975263359,
+            "seam_length_total": 29.655092618626924,
+            "bbox_diagonal": 3.775369911511983,
+            "texture_size_px": 1024,
+            "min_island_width_px": 11.194969489880524,
+            "island_area_px2_min": 255.81405554092635
+          },
+          "passed": true,
+          "hard_passed": true,
+          "quality_passed": true,
+          "failures": [],
+          "quality_failures": [],
+          "exempt_islands": [
+            4,
+            5
+          ],
+          "tiny_island_ids": [
+            2,
+            3,
+            4,
+            5,
+            9,
+            10
+          ],
+          "sliver_island_ids": []
+        },
+        "uv_hash": "e53a365f85d2157d4240228f9316fd24a5600a40587ecd4a0f396d135dcc16e1",
+        "source_uv_hash": "e53a365f85d2157d4240228f9316fd24a5600a40587ecd4a0f396d135dcc16e1",
+        "uv_fingerprint": {
+          "source": {
+            "sha256": "b651eb169bb4384b993131f58a3c372c023bfee2d7cb43ac5b7a9e41b2417373",
+            "corner_count": 714
+          },
+          "reread": {
+            "sha256": "b651eb169bb4384b993131f58a3c372c023bfee2d7cb43ac5b7a9e41b2417373",
+            "corner_count": 714
+          },
+          "match": true,
+          "method": "hash",
+          "max_abs_error": null
+        },
+        "vertex_fingerprint": {
+          "source": "aab3745edcbaf206ccde8839299117ca2776da250ce55509a489307844b7080f",
+          "reread": "aab3745edcbaf206ccde8839299117ca2776da250ce55509a489307844b7080f",
+          "match": true
+        },
+        "topology": {
+          "source_faces": 500,
+          "reread_faces": 500,
+          "source_triangles": 968,
+          "reread_triangles": 968,
+          "triangulation_expected": false,
+          "match": true
+        },
+        "profile": {
+          "texture_size_px": 1024,
+          "margin_px": 4.0,
+          "border_margin_px": 4.0,
+          "shading_uv_policy": "preserve"
+        },
+        "checks": [
+          {
+            "name": "uv_present",
+            "passed": true
+          },
+          {
+            "name": "uv_finite",
+            "passed": true
+          },
+          {
+            "name": "uv_bounds",
+            "passed": true
+          },
+          {
+            "name": "correctness",
+            "passed": false
+          },
+          {
+            "name": "mandatory_90",
+            "passed": true,
+            "value": 0,
+            "limit": 0
+          },
+          {
+            "name": "texel_density",
+            "passed": true
+          },
+          {
+            "name": "shading_policy",
+            "passed": true
+          },
+          {
+            "name": "uv_fingerprint",
+            "passed": true
+          },
+          {
+            "name": "vertex_fingerprint",
+            "passed": true
+          },
+          {
+            "name": "topology",
+            "passed": true
+          },
+          {
+            "name": "catastrophic",
+            "passed": true
+          },
+          {
+            "name": "fragmentation",
+            "passed": true
+          }
+        ],
+        "passed": false,
+        "failures": [
+          "correctness_failed"
+        ],
+        "object_name": "Fixture_AI_Export",
+        "vertex_count": 507,
+        "vertex_weld": {
+          "applied": false
+        }
+      },
+      "glb": {
+        "format": "glb",
+        "uv_layers": [
+          "UVMap"
+        ],
+        "active_uv_layer": "UVMap",
+        "expected_uv_layer": "AI_UV",
+        "uv_layer_warnings": [
+          "glb: exported UV layer named 'UVMap', expected 'AI_UV' (GLB may not preserve UV layer names)"
+        ],
+        "uv_present": true,
+        "uv_finite": true,
+        "bounds": true,
+        "island_count": 13,
+        "correctness": {
+          "passed": false,
+          "checks": [
+            {
+              "name": "overlap",
+              "passed": false,
+              "value": 0.0014861441757626215,
+              "limit": 1e-08
+            },
+            {
+              "name": "orientation",
+              "passed": true,
+              "value": 0,
+              "limit": 0
+            },
+            {
+              "name": "degenerate",
+              "passed": true,
+              "value": 0,
+              "limit": 0
+            },
+            {
+              "name": "bounds",
+              "passed": true,
+              "value": [
+                0.00390625,
+                0.1666972041130066,
+                0.99609375,
+                0.8333027958869934
+              ],
+              "limit": [
+                -0.0001,
+                1.0001
+              ]
+            },
+            {
+              "name": "island_gap",
+              "passed": false,
+              "value": 2.215158461931353,
+              "limit": 4.0
+            },
+            {
+              "name": "border_gap",
+              "passed": true,
+              "value": 4.0,
+              "limit": 4.0
+            }
+          ],
+          "overlap_area_total": 0.0014861441757626215,
+          "local_flip_count": 0,
+          "mirrored_island_count": 0,
+          "uv_degenerate_count": 0,
+          "min_island_gap_px": 2.215158461931353,
+          "min_border_gap_px": 4.0,
+          "bounds_ok": true
+        },
+        "mandatory": {
+          "fold_angle": 90.0,
+          "fold_edges_checked": 80,
+          "mandatory_90_uv_unsplit": 13,
+          "uv_unsplit_edge_ids": [
+            272,
+            288,
+            289,
+            394,
+            397,
+            550,
+            703,
+            1020,
+            1023,
+            1280,
+            1283,
+            1291,
+            1294
+          ],
+          "unmatched_fold_edges": 2
+        },
+        "texel_density": {
+          "passed": true,
+          "valid": true,
+          "failures": [],
+          "density_mean": 182.03807507168713,
+          "density_cv": 0.0007374683913970113,
+          "outlier_count": 0,
+          "outlier_island_ids": [],
+          "unmeasurable_island_count": 0,
+          "intentional_weighting_applied": false
+        },
+        "shading": {
+          "policy": "preserve",
+          "valid": true,
+          "passed": true,
+          "failures": [],
+          "invalid_reasons": [],
+          "sharp_edge_uv_audit": {
+            "sharp_edge_count": 0,
+            "sharp_edge_uv_unsplit": 0,
+            "unsplit_edge_ids": []
+          },
+          "tangent_checked": true,
+          "tangent_ok": true,
+          "snapshot_diff": {
+            "unchanged": true,
+            "sharp_added": [],
+            "sharp_removed": [],
+            "smooth_face_delta": 0
+          }
+        },
+        "catastrophic": {
+          "metric_version": 1,
+          "thresholds": {
+            "anisotropy_hard_max": 8.0,
+            "anisotropy_warn": 4.0,
+            "near_collapse_ratio": 0.0001,
+            "max_uv_triangle_aspect": 40.0,
+            "needle_3d_aspect_factor": 2.0,
+            "local_area_ratio_min": 0.04,
+            "local_area_ratio_max": 25.0,
+            "bad_area_fraction_cap": 0.005,
+            "min_cluster_area_fraction": 1e-05
+          },
+          "valid": true,
+          "hard_failed": false,
+          "region_failed": false,
+          "passed": true,
+          "bad_triangle_count": 0,
+          "bad_region_count": 0,
+          "bad_area_fraction": 0.0,
+          "max_anisotropy": 3.043106295881325,
+          "max_uv_triangle_aspect": 22.048733463322446,
+          "near_collapse_count": 0,
+          "needle_count": 0,
+          "anisotropy_hard_count": 0,
+          "area_explosion_count": 0,
+          "area_collapse_count": 0,
+          "invalid_count": 0,
+          "input_defect_count": 0,
+          "warn_triangle_count": 0,
+          "boundary_spike_region_count": 0,
+          "self_overlap_region_count": 0,
+          "flip_region_count": 0,
+          "bad_face_ids": [],
+          "island_bad_counts": {},
+          "triangle_count": 968,
+          "region_face_ids": []
+        },
+        "fragmentation": {
+          "metrics": {
+            "island_count": 13,
+            "tiny_island_count": 6,
+            "tiny_island_area_ratio": 0.015957373502497756,
+            "sliver_island_count": 0,
+            "one_two_face_island_count": 0,
+            "one_two_face_island_ratio": 0.0,
+            "island_aspect_p95": 4.249627173495712,
+            "zero_area_island_count": 0,
+            "below_min_area_island_count": 0,
+            "normalized_seam_length": 7.854883975263359,
+            "seam_length_total": 29.655092618626924,
+            "bbox_diagonal": 3.775369911511983,
+            "texture_size_px": 1024,
+            "min_island_width_px": 12.43810005890397,
+            "island_area_px2_min": 255.81422488359385
+          },
+          "passed": true,
+          "hard_passed": true,
+          "quality_passed": true,
+          "failures": [],
+          "quality_failures": [],
+          "exempt_islands": [
+            4,
+            5
+          ],
+          "tiny_island_ids": [
+            2,
+            3,
+            4,
+            5,
+            9,
+            10
+          ],
+          "sliver_island_ids": []
+        },
+        "uv_hash": "b6625a7157903fa68023a825363e5aeed1e769fc814e40881032143ebdaf5e9f",
+        "source_uv_hash": "e53a365f85d2157d4240228f9316fd24a5600a40587ecd4a0f396d135dcc16e1",
+        "uv_fingerprint": {
+          "source": {
+            "sha256": "b651eb169bb4384b993131f58a3c372c023bfee2d7cb43ac5b7a9e41b2417373",
+            "corner_count": 714
+          },
+          "reread": {
+            "sha256": "b651eb169bb4384b993131f58a3c372c023bfee2d7cb43ac5b7a9e41b2417373",
+            "corner_count": 714
+          },
+          "match": true,
+          "method": "hash",
+          "max_abs_error": null
+        },
+        "vertex_fingerprint": {
+          "source": "aab3745edcbaf206ccde8839299117ca2776da250ce55509a489307844b7080f",
+          "reread": "aab3745edcbaf206ccde8839299117ca2776da250ce55509a489307844b7080f",
+          "match": true
+        },
+        "topology": {
+          "source_faces": 500,
+          "reread_faces": 968,
+          "source_triangles": 968,
+          "reread_triangles": 968,
+          "triangulation_expected": true,
+          "match": true
+        },
+        "profile": {
+          "texture_size_px": 1024,
+          "margin_px": 4.0,
+          "border_margin_px": 4.0,
+          "shading_uv_policy": "preserve"
+        },
+        "checks": [
+          {
+            "name": "uv_present",
+            "passed": true
+          },
+          {
+            "name": "uv_finite",
+            "passed": true
+          },
+          {
+            "name": "uv_bounds",
+            "passed": true
+          },
+          {
+            "name": "correctness",
+            "passed": false
+          },
+          {
+            "name": "mandatory_90",
+            "passed": false,
+            "value": 13,
+            "limit": 0
+          },
+          {
+            "name": "texel_density",
+            "passed": true
+          },
+          {
+            "name": "shading_policy",
+            "passed": true
+          },
+          {
+            "name": "uv_fingerprint",
+            "passed": true
+          },
+          {
+            "name": "vertex_fingerprint",
+            "passed": true
+          },
+          {
+            "name": "topology",
+            "passed": true
+          },
+          {
+            "name": "catastrophic",
+            "passed": true
+          },
+          {
+            "name": "fragmentation",
+            "passed": true
+          }
+        ],
+        "passed": false,
+        "failures": [
+          "correctness_failed",
+          "mandatory_90_uv_unsplit"
+        ],
+        "object_name": "Fixture_AI_Export",
+        "vertex_count": 505,
+        "vertex_weld": {
+          "applied": true,
+          "vertices_before": 1966,
+          "vertices_after": 505,
+          "dist": 1e-06
+        }
+      }
+    },
+    "passed": false,
+    "failed_formats": [
+      "fbx",
+      "glb"
+    ]
+  }
+}
